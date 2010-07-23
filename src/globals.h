@@ -98,6 +98,11 @@ typedef byte* Address;
 #define V8_PTR_PREFIX ""
 #endif  // V8_HOST_ARCH_64_BIT
 
+// The following macro works on both 32 and 64-bit platforms.
+// Usage: instead of writing 0x1234567890123456
+//      write V8_2PART_UINT64_C(0x12345678,90123456);
+#define V8_2PART_UINT64_C(a, b) (((static_cast<uint64_t>(a) << 32) + 0x##b##u))
+
 #define V8PRIxPTR V8_PTR_PREFIX "x"
 #define V8PRIdPTR V8_PTR_PREFIX "d"
 
@@ -169,6 +174,15 @@ const int kBitsPerByteLog2 = 3;
 const int kBitsPerPointer = kPointerSize * kBitsPerByte;
 const int kBitsPerInt = kIntSize * kBitsPerByte;
 
+// IEEE 754 single precision floating point number bit layout.
+const uint32_t kBinary32SignMask = 0x80000000u;
+const uint32_t kBinary32ExponentMask = 0x7f800000u;
+const uint32_t kBinary32MantissaMask = 0x007fffffu;
+const int kBinary32ExponentBias = 127;
+const int kBinary32MaxExponent  = 0xFE;
+const int kBinary32MinExponent  = 0x01;
+const int kBinary32MantissaBits = 23;
+const int kBinary32ExponentShift = 23;
 
 // Zap-value: The value used for zapping dead objects.
 // Should be a recognizable hex value tagged as a heap object pointer.
@@ -180,16 +194,29 @@ const Address kHandleZapValue =
 const Address kFromSpaceZapValue =
     reinterpret_cast<Address>(V8_UINT64_C(0x1beefdad0beefdad));
 #else
+#ifdef V8_TARGET_ARCH_MIPS
+// On mips 0xbaddead & 0xbeefdad are legal jump instructions, which
+// confuses debugging. Change to illegal instructions.
+const Address kZapValue = reinterpret_cast<Address>(0xdeadbeed);
+const Address kHandleZapValue = reinterpret_cast<Address>(0xdeadf00d);
+const Address kFromSpaceZapValue = reinterpret_cast<Address>(0xdeadd00d);
+#else  // ! V8_TARGET_ARCH_MIPS
 const Address kZapValue = reinterpret_cast<Address>(0xdeadbeed);
 const Address kHandleZapValue = reinterpret_cast<Address>(0xbaddead);
 const Address kFromSpaceZapValue = reinterpret_cast<Address>(0xbeefdad);
-#endif
+#endif  // V8_TARGET_ARCH_MIPS
+#endif  // V8_HOST_ARCH_64_BIT
+
 
 
 // Number of bits to represent the page size for paged spaces. The value of 13
 // gives 8K bytes per page.
 const int kPageSizeBits = 13;
 
+// On Intel architecture, cache line size is 64 bytes.
+// On ARM it may be less (32 bytes), but as far this constant is
+// used for aligning data, it doesn't hurt to align on a greater value.
+const int kProcessorCacheLineSize = 64;
 
 // Constants relevant to double precision floating point numbers.
 
@@ -261,6 +288,8 @@ template<class Allocator = FreeStoreAllocationPolicy> class ScopeInfo;
 class Script;
 class Slot;
 class Smi;
+template <typename Config, class Allocator = FreeStoreAllocationPolicy>
+    class SplayTree;
 class Statement;
 class String;
 class Struct;
@@ -314,8 +343,7 @@ enum Executability { NOT_EXECUTABLE, EXECUTABLE };
 
 enum VisitMode { VISIT_ALL, VISIT_ALL_IN_SCAVENGE, VISIT_ONLY_STRONG };
 
-// Flag indicating whether code is built in to the VM (one of the natives
-// files).
+// Flag indicating whether code is built into the VM (one of the natives files).
 enum NativesFlag { NOT_NATIVES_CODE, NATIVES_CODE };
 
 
@@ -571,42 +599,6 @@ F FUNCTION_CAST(Address addr) {
 #define INLINE(header) inline header
 #endif
 
-// The type-based aliasing rule allows the compiler to assume that pointers of
-// different types (for some definition of different) never alias each other.
-// Thus the following code does not work:
-//
-// float f = foo();
-// int fbits = *(int*)(&f);
-//
-// The compiler 'knows' that the int pointer can't refer to f since the types
-// don't match, so the compiler may cache f in a register, leaving random data
-// in fbits.  Using C++ style casts makes no difference, however a pointer to
-// char data is assumed to alias any other pointer.  This is the 'memcpy
-// exception'.
-//
-// Bit_cast uses the memcpy exception to move the bits from a variable of one
-// type of a variable of another type.  Of course the end result is likely to
-// be implementation dependent.  Most compilers (gcc-4.2 and MSVC 2005)
-// will completely optimize bit_cast away.
-//
-// There is an additional use for bit_cast.
-// Recent gccs will warn when they see casts that may result in breakage due to
-// the type-based aliasing rule.  If you have checked that there is no breakage
-// you can use bit_cast to cast one pointer type to another.  This confuses gcc
-// enough that it can no longer see that you have cast one pointer type to
-// another thus avoiding the warning.
-template <class Dest, class Source>
-inline Dest bit_cast(const Source& source) {
-  // Compile time assertion: sizeof(Dest) == sizeof(Source)
-  // A compile error here means your Dest and Source have different sizes.
-  typedef char VerifySizesAreEqual[sizeof(Dest) == sizeof(Source) ? 1 : -1];
-
-  Dest dest;
-  memcpy(&dest, &source, sizeof(dest));
-  return dest;
-}
-
-
 // Feature flags bit positions. They are mostly based on the CPUID spec.
 // (We assign CPUID itself to one of the currently reserved bits --
 // feel free to change this if needed.)
@@ -617,6 +609,7 @@ enum CpuFeature { SSE3 = 32,   // x86
                   CPUID = 10,  // x86
                   VFP3 = 1,    // ARM
                   ARMv7 = 2,   // ARM
+                  FPU = 1,     // MIPS
                   SAHF = 0};   // x86
 
 } }  // namespace v8::internal

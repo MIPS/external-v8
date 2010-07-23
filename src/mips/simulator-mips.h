@@ -42,7 +42,7 @@
 
 // When running without a simulator we call the entry directly.
 #define CALL_GENERATED_CODE(entry, p0, p1, p2, p3, p4) \
-  entry(p0, p1, p2, p3, p4);
+  entry(p0, p1, p2, p3, p4)
 
 // The stack limit beyond which we will throw stack overflow errors in
 // generated code. Because generated code on mips uses the C stack, we
@@ -100,6 +100,18 @@ class SimulatorStack : public v8::internal::AllStatic {
 namespace assembler {
 namespace mips {
 
+// -----------------------------------------------------------------------------
+// Utility functions
+
+static inline bool is_uintn(int x, int n) {
+  return (x & -(1 << n)) == 0;
+}
+
+static inline bool is_uint3(int x)  { return is_uintn(x, 3); }
+
+
+
+
 class Simulator {
  public:
   friend class Debugger;
@@ -152,9 +164,14 @@ class Simulator {
   int32_t get_register(int reg) const;
   // Same for FPURegisters
   void set_fpu_register(int fpureg, int32_t value);
+  void set_fpu_register_float(int fpureg, float value);
   void set_fpu_register_double(int fpureg, double value);
   int32_t get_fpu_register(int fpureg) const;
+  int64_t get_fpu_register_long(int fpureg) const;
+  float get_fpu_register_float(int fpureg) const;
   double get_fpu_register_double(int fpureg) const;
+  void set_fpu_ccr_bit(uint32_t cc, bool value);
+  bool test_fpu_ccr_bit(uint32_t cc);
 
   // Special case of set_register and get_register to access the raw PC value.
   void set_pc(int32_t value);
@@ -269,12 +286,15 @@ class Simulator {
   int32_t registers_[kNumSimuRegisters];
   // Coprocessor Registers.
   int32_t FPUregisters_[kNumFPURegisters];
+  // FPU Condition Code register.
+  int32_t FPUccr_;
 
   // Simulator support.
   char* stack_;
   bool pc_modified_;
   int icount_;
   static bool initialized_;
+  int break_count_;
 
   // Registered breakpoints.
   Instruction* break_pc_;

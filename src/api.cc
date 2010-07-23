@@ -34,10 +34,11 @@
 #include "debug.h"
 #include "execution.h"
 #include "global-handles.h"
-#include "globals.h"
+#include "messages.h"
 #include "platform.h"
 #include "serialize.h"
 #include "snapshot.h"
+#include "top.h"
 #include "utils.h"
 #include "v8threads.h"
 #include "version.h"
@@ -439,7 +440,6 @@ bool V8::IsGlobalWeak(i::Object** obj) {
 void V8::DisposeGlobal(i::Object** obj) {
   LOG_API("DisposeGlobal");
   if (!i::V8::IsRunning()) return;
-  if ((*obj)->IsGlobalContext()) i::Heap::NotifyContextDisposed();
   i::GlobalHandles::Destroy(obj);
 }
 
@@ -1136,7 +1136,7 @@ Local<Script> Script::New(v8::Handle<String> source,
   if (pre_data_impl != NULL && !pre_data_impl->SanityCheck()) {
     pre_data_impl = NULL;
   }
-  i::Handle<i::JSFunction> boilerplate =
+  i::Handle<i::SharedFunctionInfo> result =
       i::Compiler::Compile(str,
                            name_obj,
                            line_offset,
@@ -1145,9 +1145,9 @@ Local<Script> Script::New(v8::Handle<String> source,
                            pre_data_impl,
                            Utils::OpenHandle(*script_data),
                            i::NOT_NATIVES_CODE);
-  has_pending_exception = boilerplate.is_null();
+  has_pending_exception = result.is_null();
   EXCEPTION_BAILOUT_CHECK(Local<Script>());
-  return Local<Script>(ToApi<Script>(boilerplate));
+  return Local<Script>(ToApi<Script>(result));
 }
 
 
@@ -1168,10 +1168,12 @@ Local<Script> Script::Compile(v8::Handle<String> source,
   Local<Script> generic = New(source, origin, pre_data, script_data);
   if (generic.IsEmpty())
     return generic;
-  i::Handle<i::JSFunction> boilerplate = Utils::OpenHandle(*generic);
+  i::Handle<i::Object> obj = Utils::OpenHandle(*generic);
+  i::Handle<i::SharedFunctionInfo> function =
+      i::Handle<i::SharedFunctionInfo>(i::SharedFunctionInfo::cast(*obj));
   i::Handle<i::JSFunction> result =
-      i::Factory::NewFunctionFromBoilerplate(boilerplate,
-                                             i::Top::global_context());
+      i::Factory::NewFunctionFromSharedFunctionInfo(function,
+                                                    i::Top::global_context());
   return Local<Script>(ToApi<Script>(result));
 }
 
@@ -1191,10 +1193,15 @@ Local<Value> Script::Run() {
   i::Object* raw_result = NULL;
   {
     HandleScope scope;
-    i::Handle<i::JSFunction> fun = Utils::OpenHandle(this);
-    if (fun->IsBoilerplate()) {
-      fun = i::Factory::NewFunctionFromBoilerplate(fun,
-                                                   i::Top::global_context());
+    i::Handle<i::Object> obj = Utils::OpenHandle(this);
+    i::Handle<i::JSFunction> fun;
+    if (obj->IsSharedFunctionInfo()) {
+      i::Handle<i::SharedFunctionInfo>
+          function_info(i::SharedFunctionInfo::cast(*obj));
+      fun = i::Factory::NewFunctionFromSharedFunctionInfo(
+          function_info, i::Top::global_context());
+    } else {
+      fun = i::Handle<i::JSFunction>(i::JSFunction::cast(*obj));
     }
     EXCEPTION_PREAMBLE();
     i::Handle<i::Object> receiver(i::Top::context()->global_proxy());
@@ -1208,14 +1215,28 @@ Local<Value> Script::Run() {
 }
 
 
+static i::Handle<i::SharedFunctionInfo> OpenScript(Script* script) {
+  i::Handle<i::Object> obj = Utils::OpenHandle(script);
+  i::Handle<i::SharedFunctionInfo> result;
+  if (obj->IsSharedFunctionInfo()) {
+    result =
+        i::Handle<i::SharedFunctionInfo>(i::SharedFunctionInfo::cast(*obj));
+  } else {
+    result =
+        i::Handle<i::SharedFunctionInfo>(i::JSFunction::cast(*obj)->shared());
+  }
+  return result;
+}
+
+
 Local<Value> Script::Id() {
   ON_BAILOUT("v8::Script::Id()", return Local<Value>());
   LOG_API("Script::Id");
   i::Object* raw_id = NULL;
   {
     HandleScope scope;
-    i::Handle<i::JSFunction> fun = Utils::OpenHandle(this);
-    i::Handle<i::Script> script(i::Script::cast(fun->shared()->script()));
+    i::Handle<i::SharedFunctionInfo> function_info = OpenScript(this);
+    i::Handle<i::Script> script(i::Script::cast(function_info->script()));
     i::Handle<i::Object> id(script->id());
     raw_id = *id;
   }
@@ -1229,9 +1250,9 @@ void Script::SetData(v8::Handle<String> data) {
   LOG_API("Script::SetData");
   {
     HandleScope scope;
-    i::Handle<i::JSFunction> fun = Utils::OpenHandle(this);
+    i::Handle<i::SharedFunctionInfo> function_info = OpenScript(this);
     i::Handle<i::Object> raw_data = Utils::OpenHandle(*data);
-    i::Handle<i::Script> script(i::Script::cast(fun->shared()->script()));
+    i::Handle<i::Script> script(i::Script::cast(function_info->script()));
     script->set_data(*raw_data);
   }
 }
@@ -1572,6 +1593,18 @@ bool Value::IsInt32() const {
   if (obj->IsNumber()) {
     double value = obj->Number();
     return i::FastI2D(i::FastD2I(value)) == value;
+  }
+  return false;
+}
+
+
+bool Value::IsUint32() const {
+  if (IsDeadCheck("v8::Value::IsUint32()")) return false;
+  i::Handle<i::Object> obj = Utils::OpenHandle(this);
+  if (obj->IsSmi()) return i::Smi::cast(*obj)->value() >= 0;
+  if (obj->IsNumber()) {
+    double value = obj->Number();
+    return i::FastUI2D(i::FastD2UI(value)) == value;
   }
   return false;
 }
@@ -1982,6 +2015,23 @@ bool v8::Object::Set(v8::Handle<Value> key, v8::Handle<Value> value,
 }
 
 
+bool v8::Object::Set(uint32_t index, v8::Handle<Value> value) {
+  ON_BAILOUT("v8::Object::Set()", return false);
+  ENTER_V8;
+  HandleScope scope;
+  i::Handle<i::JSObject> self = Utils::OpenHandle(this);
+  i::Handle<i::Object> value_obj = Utils::OpenHandle(*value);
+  EXCEPTION_PREAMBLE();
+  i::Handle<i::Object> obj = i::SetElement(
+      self,
+      index,
+      value_obj);
+  has_pending_exception = obj.is_null();
+  EXCEPTION_BAILOUT_CHECK(false);
+  return true;
+}
+
+
 bool v8::Object::ForceSet(v8::Handle<Value> key,
                           v8::Handle<Value> value,
                           v8::PropertyAttribute attribs) {
@@ -2024,6 +2074,18 @@ Local<Value> v8::Object::Get(v8::Handle<Value> key) {
   i::Handle<i::Object> key_obj = Utils::OpenHandle(*key);
   EXCEPTION_PREAMBLE();
   i::Handle<i::Object> result = i::GetProperty(self, key_obj);
+  has_pending_exception = result.is_null();
+  EXCEPTION_BAILOUT_CHECK(Local<Value>());
+  return Utils::ToLocal(result);
+}
+
+
+Local<Value> v8::Object::Get(uint32_t index) {
+  ON_BAILOUT("v8::Object::Get()", return Local<v8::Value>());
+  ENTER_V8;
+  i::Handle<i::JSObject> self = Utils::OpenHandle(this);
+  EXCEPTION_PREAMBLE();
+  i::Handle<i::Object> result = i::GetElement(self, index);
   has_pending_exception = result.is_null();
   EXCEPTION_BAILOUT_CHECK(Local<Value>());
   return Utils::ToLocal(result);
@@ -2622,7 +2684,7 @@ int String::WriteAscii(char* buffer, int start, int length) const {
   StringTracker::RecordWrite(str);
   // Flatten the string for efficiency.  This applies whether we are
   // using StringInputBuffer or Get(i) to access the characters.
-  str->TryFlattenIfNotFlat();
+  str->TryFlatten();
   int end = length;
   if ( (length == -1) || (length > str->length() - start) )
     end = str->length() - start;
@@ -2735,6 +2797,17 @@ int32_t Int32::Value() const {
 }
 
 
+uint32_t Uint32::Value() const {
+  if (IsDeadCheck("v8::Uint32::Value()")) return 0;
+  i::Handle<i::Object> obj = Utils::OpenHandle(this);
+  if (obj->IsSmi()) {
+    return i::Smi::cast(*obj)->value();
+  } else {
+    return static_cast<uint32_t>(obj->Number());
+  }
+}
+
+
 int v8::Object::InternalFieldCount() {
   if (IsDeadCheck("v8::Object::InternalFieldCount()")) return 0;
   i::Handle<i::JSObject> obj = Utils::OpenHandle(this);
@@ -2828,6 +2901,12 @@ void v8::V8::LowMemoryNotification() {
 }
 
 
+int v8::V8::ContextDisposedNotification() {
+  if (!i::V8::IsRunning()) return 0;
+  return i::Heap::NotifyContextDisposed();
+}
+
+
 const char* v8::V8::GetVersion() {
   static v8::internal::EmbeddedVector<char, 128> buffer;
   v8::internal::Version::GetString(buffer);
@@ -2854,14 +2933,6 @@ Persistent<Context> v8::Context::New(
   EnsureInitialized("v8::Context::New()");
   LOG_API("Context::New");
   ON_BAILOUT("v8::Context::New()", return Persistent<Context>());
-
-#if defined(ANDROID)
-  // On mobile device, full GC is expensive, leave it to the system to
-  // decide when should make a full GC.
-#else
-  // Give the heap a chance to cleanup if we've disposed contexts.
-  i::Heap::CollectAllGarbageIfContextDisposed();
-#endif
 
   // Enter V8 via an ENTER_V8 scope.
   i::Handle<i::Context> env;
@@ -3485,6 +3556,30 @@ void V8::SetGlobalGCEpilogueCallback(GCCallback callback) {
 }
 
 
+void V8::AddGCPrologueCallback(GCPrologueCallback callback, GCType gc_type) {
+  if (IsDeadCheck("v8::V8::AddGCPrologueCallback()")) return;
+  i::Heap::AddGCPrologueCallback(callback, gc_type);
+}
+
+
+void V8::RemoveGCPrologueCallback(GCPrologueCallback callback) {
+  if (IsDeadCheck("v8::V8::RemoveGCPrologueCallback()")) return;
+  i::Heap::RemoveGCPrologueCallback(callback);
+}
+
+
+void V8::AddGCEpilogueCallback(GCEpilogueCallback callback, GCType gc_type) {
+  if (IsDeadCheck("v8::V8::AddGCEpilogueCallback()")) return;
+  i::Heap::AddGCEpilogueCallback(callback, gc_type);
+}
+
+
+void V8::RemoveGCEpilogueCallback(GCEpilogueCallback callback) {
+  if (IsDeadCheck("v8::V8::RemoveGCEpilogueCallback()")) return;
+  i::Heap::RemoveGCEpilogueCallback(callback);
+}
+
+
 void V8::PauseProfiler() {
 #ifdef ENABLE_LOGGING_AND_PROFILING
   PauseProfilerEx(PROFILER_MODULE_CPU);
@@ -3546,6 +3641,7 @@ int V8::GetActiveProfilerModules() {
 
 int V8::GetLogLines(int from_pos, char* dest_buf, int max_size) {
 #ifdef ENABLE_LOGGING_AND_PROFILING
+  ASSERT(max_size >= kMinimumSizeForLogLinesBuffer);
   return i::Logger::GetLogLines(from_pos, dest_buf, max_size);
 #endif
   return 0;
@@ -3576,6 +3672,15 @@ void V8::TerminateExecution(int thread_id) {
 void V8::TerminateExecution() {
   if (!i::V8::IsRunning()) return;
   i::StackGuard::TerminateExecution();
+}
+
+
+bool V8::IsExecutionTerminating() {
+  if (!i::V8::IsRunning()) return false;
+  if (i::Top::has_scheduled_exception()) {
+    return i::Top::scheduled_exception() == i::Heap::termination_exception();
+  }
+  return false;
 }
 
 
@@ -3876,6 +3981,11 @@ bool Debug::EnableAgent(const char* name, int port, bool wait_for_connection) {
 
 void Debug::ProcessDebugMessages() {
   i::Execution::ProcessDebugMesssages(true);
+}
+
+Local<Context> Debug::GetDebugContext() {
+  i::EnterDebugger debugger;
+  return Utils::ToLocal(i::Debug::debug_context());
 }
 
 #endif  // ENABLE_DEBUGGER_SUPPORT

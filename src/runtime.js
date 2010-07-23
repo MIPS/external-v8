@@ -478,7 +478,7 @@ function STRING_CHAR_AT(pos) {
   if (!%_IsSmi(char_code)) {
     return %StringCharAt(this, pos);
   }
-  return %CharFromCode(char_code);
+  return %_CharFromCode(char_code);
 }
 
 
@@ -643,6 +643,6 @@ function DefaultString(x) {
 // NOTE: Setting the prototype for Array must take place as early as
 // possible due to code generation for array literals.  When
 // generating code for a array literal a boilerplate array is created
-// that is cloned when running the code.  It is essiential that the
+// that is cloned when running the code.  It is essential that the
 // boilerplate gets the right prototype.
 %FunctionSetPrototype($Array, new $Array(0));

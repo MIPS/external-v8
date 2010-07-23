@@ -37,7 +37,6 @@
 
 #include "runtime.h"
 #include "top.h"
-#include "zone-inl.h"
 #include "token.h"
 
 namespace v8 {
@@ -246,6 +245,12 @@ class RelocInfo BASE_EMBEDDED {
   byte* pc_;
   Mode rmode_;
   intptr_t data_;
+  // Code and Embedded Object pointers in mips and arm can be stored
+  // split across two consecutive 32-bit instructions. Heap management
+  // routines expect to access these pointers indirectly. The following
+  // location provides a place for these pointers to exist natually
+  // when accessed via the Iterator.
+  Object *reconstructed_obj_ptr_;
   friend class RelocIterator;
 };
 
@@ -443,6 +448,9 @@ class ExternalReference BASE_EMBEDDED {
   static ExternalReference handle_scope_limit_address();
 
   static ExternalReference scheduled_exception_address();
+
+  static ExternalReference compile_array_pop_call();
+  static ExternalReference compile_array_push_call();
 
   Address address() const {return reinterpret_cast<Address>(address_);}
 

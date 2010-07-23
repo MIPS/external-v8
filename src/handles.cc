@@ -174,13 +174,6 @@ void SetExpectedNofPropertiesFromEstimate(Handle<SharedFunctionInfo> shared,
 }
 
 
-void SetExpectedNofPropertiesFromEstimate(Handle<JSFunction> func,
-                                          int estimate) {
-  SetExpectedNofProperties(
-      func, ExpectedNofPropertiesFromEstimate(estimate));
-}
-
-
 void NormalizeProperties(Handle<JSObject> object,
                          PropertyNormalizationMode mode,
                          int expected_additional_properties) {
@@ -203,7 +196,7 @@ void TransformToFastProperties(Handle<JSObject> object,
 
 
 void FlattenString(Handle<String> string) {
-  CALL_HEAP_FUNCTION_VOID(string->TryFlattenIfNotFlat());
+  CALL_HEAP_FUNCTION_VOID(string->TryFlatten());
   ASSERT(string->IsFlat());
 }
 
@@ -292,6 +285,12 @@ Handle<Object> GetProperty(Handle<Object> obj,
 }
 
 
+Handle<Object> GetElement(Handle<Object> obj,
+                          uint32_t index) {
+  CALL_HEAP_FUNCTION(Runtime::GetElement(obj, index), Object);
+}
+
+
 Handle<Object> GetPropertyWithInterceptor(Handle<JSObject> receiver,
                                           Handle<JSObject> holder,
                                           Handle<String> name,
@@ -371,8 +370,11 @@ Handle<Object> LookupSingleCharacterStringFromCode(uint32_t index) {
 }
 
 
-Handle<String> SubString(Handle<String> str, int start, int end) {
-  CALL_HEAP_FUNCTION(str->SubString(start, end), String);
+Handle<String> SubString(Handle<String> str,
+                         int start,
+                         int end,
+                         PretenureFlag pretenure) {
+  CALL_HEAP_FUNCTION(str->SubString(start, end, pretenure), String);
 }
 
 
@@ -511,6 +513,30 @@ int GetScriptLineNumber(Handle<Script> script, int code_pos) {
     }
   }
   return right + script->line_offset()->value();
+}
+
+
+int GetScriptLineNumberSafe(Handle<Script> script, int code_pos) {
+  AssertNoAllocation no_allocation;
+  if (!script->line_ends()->IsUndefined()) {
+    return GetScriptLineNumber(script, code_pos);
+  }
+  // Slow mode: we do not have line_ends. We have to iterate through source.
+  if (!script->source()->IsString()) {
+    return -1;
+  }
+  String* source = String::cast(script->source());
+  int line = 0;
+  int len = source->length();
+  for (int pos = 0; pos < len; pos++) {
+    if (pos == code_pos) {
+      break;
+    }
+    if (source->Get(pos) == '\n') {
+      line++;
+    }
+  }
+  return line;
 }
 
 

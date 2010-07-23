@@ -46,8 +46,8 @@ if ANDROID_TOP is None:
 # on linux we need these compiler flags to avoid crashes in the v8 test suite
 # and avoid dtoa.c strict aliasing issues
 if os.environ.get('GCC_VERSION') == '44':
-    GCC_EXTRA_CCFLAGS = ['-fno-tree-vrp']
-    GCC_DTOA_EXTRA_CCFLAGS = ['-fno-strict-aliasing']
+    GCC_EXTRA_CCFLAGS = ['-fno-tree-vrp', '-fno-strict-aliasing']
+    GCC_DTOA_EXTRA_CCFLAGS = []
 else:
     GCC_EXTRA_CCFLAGS = []
     GCC_DTOA_EXTRA_CCFLAGS = []
@@ -68,7 +68,7 @@ ANDROID_FLAGS = ['-march=armv5te',
                  '-frename-registers',
                  '-fomit-frame-pointer',
                  '-fno-strict-aliasing',
-                 '-finline-limit=64',
+                 '-finline-limit=300',
                  '-MD']
 
 ANDROID_INCLUDES = [ANDROID_TOP + '/bionic/libc/arch-arm/include',
@@ -90,7 +90,7 @@ ANDROID_LINKFLAGS = ['-nostdlib',
                      '-Wl,-z,nocopyreloc',
                      '-Wl,-rpath-link=' + ANDROID_TOP + '/out/target/product/generic/obj/lib',
                      ANDROID_TOP + '/out/target/product/generic/obj/lib/crtbegin_dynamic.o',
-                     ANDROID_TOP + '/prebuilt/linux-x86/toolchain/arm-eabi-4.2.1/lib/gcc/arm-eabi/4.2.1/interwork/libgcc.a',
+                     ANDROID_TOP + '/prebuilt/linux-x86/toolchain/arm-eabi-4.4.0/lib/gcc/arm-eabi/4.4.0/interwork/libgcc.a',
                      ANDROID_TOP + '/out/target/product/generic/obj/lib/crtend_android.o'];
 
 LIBRARY_FLAGS = {
@@ -194,8 +194,8 @@ LIBRARY_FLAGS = {
     'arch:mips': {
       'CPPDEFINES':   ['V8_TARGET_ARCH_MIPS'],
       'simulator:none': {
-        'CCFLAGS':      ['-EL', '-mips32r2', '-Wa,-mips32r2', '-fno-inline'],
-        'LDFLAGS':      ['-EL']
+        'CCFLAGS':      ['-EL', '-mips32r2', '-Wa,-mips32r2', '-mhard-float'],
+        'LDFLAGS':      ['-EL', '-static', '-static-libgcc']
       }
     },
     'simulator:mips': {
@@ -255,8 +255,16 @@ LIBRARY_FLAGS = {
       },
       'msvcltcg:on': {
         'CCFLAGS':      ['/GL'],
-        'LINKFLAGS':    ['/LTCG'],
         'ARFLAGS':      ['/LTCG'],
+        'pgo:off': {
+          'LINKFLAGS':    ['/LTCG'],
+        },
+        'pgo:instrument': {
+          'LINKFLAGS':    ['/LTCG:PGI']
+        },
+        'pgo:optimize': {
+          'LINKFLAGS':    ['/LTCG:PGO']
+        }
       }
     }
   }
@@ -363,7 +371,6 @@ DTOA_EXTRA_FLAGS = {
 CCTEST_EXTRA_FLAGS = {
   'all': {
     'CPPPATH': [join(root_dir, 'src')],
-    'LIBS': ['$LIBRARY']
   },
   'gcc': {
     'all': {
@@ -377,6 +384,13 @@ CCTEST_EXTRA_FLAGS = {
     },
     'os:freebsd': {
       'LIBS':         ['execinfo', 'pthread']
+    },
+    'arch:mips': {
+      'simulator:none': {
+        'CCFLAGS':      ['-EL', '-mips32r2', '-Wa,-mips32r2', '-mhard-float'],
+        'LINKFLAGS':    ['-EL', '-static', '-static-libgcc'],
+        'LDFLAGS':      ['-EL', '-static', '-static-libgcc']
+      }
     },
     'os:solaris': {
       'LIBS':         ['m', 'pthread', 'socket', 'nsl', 'rt'],
@@ -393,9 +407,10 @@ CCTEST_EXTRA_FLAGS = {
                        '__ARM_ARCH_5E__', '__ARM_ARCH_5TE__'],
       'CCFLAGS':      ANDROID_FLAGS,
       'CPPPATH':      ANDROID_INCLUDES,
-      'LIBPATH':     [ANDROID_TOP + '/out/target/product/generic/obj/lib'],
+      'LIBPATH':     [ANDROID_TOP + '/out/target/product/generic/obj/lib',
+                      ANDROID_TOP + '/prebuilt/linux-x86/toolchain/arm-eabi-4.4.0/lib/gcc/arm-eabi/4.4.0/interwork'],
       'LINKFLAGS':    ANDROID_LINKFLAGS,
-      'LIBS':         ['log', 'c', 'stdc++', 'm'],
+      'LIBS':         ['log', 'c', 'stdc++', 'm', 'gcc'],
       'mode:release': {
         'CPPDEFINES': ['SK_RELEASE', 'NDEBUG']
       }
@@ -423,7 +438,6 @@ CCTEST_EXTRA_FLAGS = {
 SAMPLE_FLAGS = {
   'all': {
     'CPPPATH': [join(abspath('.'), 'include')],
-    'LIBS': ['$LIBRARY'],
   },
   'gcc': {
     'all': {
@@ -457,9 +471,10 @@ SAMPLE_FLAGS = {
                        '__ARM_ARCH_5E__', '__ARM_ARCH_5TE__'],
       'CCFLAGS':      ANDROID_FLAGS,
       'CPPPATH':      ANDROID_INCLUDES,
-      'LIBPATH':     [ANDROID_TOP + '/out/target/product/generic/obj/lib'],
+      'LIBPATH':     [ANDROID_TOP + '/out/target/product/generic/obj/lib',
+                      ANDROID_TOP + '/prebuilt/linux-x86/toolchain/arm-eabi-4.4.0/lib/gcc/arm-eabi/4.4.0/interwork'],
       'LINKFLAGS':    ANDROID_LINKFLAGS,
-      'LIBS':         ['log', 'c', 'stdc++', 'm'],
+      'LIBS':         ['log', 'c', 'stdc++', 'm', 'gcc'],
       'mode:release': {
         'CPPDEFINES': ['SK_RELEASE', 'NDEBUG']
       }
@@ -475,9 +490,9 @@ SAMPLE_FLAGS = {
     'arch:mips': {
       'CPPDEFINES':   ['V8_TARGET_ARCH_MIPS'],
       'simulator:none': {
-        'CCFLAGS':      ['-EL', '-mips32r2', '-Wa,-mips32r2', '-fno-inline'],
-        'LINKFLAGS':    ['-EL'],
-        'LDFLAGS':      ['-EL']
+        'CCFLAGS':      ['-EL', '-mips32r2', '-Wa,-mips32r2', '-mhard-float'],
+        'LINKFLAGS':    ['-EL', '-static', '-static-libgcc'],
+        'LDFLAGS':      ['-EL', '-static', '-static-libgcc']
       }
     },
     'simulator:arm': {
@@ -527,7 +542,15 @@ SAMPLE_FLAGS = {
       },
       'msvcltcg:on': {
         'CCFLAGS':      ['/GL'],
-        'LINKFLAGS':    ['/LTCG'],
+        'pgo:off': {
+          'LINKFLAGS':    ['/LTCG'],
+        },
+      },
+      'pgo:instrument': {
+        'LINKFLAGS':    ['/LTCG:PGI']
+      },
+      'pgo:optimize': {
+        'LINKFLAGS':    ['/LTCG:PGO']
       }
     },
     'arch:ia32': {
@@ -574,9 +597,10 @@ D8_FLAGS = {
       'LIBS': ['pthread'],
     },
     'os:android': {
-      'LIBPATH':     [ANDROID_TOP + '/out/target/product/generic/obj/lib'],
+      'LIBPATH':     [ANDROID_TOP + '/out/target/product/generic/obj/lib',
+                      ANDROID_TOP + '/prebuilt/linux-x86/toolchain/arm-eabi-4.4.0/lib/gcc/arm-eabi/4.4.0/interwork'],
       'LINKFLAGS':    ANDROID_LINKFLAGS,
-      'LIBS':         ['log', 'c', 'stdc++', 'm'],
+      'LIBS':         ['log', 'c', 'stdc++', 'm', 'gcc'],
     },
     'os:win32': {
       'LIBS': ['winmm', 'ws2_32'],
@@ -630,7 +654,7 @@ SIMPLE_OPTIONS = {
   'arch': {
     'values':['arm', 'ia32', 'x64', 'mips'],
     'default': ARCH_GUESS,
-    'help': 'the architecture to build for (' + ARCH_GUESS + ')'
+    'help': 'the architecture to build for (who knows)'
   },
   'regexp': {
     'values': ['native', 'interpreted'],
@@ -711,6 +735,11 @@ SIMPLE_OPTIONS = {
     'values': ['arm', 'thumb2', 'none'],
     'default': 'none',
     'help': 'generate thumb2 instructions instead of arm instructions (default)'
+  },
+  'pgo': {
+    'values': ['off', 'instrument', 'optimize'],
+    'default': 'off',
+    'help': 'select profile guided optimization variant',
   }
 }
 
@@ -798,6 +827,8 @@ def VerifyOptions(env):
     Abort("Shared Object soname not applicable for Windows.")
   if env['soname'] == 'on' and env['library'] == 'static':
     Abort("Shared Object soname not applicable for static library.")
+  if env['os'] != 'win32' and env['pgo'] != 'off':
+    Abort("Profile guided optimization only supported on Windows.")
   for (name, option) in SIMPLE_OPTIONS.iteritems():
     if (not option.get('default')) and (name not in ARGUMENTS):
       message = ("A value for option %s must be specified (%s)." %
@@ -883,7 +914,7 @@ class BuildContext(object):
       env['ENV'] = self.env_overrides
 
 
-def PostprocessOptions(options):
+def PostprocessOptions(options, os):
   # Adjust architecture if the simulator option has been set
   if (options['simulator'] != 'none') and (options['arch'] != options['simulator']):
     if 'arch' in ARGUMENTS:
@@ -894,6 +925,10 @@ def PostprocessOptions(options):
     # Print a warning if profiling is enabled without profiling support
     print "Warning: forcing profilingsupport on when prof is on"
     options['profilingsupport'] = 'on'
+  if os == 'win32' and options['pgo'] != 'off' and options['msvcltcg'] == 'off':
+    if 'msvcltcg' in ARGUMENTS:
+      print "Warning: forcing msvcltcg on as it is required for pgo (%s)" % options['pgo']
+    options['msvcltcg'] = 'on'
   if (options['armvariant'] == 'none' and options['arch'] == 'arm'):
     options['armvariant'] = 'arm'
   if (options['armvariant'] != 'none' and options['arch'] != 'arm'):
@@ -901,8 +936,7 @@ def PostprocessOptions(options):
   if options['arch'] == 'mips':
     if ('regexp' in ARGUMENTS) and options['regexp'] == 'native':
       # Print a warning if native regexp is specified for mips
-      print "Warning: forcing regexp to interpreted for mips"
-    options['regexp'] = 'interpreted'
+      print "Warning: implementation of native regexp not fully completed"
 
 
 def ParseEnvOverrides(arg, imports):
@@ -924,7 +958,7 @@ def BuildSpecific(env, mode, env_overrides):
   options = {'mode': mode}
   for option in SIMPLE_OPTIONS:
     options[option] = env[option]
-  PostprocessOptions(options)
+  PostprocessOptions(options, env['os'])
 
   context = BuildContext(options, env_overrides, samples=SplitList(env['sample']))
 
@@ -961,7 +995,6 @@ def BuildSpecific(env, mode, env_overrides):
   if context.options['soname'] == 'on':
     # When building shared object with SONAME version the library name.
     library_name += '-' + version
-  env['LIBRARY'] = library_name
 
   # Generate library SONAME if required by the build.
   if context.options['soname'] == 'on':
@@ -982,6 +1015,7 @@ def BuildSpecific(env, mode, env_overrides):
 
   # Link the object files into a library.
   env.Replace(**context.flags['v8'])
+  env.Prepend(LIBS=[library_name])
 
   context.ApplyEnvOverrides(env)
   if context.options['library'] == 'static':
@@ -1001,8 +1035,9 @@ def BuildSpecific(env, mode, env_overrides):
   context.d8_targets.append(shell)
 
   for sample in context.samples:
-    sample_env = Environment(LIBRARY=library_name)
+    sample_env = Environment()
     sample_env.Replace(**context.flags['sample'])
+    sample_env.Prepend(LIBS=[library_name])
     context.ApplyEnvOverrides(sample_env)
     sample_object = sample_env.SConscript(
       join('samples', 'SConscript'),

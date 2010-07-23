@@ -30,6 +30,7 @@
 #include "codegen-inl.h"
 #include "compiler.h"
 #include "full-codegen.h"
+#include "scopes.h"
 #include "stub-cache.h"
 #include "debug.h"
 #include "liveedit.h"
@@ -211,9 +212,9 @@ void FullCodeGenSyntaxChecker::VisitFunctionLiteral(FunctionLiteral* expr) {
 }
 
 
-void FullCodeGenSyntaxChecker::VisitFunctionBoilerplateLiteral(
-    FunctionBoilerplateLiteral* expr) {
-  BAILOUT("FunctionBoilerplateLiteral");
+void FullCodeGenSyntaxChecker::VisitSharedFunctionInfoLiteral(
+    SharedFunctionInfoLiteral* expr) {
+  BAILOUT("SharedFunctionInfoLiteral");
 }
 
 
@@ -523,8 +524,8 @@ void FullCodeGenerator::VisitDeclarations(
             array->set_undefined(j++);
           }
         } else {
-          Handle<JSFunction> function =
-              Compiler::BuildBoilerplate(decl->fun(), script(), this);
+          Handle<SharedFunctionInfo> function =
+              Compiler::BuildFunctionInfo(decl->fun(), script(), this);
           // Check for stack-overflow exception.
           if (HasStackOverflow()) return;
           array->set(j++, *function);
@@ -997,8 +998,8 @@ void FullCodeGenerator::VisitDebuggerStatement(DebuggerStatement* stmt) {
 }
 
 
-void FullCodeGenerator::VisitFunctionBoilerplateLiteral(
-    FunctionBoilerplateLiteral* expr) {
+void FullCodeGenerator::VisitSharedFunctionInfoLiteral(
+    SharedFunctionInfoLiteral* expr) {
   UNREACHABLE();
 }
 

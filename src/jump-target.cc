@@ -100,9 +100,8 @@ void JumpTarget::ComputeEntryFrame() {
         // change our decision about undetermined or invalid elements.
         if (element == NULL || !element->is_valid()) break;
 
-        element = element->Combine(&reaching_frames_[j]->elements_[i]);
-
         FrameElement* other = &reaching_frames_[j]->elements_[i];
+        element = element->Combine(other);
         if (element != NULL && !element->is_copy()) {
           ASSERT(other != NULL);
           // We overwrite the number information of one of the incoming frames.
@@ -136,7 +135,7 @@ void JumpTarget::ComputeEntryFrame() {
     FrameElement* target = elements[index];
     if (target == NULL) {
       entry_frame_->elements_.Add(
-          FrameElement::MemoryElement(NumberInfo::kUninitialized));
+          FrameElement::MemoryElement(NumberInfo::Uninitialized()));
     } else {
       entry_frame_->elements_.Add(*target);
       InitializeEntryElement(index, target);
@@ -153,12 +152,12 @@ void JumpTarget::ComputeEntryFrame() {
       RegisterFile candidate_registers;
       int best_count = kMinInt;
       int best_reg_num = RegisterAllocator::kInvalidRegister;
-      NumberInfo::Type info = NumberInfo::kUninitialized;
+      NumberInfo info = NumberInfo::Uninitialized();
 
       for (int j = 0; j < reaching_frames_.length(); j++) {
         FrameElement element = reaching_frames_[j]->elements_[i];
         if (direction_ == BIDIRECTIONAL) {
-            info = NumberInfo::kUnknown;
+          info = NumberInfo::Unknown();
         } else if (!element.is_copy()) {
           info = NumberInfo::Combine(info, element.number_info());
         } else {
@@ -182,7 +181,7 @@ void JumpTarget::ComputeEntryFrame() {
 
       // We must have a number type information now (not for copied elements).
       ASSERT(entry_frame_->elements_[i].is_copy()
-             || info != NumberInfo::kUninitialized);
+             || !info.IsUninitialized());
 
       // If the value is synced on all frames, put it in memory.  This
       // costs nothing at the merge code but will incur a
@@ -212,7 +211,7 @@ void JumpTarget::ComputeEntryFrame() {
         Register reg = RegisterAllocator::ToRegister(best_reg_num);
         entry_frame_->elements_[i] =
             FrameElement::RegisterElement(reg, FrameElement::NOT_SYNCED,
-                                          NumberInfo::kUninitialized);
+                                          NumberInfo::Uninitialized());
         if (is_copied) entry_frame_->elements_[i].set_copied();
         entry_frame_->set_register_location(reg, i);
       }
@@ -226,8 +225,7 @@ void JumpTarget::ComputeEntryFrame() {
   if (direction_ == BIDIRECTIONAL) {
     for (int i = 0; i < length; ++i) {
       if (!entry_frame_->elements_[i].is_copy()) {
-        ASSERT(entry_frame_->elements_[i].number_info() ==
-               NumberInfo::kUnknown);
+        ASSERT(entry_frame_->elements_[i].number_info().IsUnknown());
       }
     }
   }
@@ -257,9 +255,16 @@ void JumpTarget::Jump(Result* arg) {
 }
 
 
+#ifndef V8_TARGET_ARCH_MIPS
 void JumpTarget::Branch(Condition cc, Hint hint) {
   DoBranch(cc, hint);
 }
+#else
+void JumpTarget::Branch(Condition cc,
+    Register src1, const Operand& src2, Hint hint) {
+  DoBranch(cc, hint, src1, src2);
+}
+#endif
 
 
 #ifdef DEBUG
@@ -277,6 +282,7 @@ void JumpTarget::Branch(Condition cc, Hint hint) {
 #define ASSERT_ARGCHECK(name) do {} while (false)
 #endif
 
+#ifndef V8_TARGET_ARCH_MIPS
 void JumpTarget::Branch(Condition cc, Result* arg, Hint hint) {
   ASSERT(cgen()->has_valid_frame());
 
@@ -290,8 +296,25 @@ void JumpTarget::Branch(Condition cc, Result* arg, Hint hint) {
 
   ASSERT_ARGCHECK(arg);
 }
+#else
+void JumpTarget::Branch(Condition cc, Result* arg,
+    Register src1, const Operand& src2, Hint hint) {
+  ASSERT(cgen()->has_valid_frame());
+
+  // We want to check that non-frame registers at the call site stay in
+  // the same registers on the fall-through branch.
+  DECLARE_ARGCHECK_VARS(arg);
+
+  cgen()->frame()->Push(arg);
+  DoBranch(cc, hint, src1, src2);
+  *arg = cgen()->frame()->Pop();
+
+  ASSERT_ARGCHECK(arg);
+}
+#endif
 
 
+#ifndef V8_TARGET_ARCH_MIPS
 void BreakTarget::Branch(Condition cc, Result* arg, Hint hint) {
   ASSERT(cgen()->has_valid_frame());
 
@@ -314,6 +337,31 @@ void BreakTarget::Branch(Condition cc, Result* arg, Hint hint) {
     ASSERT_ARGCHECK(arg);
   }
 }
+#else
+void BreakTarget::Branch(Condition cc, Result* arg,
+    Register src1, const Operand& src2, Hint hint) {
+  ASSERT(cgen()->has_valid_frame());
+
+  int count = cgen()->frame()->height() - expected_height_;
+  if (count > 0) {
+    // We negate and branch here rather than using DoBranch's negate
+    // and branch.  This gives us a hook to remove statement state
+    // from the frame.
+    JumpTarget fall_through;
+    // Branch to fall through will not negate, because it is a
+    // forward-only target.
+    fall_through.Branch(NegateCondition(cc), src1, src2, NegateHint(hint));
+    Jump(arg);  // May emit merge code here.
+    fall_through.Bind();
+  } else {
+    DECLARE_ARGCHECK_VARS(arg);
+    cgen()->frame()->Push(arg);
+    DoBranch(cc, hint, src1, src2);
+    *arg = cgen()->frame()->Pop();
+    ASSERT_ARGCHECK(arg);
+  }
+}
+#endif
 
 #undef DECLARE_ARGCHECK_VARS
 #undef ASSERT_ARGCHECK
@@ -365,6 +413,7 @@ void BreakTarget::CopyTo(BreakTarget* destination) {
 }
 
 
+#ifndef V8_TARGET_ARCH_MIPS
 void BreakTarget::Branch(Condition cc, Hint hint) {
   ASSERT(cgen()->has_valid_frame());
 
@@ -383,6 +432,27 @@ void BreakTarget::Branch(Condition cc, Hint hint) {
     DoBranch(cc, hint);
   }
 }
+#else
+void BreakTarget::Branch(Condition cc, Register src1, const Operand& src2,
+    Hint hint) {
+  ASSERT(cgen()->has_valid_frame());
+
+  int count = cgen()->frame()->height() - expected_height_;
+  if (count > 0) {
+    // We negate and branch here rather than using DoBranch's negate
+    // and branch.  This gives us a hook to remove statement state
+    // from the frame.
+    JumpTarget fall_through;
+    // Branch to fall through will not negate, because it is a
+    // forward-only target.
+    fall_through.Branch(NegateCondition(cc), src1, src2, NegateHint(hint));
+    Jump();  // May emit merge code here.
+    fall_through.Bind();
+  } else {
+    DoBranch(cc, hint, src1, src2);
+  }
+}
+#endif
 
 
 // -------------------------------------------------------------------------

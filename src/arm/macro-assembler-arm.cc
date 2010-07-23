@@ -58,11 +58,6 @@ MacroAssembler::MacroAssembler(void* buffer, int size)
 #endif
 
 
-// Using blx may yield better code, so use it when required or when available
-#if defined(USE_THUMB_INTERWORK) || defined(CAN_USE_ARMV5_INSTRUCTIONS)
-#define USE_BLX 1
-#endif
-
 // Using bx does not yield better code, so use it only when required
 #if defined(USE_THUMB_INTERWORK)
 #define USE_BX 1
@@ -117,16 +112,33 @@ void MacroAssembler::Call(Register target, Condition cond) {
 
 void MacroAssembler::Call(intptr_t target, RelocInfo::Mode rmode,
                           Condition cond) {
+#if USE_BLX
+  // On ARMv5 and after the recommended call sequence is:
+  //  ldr ip, [pc, #...]
+  //  blx ip
+
+  // The two instructions (ldr and blx) could be separated by a literal
+  // pool and the code would still work. The issue comes from the
+  // patching code which expect the ldr to be just above the blx.
+  BlockConstPoolFor(2);
+  // Statement positions are expected to be recorded when the target
+  // address is loaded. The mov method will automatically record
+  // positions when pc is the target, since this is not the case here
+  // we have to do it explicitly.
+  WriteRecordedPositions();
+
+  mov(ip, Operand(target, rmode), LeaveCC, cond);
+  blx(ip, cond);
+
+  ASSERT(kCallTargetAddressOffset == 2 * kInstrSize);
+#else
   // Set lr for return at current pc + 8.
   mov(lr, Operand(pc), LeaveCC, cond);
   // Emit a ldr<cond> pc, [pc + offset of target in constant pool].
   mov(pc, Operand(target, rmode), LeaveCC, cond);
-  // If USE_BLX is defined, we could emit a 'mov ip, target', followed by a
-  // 'blx ip'; however, the code would not be shorter than the above sequence
-  // and the target address of the call would be referenced by the first
-  // instruction rather than the second one, which would make it harder to patch
-  // (two instructions before the return address, instead of one).
+
   ASSERT(kCallTargetAddressOffset == kInstrSize);
+#endif
 }
 
 
@@ -280,9 +292,9 @@ void MacroAssembler::RecordWrite(Register object, Register offset,
   // Clobber all input registers when running with the debug-code flag
   // turned on to provoke errors.
   if (FLAG_debug_code) {
-    mov(object, Operand(bit_cast<int32_t>(kZapValue)));
-    mov(offset, Operand(bit_cast<int32_t>(kZapValue)));
-    mov(scratch, Operand(bit_cast<int32_t>(kZapValue)));
+    mov(object, Operand(BitCast<int32_t>(kZapValue)));
+    mov(offset, Operand(BitCast<int32_t>(kZapValue)));
+    mov(scratch, Operand(BitCast<int32_t>(kZapValue)));
   }
 }
 
@@ -1180,7 +1192,7 @@ void MacroAssembler::IntegerToDoubleConversionWithVFP3(Register inReg,
   // ARMv7 VFP3 instructions to implement integer to double conversion.
   mov(r7, Operand(inReg, ASR, kSmiTagSize));
   vmov(s15, r7);
-  vcvt(d7, s15);
+  vcvt_f64_s32(d7, s15);
   vmov(outLowReg, outHighReg, d7);
 }
 
@@ -1234,19 +1246,26 @@ void MacroAssembler::CallExternalReference(const ExternalReference& ext,
 }
 
 
-void MacroAssembler::TailCallRuntime(const ExternalReference& ext,
-                                     int num_arguments,
-                                     int result_size) {
+void MacroAssembler::TailCallExternalReference(const ExternalReference& ext,
+                                               int num_arguments,
+                                               int result_size) {
   // TODO(1236192): Most runtime routines don't need the number of
   // arguments passed in because it is constant. At some point we
   // should remove this need and make the runtime routine entry code
   // smarter.
   mov(r0, Operand(num_arguments));
-  JumpToRuntime(ext);
+  JumpToExternalReference(ext);
 }
 
 
-void MacroAssembler::JumpToRuntime(const ExternalReference& builtin) {
+void MacroAssembler::TailCallRuntime(Runtime::FunctionId fid,
+                                     int num_arguments,
+                                     int result_size) {
+  TailCallExternalReference(ExternalReference(fid), num_arguments, result_size);
+}
+
+
+void MacroAssembler::JumpToExternalReference(const ExternalReference& builtin) {
 #if defined(__thumb__)
   // Thumb mode builtin.
   ASSERT((reinterpret_cast<intptr_t>(builtin.address()) & 1) == 1);
@@ -1410,15 +1429,12 @@ void MacroAssembler::JumpIfNonSmisNotBothSequentialAsciiStrings(
   ldr(scratch2, FieldMemOperand(second, HeapObject::kMapOffset));
   ldrb(scratch1, FieldMemOperand(scratch1, Map::kInstanceTypeOffset));
   ldrb(scratch2, FieldMemOperand(scratch2, Map::kInstanceTypeOffset));
-  int kFlatAsciiStringMask =
-      kIsNotStringMask | kStringEncodingMask | kStringRepresentationMask;
-  int kFlatAsciiStringTag = ASCII_STRING_TYPE;
-  and_(scratch1, scratch1, Operand(kFlatAsciiStringMask));
-  and_(scratch2, scratch2, Operand(kFlatAsciiStringMask));
-  cmp(scratch1, Operand(kFlatAsciiStringTag));
-  // Ignore second test if first test failed.
-  cmp(scratch2, Operand(kFlatAsciiStringTag), eq);
-  b(ne, failure);
+
+  JumpIfBothInstanceTypesAreNotSequentialAscii(scratch1,
+                                               scratch2,
+                                               scratch1,
+                                               scratch2,
+                                               failure);
 }
 
 void MacroAssembler::JumpIfNotBothSequentialAsciiStrings(Register first,
@@ -1436,6 +1452,88 @@ void MacroAssembler::JumpIfNotBothSequentialAsciiStrings(Register first,
                                              scratch1,
                                              scratch2,
                                              failure);
+}
+
+
+// Allocates a heap number or jumps to the need_gc label if the young space
+// is full and a scavenge is needed.
+void MacroAssembler::AllocateHeapNumber(Register result,
+                                        Register scratch1,
+                                        Register scratch2,
+                                        Label* gc_required) {
+  // Allocate an object in the heap for the heap number and tag it as a heap
+  // object.
+  AllocateInNewSpace(HeapNumber::kSize / kPointerSize,
+                     result,
+                     scratch1,
+                     scratch2,
+                     gc_required,
+                     TAG_OBJECT);
+
+  // Get heap number map and store it in the allocated object.
+  LoadRoot(scratch1, Heap::kHeapNumberMapRootIndex);
+  str(scratch1, FieldMemOperand(result, HeapObject::kMapOffset));
+}
+
+
+void MacroAssembler::CountLeadingZeros(Register source,
+                                       Register scratch,
+                                       Register zeros) {
+#ifdef CAN_USE_ARMV5_INSTRUCTIONS
+  clz(zeros, source);  // This instruction is only supported after ARM5.
+#else
+  mov(zeros, Operand(0));
+  mov(scratch, source);
+  // Top 16.
+  tst(scratch, Operand(0xffff0000));
+  add(zeros, zeros, Operand(16), LeaveCC, eq);
+  mov(scratch, Operand(scratch, LSL, 16), LeaveCC, eq);
+  // Top 8.
+  tst(scratch, Operand(0xff000000));
+  add(zeros, zeros, Operand(8), LeaveCC, eq);
+  mov(scratch, Operand(scratch, LSL, 8), LeaveCC, eq);
+  // Top 4.
+  tst(scratch, Operand(0xf0000000));
+  add(zeros, zeros, Operand(4), LeaveCC, eq);
+  mov(scratch, Operand(scratch, LSL, 4), LeaveCC, eq);
+  // Top 2.
+  tst(scratch, Operand(0xc0000000));
+  add(zeros, zeros, Operand(2), LeaveCC, eq);
+  mov(scratch, Operand(scratch, LSL, 2), LeaveCC, eq);
+  // Top bit.
+  tst(scratch, Operand(0x80000000u));
+  add(zeros, zeros, Operand(1), LeaveCC, eq);
+#endif
+}
+
+
+void MacroAssembler::JumpIfBothInstanceTypesAreNotSequentialAscii(
+    Register first,
+    Register second,
+    Register scratch1,
+    Register scratch2,
+    Label* failure) {
+  int kFlatAsciiStringMask =
+      kIsNotStringMask | kStringEncodingMask | kStringRepresentationMask;
+  int kFlatAsciiStringTag = ASCII_STRING_TYPE;
+  and_(scratch1, first, Operand(kFlatAsciiStringMask));
+  and_(scratch2, second, Operand(kFlatAsciiStringMask));
+  cmp(scratch1, Operand(kFlatAsciiStringTag));
+  // Ignore second test if first test failed.
+  cmp(scratch2, Operand(kFlatAsciiStringTag), eq);
+  b(ne, failure);
+}
+
+
+void MacroAssembler::JumpIfInstanceTypeIsNotSequentialAscii(Register type,
+                                                            Register scratch,
+                                                            Label* failure) {
+  int kFlatAsciiStringMask =
+      kIsNotStringMask | kStringEncodingMask | kStringRepresentationMask;
+  int kFlatAsciiStringTag = ASCII_STRING_TYPE;
+  and_(scratch, type, Operand(kFlatAsciiStringMask));
+  cmp(scratch, Operand(kFlatAsciiStringTag));
+  b(ne, failure);
 }
 
 

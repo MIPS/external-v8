@@ -253,6 +253,18 @@
 				>
 			</File>
 			<File
+				RelativePath="..\..\src\circular-queue-inl.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\circular-queue.cc"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\circular-queue.h"
+				>
+			</File>
+			<File
 				RelativePath="..\..\src\code-stubs.cc"
 				>
 			</File>
@@ -334,6 +346,18 @@
 			</File>
 			<File
 				RelativePath="..\..\src\cpu.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\cpu-profiler.cc"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\cpu-profiler.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\cpu-profiler-inl.h"
 				>
 			</File>
 			<File
@@ -642,6 +666,10 @@
 				>
 			</File>
 			<File
+				RelativePath="..\..\src\number-info-inl.h"
+				>
+			</File>
+			<File
 				RelativePath="..\..\src\number-info.h"
 				>
 			</File>
@@ -683,6 +711,18 @@
 			</File>
 			<File
 				RelativePath="..\..\src\parser.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\profile-generator.cc"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\profile-generator.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\profile-generator-inl.h"
 				>
 			</File>
 			<File
@@ -882,14 +922,6 @@
 				>
 			</File>
 			<File
-				RelativePath="..\..\src\usage-analyzer.cc"
-				>
-			</File>
-			<File
-				RelativePath="..\..\src\usage-analyzer.h"
-				>
-			</File>
-			<File
 				RelativePath="..\..\src\utils.cc"
 				>
 			</File>
@@ -935,6 +967,10 @@
 			</File>
 			<File
 				RelativePath="..\..\src\version.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\virtual-frame-inl.h"
 				>
 			</File>
 			<File

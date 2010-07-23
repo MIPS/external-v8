@@ -72,11 +72,11 @@ void CpuFeatures::Probe() {
 #ifndef __arm__
   // For the simulator=arm build, use VFP when FLAG_enable_vfp3 is enabled.
   if (FLAG_enable_vfp3) {
-      supported_ |= 1u << VFP3;
+    supported_ |= 1u << VFP3;
   }
   // For the simulator=arm build, use ARMv7 when FLAG_enable_armv7 is enabled
   if (FLAG_enable_armv7) {
-      supported_ |= 1u << ARMv7;
+    supported_ |= 1u << ARMv7;
   }
 #else  // def __arm__
   if (Serializer::enabled()) {
@@ -96,103 +96,9 @@ void CpuFeatures::Probe() {
     supported_ |= 1u << ARMv7;
     found_by_runtime_probing_ |= 1u << ARMv7;
   }
-#endif  // def __arm__
+#endif
 }
 
-
-// -----------------------------------------------------------------------------
-// Implementation of Register and CRegister
-
-Register no_reg = { -1 };
-
-Register r0  = {  0 };
-Register r1  = {  1 };
-Register r2  = {  2 };
-Register r3  = {  3 };
-Register r4  = {  4 };
-Register r5  = {  5 };
-Register r6  = {  6 };
-Register r7  = {  7 };
-Register r8  = {  8 };  // Used as context register.
-Register r9  = {  9 };
-Register r10 = { 10 };  // Used as roots register.
-Register fp  = { 11 };
-Register ip  = { 12 };
-Register sp  = { 13 };
-Register lr  = { 14 };
-Register pc  = { 15 };
-
-
-CRegister no_creg = { -1 };
-
-CRegister cr0  = {  0 };
-CRegister cr1  = {  1 };
-CRegister cr2  = {  2 };
-CRegister cr3  = {  3 };
-CRegister cr4  = {  4 };
-CRegister cr5  = {  5 };
-CRegister cr6  = {  6 };
-CRegister cr7  = {  7 };
-CRegister cr8  = {  8 };
-CRegister cr9  = {  9 };
-CRegister cr10 = { 10 };
-CRegister cr11 = { 11 };
-CRegister cr12 = { 12 };
-CRegister cr13 = { 13 };
-CRegister cr14 = { 14 };
-CRegister cr15 = { 15 };
-
-// Support for the VFP registers s0 to s31 (d0 to d15).
-// Note that "sN:sM" is the same as "dN/2".
-SwVfpRegister s0  = {  0 };
-SwVfpRegister s1  = {  1 };
-SwVfpRegister s2  = {  2 };
-SwVfpRegister s3  = {  3 };
-SwVfpRegister s4  = {  4 };
-SwVfpRegister s5  = {  5 };
-SwVfpRegister s6  = {  6 };
-SwVfpRegister s7  = {  7 };
-SwVfpRegister s8  = {  8 };
-SwVfpRegister s9  = {  9 };
-SwVfpRegister s10 = { 10 };
-SwVfpRegister s11 = { 11 };
-SwVfpRegister s12 = { 12 };
-SwVfpRegister s13 = { 13 };
-SwVfpRegister s14 = { 14 };
-SwVfpRegister s15 = { 15 };
-SwVfpRegister s16 = { 16 };
-SwVfpRegister s17 = { 17 };
-SwVfpRegister s18 = { 18 };
-SwVfpRegister s19 = { 19 };
-SwVfpRegister s20 = { 20 };
-SwVfpRegister s21 = { 21 };
-SwVfpRegister s22 = { 22 };
-SwVfpRegister s23 = { 23 };
-SwVfpRegister s24 = { 24 };
-SwVfpRegister s25 = { 25 };
-SwVfpRegister s26 = { 26 };
-SwVfpRegister s27 = { 27 };
-SwVfpRegister s28 = { 28 };
-SwVfpRegister s29 = { 29 };
-SwVfpRegister s30 = { 30 };
-SwVfpRegister s31 = { 31 };
-
-DwVfpRegister d0  = {  0 };
-DwVfpRegister d1  = {  1 };
-DwVfpRegister d2  = {  2 };
-DwVfpRegister d3  = {  3 };
-DwVfpRegister d4  = {  4 };
-DwVfpRegister d5  = {  5 };
-DwVfpRegister d6  = {  6 };
-DwVfpRegister d7  = {  7 };
-DwVfpRegister d8  = {  8 };
-DwVfpRegister d9  = {  9 };
-DwVfpRegister d10 = { 10 };
-DwVfpRegister d11 = { 11 };
-DwVfpRegister d12 = { 12 };
-DwVfpRegister d13 = { 13 };
-DwVfpRegister d14 = { 14 };
-DwVfpRegister d15 = { 15 };
 
 // -----------------------------------------------------------------------------
 // Implementation of RelocInfo
@@ -354,8 +260,14 @@ static const Instr kPopRegPattern =
     al | B26 | L | 4 | PostIndex | sp.code() * B16;
 // mov lr, pc
 const Instr kMovLrPc = al | 13*B21 | pc.code() | lr.code() * B12;
-// ldr pc, [pc, #XXX]
-const Instr kLdrPCPattern = al | B26 | L | pc.code() * B16;
+// ldr rd, [pc, #offset]
+const Instr kLdrPCMask = CondMask | 15 * B24 | 7 * B20 | 15 * B16;
+const Instr kLdrPCPattern = al | 5 * B24 | L | pc.code() * B16;
+// blxcc rm
+const Instr kBlxRegMask =
+    15 * B24 | 15 * B20 | 15 * B16 | 15 * B12 | 15 * B8 | 15 * B4;
+const Instr kBlxRegPattern =
+    B24 | B21 | 15 * B16 | 15 * B12 | 15 * B8 | 3 * B4;
 
 // Spare buffer.
 static const int kMinimalBufferSize = 4*KB;
@@ -1429,8 +1341,25 @@ void Assembler::vldr(const DwVfpRegister dst,
   // Vdst(15-12) | 1011(11-8) | offset
   ASSERT(CpuFeatures::IsEnabled(VFP3));
   ASSERT(offset % 4 == 0);
+  ASSERT((offset / 4) < 256);
   emit(cond | 0xD9*B20 | base.code()*B16 | dst.code()*B12 |
        0xB*B8 | ((offset / 4) & 255));
+}
+
+
+void Assembler::vldr(const SwVfpRegister dst,
+                     const Register base,
+                     int offset,
+                     const Condition cond) {
+  // Sdst = MEM(Rbase + offset).
+  // Instruction details available in ARM DDI 0406A, A8-628.
+  // cond(31-28) | 1101(27-24)| 1001(23-20) | Rbase(19-16) |
+  // Vdst(15-12) | 1010(11-8) | offset
+  ASSERT(CpuFeatures::IsEnabled(VFP3));
+  ASSERT(offset % 4 == 0);
+  ASSERT((offset / 4) < 256);
+  emit(cond | 0xD9*B20 | base.code()*B16 | dst.code()*B12 |
+       0xA*B8 | ((offset / 4) & 255));
 }
 
 
@@ -1444,6 +1373,7 @@ void Assembler::vstr(const DwVfpRegister src,
   // Vsrc(15-12) | 1011(11-8) | (offset/4)
   ASSERT(CpuFeatures::IsEnabled(VFP3));
   ASSERT(offset % 4 == 0);
+  ASSERT((offset / 4) < 256);
   emit(cond | 0xD8*B20 | base.code()*B16 | src.code()*B12 |
        0xB*B8 | ((offset / 4) & 255));
 }
@@ -1507,31 +1437,172 @@ void Assembler::vmov(const Register dst,
 }
 
 
-void Assembler::vcvt(const DwVfpRegister dst,
-                     const SwVfpRegister src,
-                     const Condition cond) {
-  // Dd = Sm (integer in Sm converted to IEEE 64-bit doubles in Dd).
-  // Instruction details available in ARM DDI 0406A, A8-576.
-  // cond(31-28) | 11101(27-23)| D=?(22) | 11(21-20) | 1(19) | opc2=000(18-16) |
-  // Vd(15-12) | 101(11-9) | sz(8)=1 | op(7)=1 | 1(6) | M=?(5) | 0(4) | Vm(3-0)
-  ASSERT(CpuFeatures::IsEnabled(VFP3));
-  emit(cond | 0xE*B24 | B23 | 0x3*B20 | B19 |
-       dst.code()*B12 | 0x5*B9 | B8 | B7 | B6 |
-       (0x1 & src.code())*B5 | (src.code() >> 1));
+// Type of data to read from or write to VFP register.
+// Used as specifier in generic vcvt instruction.
+enum VFPType { S32, U32, F32, F64 };
+
+
+static bool IsSignedVFPType(VFPType type) {
+  switch (type) {
+    case S32:
+      return true;
+    case U32:
+      return false;
+    default:
+      UNREACHABLE();
+      return false;
+  }
 }
 
 
-void Assembler::vcvt(const SwVfpRegister dst,
-                     const DwVfpRegister src,
-                     const Condition cond) {
-  // Sd = Dm (IEEE 64-bit doubles in Dm converted to 32 bit integer in Sd).
-  // Instruction details available in ARM DDI 0406A, A8-576.
-  // cond(31-28) | 11101(27-23)| D=?(22) | 11(21-20) | 1(19) | opc2=101(18-16)|
-  // Vd(15-12) | 101(11-9) | sz(8)=1 | op(7)=? | 1(6) | M=?(5) | 0(4) | Vm(3-0)
+static bool IsIntegerVFPType(VFPType type) {
+  switch (type) {
+    case S32:
+    case U32:
+      return true;
+    case F32:
+    case F64:
+      return false;
+    default:
+      UNREACHABLE();
+      return false;
+  }
+}
+
+
+static bool IsDoubleVFPType(VFPType type) {
+  switch (type) {
+    case F32:
+      return false;
+    case F64:
+      return true;
+    default:
+      UNREACHABLE();
+      return false;
+  }
+}
+
+
+// Depending on split_last_bit split binary representation of reg_code into Vm:M
+// or M:Vm form (where M is single bit).
+static void SplitRegCode(bool split_last_bit,
+                         int reg_code,
+                         int* vm,
+                         int* m) {
+  if (split_last_bit) {
+    *m  = reg_code & 0x1;
+    *vm = reg_code >> 1;
+  } else {
+    *m  = (reg_code & 0x10) >> 4;
+    *vm = reg_code & 0x0F;
+  }
+}
+
+
+// Encode vcvt.src_type.dst_type instruction.
+static Instr EncodeVCVT(const VFPType dst_type,
+                        const int dst_code,
+                        const VFPType src_type,
+                        const int src_code,
+                        const Condition cond) {
+  if (IsIntegerVFPType(dst_type) || IsIntegerVFPType(src_type)) {
+    // Conversion between IEEE floating point and 32-bit integer.
+    // Instruction details available in ARM DDI 0406B, A8.6.295.
+    // cond(31-28) | 11101(27-23)| D(22) | 11(21-20) | 1(19) | opc2(18-16) |
+    // Vd(15-12) | 101(11-9) | sz(8) | op(7) | 1(6) | M(5) | 0(4) | Vm(3-0)
+    ASSERT(!IsIntegerVFPType(dst_type) || !IsIntegerVFPType(src_type));
+
+    int sz, opc2, D, Vd, M, Vm, op;
+
+    if (IsIntegerVFPType(dst_type)) {
+      opc2 = IsSignedVFPType(dst_type) ? 0x5 : 0x4;
+      sz = IsDoubleVFPType(src_type) ? 0x1 : 0x0;
+      op = 1;  // round towards zero
+      SplitRegCode(!IsDoubleVFPType(src_type), src_code, &Vm, &M);
+      SplitRegCode(true, dst_code, &Vd, &D);
+    } else {
+      ASSERT(IsIntegerVFPType(src_type));
+
+      opc2 = 0x0;
+      sz = IsDoubleVFPType(dst_type) ? 0x1 : 0x0;
+      op = IsSignedVFPType(src_type) ? 0x1 : 0x0;
+      SplitRegCode(true, src_code, &Vm, &M);
+      SplitRegCode(!IsDoubleVFPType(dst_type), dst_code, &Vd, &D);
+    }
+
+    return (cond | 0xE*B24 | B23 | D*B22 | 0x3*B20 | B19 | opc2*B16 |
+            Vd*B12 | 0x5*B9 | sz*B8 | op*B7 | B6 | M*B5 | Vm);
+  } else {
+    // Conversion between IEEE double and single precision.
+    // Instruction details available in ARM DDI 0406B, A8.6.298.
+    // cond(31-28) | 11101(27-23)| D(22) | 11(21-20) | 0111(19-16) |
+    // Vd(15-12) | 101(11-9) | sz(8) | 1(7) | 1(6) | M(5) | 0(4) | Vm(3-0)
+    int sz, D, Vd, M, Vm;
+
+    ASSERT(IsDoubleVFPType(dst_type) != IsDoubleVFPType(src_type));
+    sz = IsDoubleVFPType(src_type) ? 0x1 : 0x0;
+    SplitRegCode(IsDoubleVFPType(src_type), dst_code, &Vd, &D);
+    SplitRegCode(!IsDoubleVFPType(src_type), src_code, &Vm, &M);
+
+    return (cond | 0xE*B24 | B23 | D*B22 | 0x3*B20 | 0x7*B16 |
+            Vd*B12 | 0x5*B9 | sz*B8 | B7 | B6 | M*B5 | Vm);
+  }
+}
+
+
+void Assembler::vcvt_f64_s32(const DwVfpRegister dst,
+                             const SwVfpRegister src,
+                             const Condition cond) {
   ASSERT(CpuFeatures::IsEnabled(VFP3));
-  emit(cond | 0xE*B24 | B23 |(0x1 & dst.code())*B22 |
-       0x3*B20 | B19 | 0x5*B16 | (dst.code() >> 1)*B12 |
-       0x5*B9 | B8 | B7 | B6 | src.code());
+  emit(EncodeVCVT(F64, dst.code(), S32, src.code(), cond));
+}
+
+
+void Assembler::vcvt_f32_s32(const SwVfpRegister dst,
+                             const SwVfpRegister src,
+                             const Condition cond) {
+  ASSERT(CpuFeatures::IsEnabled(VFP3));
+  emit(EncodeVCVT(F32, dst.code(), S32, src.code(), cond));
+}
+
+
+void Assembler::vcvt_f64_u32(const DwVfpRegister dst,
+                             const SwVfpRegister src,
+                             const Condition cond) {
+  ASSERT(CpuFeatures::IsEnabled(VFP3));
+  emit(EncodeVCVT(F64, dst.code(), U32, src.code(), cond));
+}
+
+
+void Assembler::vcvt_s32_f64(const SwVfpRegister dst,
+                             const DwVfpRegister src,
+                             const Condition cond) {
+  ASSERT(CpuFeatures::IsEnabled(VFP3));
+  emit(EncodeVCVT(S32, dst.code(), F64, src.code(), cond));
+}
+
+
+void Assembler::vcvt_u32_f64(const SwVfpRegister dst,
+                             const DwVfpRegister src,
+                             const Condition cond) {
+  ASSERT(CpuFeatures::IsEnabled(VFP3));
+  emit(EncodeVCVT(U32, dst.code(), F64, src.code(), cond));
+}
+
+
+void Assembler::vcvt_f64_f32(const DwVfpRegister dst,
+                             const SwVfpRegister src,
+                             const Condition cond) {
+  ASSERT(CpuFeatures::IsEnabled(VFP3));
+  emit(EncodeVCVT(F64, dst.code(), F32, src.code(), cond));
+}
+
+
+void Assembler::vcvt_f32_f64(const SwVfpRegister dst,
+                             const DwVfpRegister src,
+                             const Condition cond) {
+  ASSERT(CpuFeatures::IsEnabled(VFP3));
+  emit(EncodeVCVT(F32, dst.code(), F64, src.code(), cond));
 }
 
 

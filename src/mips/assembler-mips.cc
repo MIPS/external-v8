@@ -42,6 +42,34 @@ namespace v8 {
 namespace internal {
 
 
+// Safe default is no features.
+unsigned CpuFeatures::supported_ = 0;
+unsigned CpuFeatures::enabled_ = 0;
+unsigned CpuFeatures::found_by_runtime_probing_ = 0;
+
+void CpuFeatures::Probe() {
+  // If the compiler is allowed to use fpu then we can use fpu too in our
+  // code generation.
+#if !defined(__mips__)
+  // For the simulator=mips build, use FPU when FLAG_enable_fpu is enabled.
+  if (FLAG_enable_fpu) {
+      supported_ |= 1u << FPU;
+  }
+#else
+  if (Serializer::enabled()) {
+    supported_ |= OS::CpuFeaturesImpliedByPlatform();
+    return;  // No features if we might serialize.
+  }
+
+  if (OS::MipsCpuHasFeature(FPU)) {
+    // This implementation also sets the FPU flags if
+    // runtime detection of FPU returns true.
+    supported_ |= 1u << FPU;
+    found_by_runtime_probing_ |= 1u << FPU;
+  }
+#endif
+}
+
 
 const Register no_reg = { -1 };
 
@@ -298,14 +326,17 @@ void Assembler::GetCode(CodeDesc* desc) {
 // to be generated; pos() is the position of the last
 // instruction using the label.
 
-
-// The link chain is terminated by a negative code position (must be aligned).
+// The link chain is terminated by a value in the instruction of -1,
+// which is an otherwise illegal value (branch -1 is inf loop).
+// The instruction 16-bit offset field addresses 32-bit words, but in
+// code is conv to an 18-bit value addressing bytes, hence the -4 value.
 const int kEndOfChain = -4;
 
 bool Assembler::is_branch(Instr instr) {
   uint32_t opcode   = ((instr & kOpcodeMask));
   uint32_t rt_field = ((instr & kRtFieldMask));
   uint32_t rs_field = ((instr & kRsFieldMask));
+  uint32_t label_constant = (instr & ~kImm16Mask);
   // Checks if the instruction is a branch.
   return opcode == BEQ ||
       opcode == BNE ||
@@ -317,7 +348,8 @@ bool Assembler::is_branch(Instr instr) {
       opcode == BGTZL||
       (opcode == REGIMM && (rt_field == BLTZ || rt_field == BGEZ ||
                             rt_field == BLTZAL || rt_field == BGEZAL)) ||
-      (opcode == COP1 && rs_field == BC1);  // Coprocessor branch.
+      (opcode == COP1 && rs_field == BC1) ||  // Coprocessor branch.
+      label_constant == 0;  // Emitted label const in reg-exp engine.
 }
 
 
@@ -334,7 +366,12 @@ int Assembler::target_at(int32_t pos) {
   int32_t imm18 = ((instr &
                     static_cast<int32_t>(kImm16Mask)) << 16) >> 14;
 
-  return pos + kBranchPCOffset + imm18;
+  if (imm18 == kEndOfChain) {
+    // EndOfChain sentinel is returned directly, not relative to pc or pos.
+    return kEndOfChain;
+  } else {
+    return pos + kBranchPCOffset + imm18;
+  }
 }
 
 
@@ -428,13 +465,14 @@ void Assembler::bind(Label* L) {
 
 
 void Assembler::next(Label* L) {
+  // ASSERT(L->pos() == kEndOfChain || L->is_linked());
   ASSERT(L->is_linked());
   int link = target_at(L->pos());
-  if (link > 0) {
-    L->link_to(link);
-  } else {
-    ASSERT(link == kEndOfChain);
+  ASSERT(link > 0 || link == kEndOfChain);
+  if (link == kEndOfChain) {
     L->Unuse();
+  } else if (link > 0) {
+    L->link_to(link);
   }
 }
 
@@ -443,7 +481,7 @@ void Assembler::next(Label* L) {
 // if they can be encoded in the MIPS's 16 bits of immediate-offset instruction
 // space.  There is no guarantee that the relocated location can be similarly
 // encoded.
-bool Assembler::MustUseAt(RelocInfo::Mode rmode) {
+bool Assembler::MustUseReg(RelocInfo::Mode rmode) {
   if (rmode == RelocInfo::EXTERNAL_REFERENCE) {
     return Serializer::enabled();
   } else if (rmode == RelocInfo::NONE) {
@@ -467,14 +505,27 @@ void Assembler::GenInstrRegister(Opcode opcode,
 
 
 void Assembler::GenInstrRegister(Opcode opcode,
+                                 Register rs,
+                                 Register rt,
+                                 uint16_t msb,
+                                 uint16_t lsb,
+                                 SecondaryField func) {
+  ASSERT(rs.is_valid() && rt.is_valid() && is_uint5(msb) && is_uint5(lsb));
+  Instr instr = opcode | (rs.code() << kRsShift) | (rt.code() << kRtShift)
+      | (msb << kRdShift) | (lsb << kSaShift) | func;
+  emit(instr);
+}
+
+
+void Assembler::GenInstrRegister(Opcode opcode,
                                  SecondaryField fmt,
                                  FPURegister ft,
                                  FPURegister fs,
                                  FPURegister fd,
                                  SecondaryField func) {
   ASSERT(fd.is_valid() && fs.is_valid() && ft.is_valid());
-  Instr instr = opcode | fmt | (ft.code() << 16) | (fs.code() << kFsShift)
-      | (fd.code() << 6) | func;
+  Instr instr = opcode | fmt | (ft.code() << kFtShift) | (fs.code() << kFsShift)
+      | (fd.code() << kFdShift) | func;
   emit(instr);
 }
 
@@ -487,7 +538,7 @@ void Assembler::GenInstrRegister(Opcode opcode,
                                  SecondaryField func) {
   ASSERT(fd.is_valid() && fs.is_valid() && rt.is_valid());
   Instr instr = opcode | fmt | (rt.code() << kRtShift)
-      | (fs.code() << kFsShift) | (fd.code() << 6) | func;
+      | (fs.code() << kFsShift) | (fd.code() << kFdShift) | func;
   emit(instr);
 }
 
@@ -542,10 +593,11 @@ int32_t Assembler::branch_offset(Label* L, bool jump_elimination_allowed) {
   } else {
     if (L->is_linked()) {
       target_pos = L->pos();  // L's link
+      L->link_to(pc_offset());
     } else {
-      target_pos = kEndOfChain;
+      L->link_to(pc_offset());
+      return kEndOfChain;
     }
-    L->link_to(pc_offset());
   }
 
   int32_t offset = target_pos - (pc_offset() + kBranchPCOffset);
@@ -577,6 +629,7 @@ void Assembler::b(int16_t offset) {
 
 
 void Assembler::bal(int16_t offset) {
+  WriteRecordedPositions();
   bgezal(zero_reg, offset);
 }
 
@@ -592,6 +645,7 @@ void Assembler::bgez(Register rs, int16_t offset) {
 
 
 void Assembler::bgezal(Register rs, int16_t offset) {
+  WriteRecordedPositions();
   GenInstrImmediate(REGIMM, rs, BGEZAL, offset);
 }
 
@@ -612,6 +666,7 @@ void Assembler::bltz(Register rs, int16_t offset) {
 
 
 void Assembler::bltzal(Register rs, int16_t offset) {
+  WriteRecordedPositions();
   GenInstrImmediate(REGIMM, rs, BLTZAL, offset);
 }
 
@@ -628,17 +683,22 @@ void Assembler::j(int32_t target) {
 
 
 void Assembler::jr(Register rs) {
+  if (rs.is(ra)) {
+    WriteRecordedPositions();
+  }
   GenInstrRegister(SPECIAL, rs, zero_reg, zero_reg, 0, JR);
 }
 
 
 void Assembler::jal(int32_t target) {
+  WriteRecordedPositions();
   ASSERT(is_uint28(target) && ((target & 3) == 0));
   GenInstrJump(JAL, target >> 2);
 }
 
 
 void Assembler::jalr(Register rs, Register rd) {
+  WriteRecordedPositions();
   GenInstrRegister(SPECIAL, rs, zero_reg, rd, 0, JALR);
 }
 
@@ -647,28 +707,13 @@ void Assembler::jalr(Register rs, Register rd) {
 
 // Arithmetic.
 
-void Assembler::add(Register rd, Register rs, Register rt) {
-  GenInstrRegister(SPECIAL, rs, rt, rd, 0, ADD);
-}
-
-
 void Assembler::addu(Register rd, Register rs, Register rt) {
   GenInstrRegister(SPECIAL, rs, rt, rd, 0, ADDU);
 }
 
 
-void Assembler::addi(Register rd, Register rs, int32_t j) {
-  GenInstrImmediate(ADDI, rs, rd, j);
-}
-
-
 void Assembler::addiu(Register rd, Register rs, int32_t j) {
   GenInstrImmediate(ADDIU, rs, rd, j);
-}
-
-
-void Assembler::sub(Register rd, Register rs, Register rt) {
-  GenInstrRegister(SPECIAL, rs, rt, rd, 0, SUB);
 }
 
 
@@ -769,6 +814,19 @@ void Assembler::srav(Register rd, Register rt, Register rs) {
   GenInstrRegister(SPECIAL, rs, rt, rd, 0, SRAV);
 }
 
+void Assembler::rotr(Register rd, Register rt, uint16_t sa) {
+  ASSERT(rd.is_valid() && rt.is_valid() && is_uint5(sa));
+  Instr instr = SPECIAL | (1 << kRsShift) | (rt.code() << kRtShift)
+      | (rd.code() << kRdShift) | (sa << kSaShift) | SRL;
+  emit(instr);
+}
+
+void Assembler::rotrv(Register rd, Register rt, Register rs) {
+  ASSERT(rd.is_valid() && rt.is_valid() && rs.is_valid() );
+  Instr instr = SPECIAL | (rs.code() << kRsShift) | (rt.code() << kRtShift)
+      | (rd.code() << kRdShift) | (1 << kSaShift) | SRLV;
+  emit(instr);
+}
 
 //------------Memory-instructions-------------
 
@@ -782,8 +840,28 @@ void Assembler::lbu(Register rd, const MemOperand& rs) {
 }
 
 
+void Assembler::lh(Register rd, const MemOperand& rs) {
+  GenInstrImmediate(LH, rs.rm(), rd, rs.offset_);
+}
+
+
+void Assembler::lhu(Register rd, const MemOperand& rs) {
+  GenInstrImmediate(LHU, rs.rm(), rd, rs.offset_);
+}
+
+
 void Assembler::lw(Register rd, const MemOperand& rs) {
   GenInstrImmediate(LW, rs.rm(), rd, rs.offset_);
+}
+
+
+void Assembler::lwl(Register rd, const MemOperand& rs) {
+  GenInstrImmediate(LWL, rs.rm(), rd, rs.offset_);
+}
+
+
+void Assembler::lwr(Register rd, const MemOperand& rs) {
+  GenInstrImmediate(LWR, rs.rm(), rd, rs.offset_);
 }
 
 
@@ -792,8 +870,23 @@ void Assembler::sb(Register rd, const MemOperand& rs) {
 }
 
 
+void Assembler::sh(Register rd, const MemOperand& rs) {
+  GenInstrImmediate(SH, rs.rm(), rd, rs.offset_);
+}
+
+
 void Assembler::sw(Register rd, const MemOperand& rs) {
   GenInstrImmediate(SW, rs.rm(), rd, rs.offset_);
+}
+
+
+void Assembler::swl(Register rd, const MemOperand& rs) {
+  GenInstrImmediate(SWL, rs.rm(), rd, rs.offset_);
+}
+
+
+void Assembler::swr(Register rd, const MemOperand& rs) {
+  GenInstrImmediate(SWR, rs.rm(), rd, rs.offset_);
 }
 
 
@@ -892,6 +985,34 @@ void Assembler::sltiu(Register rt, Register rs, int32_t j) {
   GenInstrImmediate(SLTIU, rs, rt, j);
 }
 
+// Conditional move.
+void Assembler::movz(Register rd, Register rs, Register rt) {
+  GenInstrRegister(SPECIAL, rs, rt, rd, 0, MOVZ);
+}
+
+
+void Assembler::movn(Register rd, Register rs, Register rt) {
+  GenInstrRegister(SPECIAL, rs, rt, rd, 0, MOVN);
+}
+
+// Bit twiddling.
+void Assembler::clz(Register rd, Register rs) {
+  // Clz instr requires same GPR number in 'rd' and 'rt' fields.
+  GenInstrRegister(SPECIAL2, rs, rd, rd, 0, CLZ);
+}
+
+
+void Assembler::ins(Register rt, Register rs, uint16_t pos, uint16_t size) {
+  // Ins instr has 'rt' field as dest, and two uint5: msb, lsb
+  GenInstrRegister(SPECIAL3, rs, rt, pos + size - 1, pos, INS);
+}
+
+
+void Assembler::ext(Register rt, Register rs, uint16_t pos, uint16_t size) {
+  // Ext instr has 'rt' field as dest, and two uint5: msb, lsb
+  GenInstrRegister(SPECIAL3, rs, rt, pos + size - 1, pos, EXT);
+}
+
 
 //--------Coprocessor-instructions----------------
 
@@ -902,7 +1023,14 @@ void Assembler::lwc1(FPURegister fd, const MemOperand& src) {
 
 
 void Assembler::ldc1(FPURegister fd, const MemOperand& src) {
-  GenInstrImmediate(LDC1, src.rm(), fd, src.offset_);
+  // Workaround for non-8-byte alignment of HeapNumber, convert 64-bit
+  // load to two 32-bit loads. This really should be done in macro-assembler,
+  // but this should be temporary....
+  GenInstrImmediate(LWC1, src.rm(), fd, src.offset_);
+  FPURegister nextfpreg;
+  nextfpreg.setcode(fd.code() + 1);
+  GenInstrImmediate(LWC1, src.rm(), nextfpreg, src.offset_ + 4);
+  // GenInstrImmediate(LDC1, src.rm(), fd, src.offset_);
 }
 
 
@@ -912,27 +1040,55 @@ void Assembler::swc1(FPURegister fd, const MemOperand& src) {
 
 
 void Assembler::sdc1(FPURegister fd, const MemOperand& src) {
-  GenInstrImmediate(SDC1, src.rm(), fd, src.offset_);
+  // Workaround for non-8-byte alignment of HeapNumber, convert 64-bit
+  // store to two 32-bit stores. This really should be done in macro-assembler,
+  // but this should be temporary....
+  GenInstrImmediate(SWC1, src.rm(), fd, src.offset_);
+  FPURegister nextfpreg;
+  nextfpreg.setcode(fd.code() + 1);
+  GenInstrImmediate(SWC1, src.rm(), nextfpreg, src.offset_ + 4);
+  // GenInstrImmediate(SDC1, src.rm(), fd, src.offset_);
 }
 
 
-void Assembler::mtc1(FPURegister fs, Register rt) {
+void Assembler::mtc1(Register rt, FPURegister fs) {
   GenInstrRegister(COP1, MTC1, rt, fs, f0);
 }
 
 
-void Assembler::mthc1(FPURegister fs, Register rt) {
-  GenInstrRegister(COP1, MTHC1, rt, fs, f0);
-}
-
-
-void Assembler::mfc1(FPURegister fs, Register rt) {
+void Assembler::mfc1(Register rt, FPURegister fs) {
   GenInstrRegister(COP1, MFC1, rt, fs, f0);
 }
 
 
-void Assembler::mfhc1(FPURegister fs, Register rt) {
-  GenInstrRegister(COP1, MFHC1, rt, fs, f0);
+// Arithmetic.
+
+void Assembler::add_d(FPURegister fd, FPURegister fs, FPURegister ft) {
+  GenInstrRegister(COP1, D, ft, fs, fd, ADD_D);
+}
+
+void Assembler::sub_d(FPURegister fd, FPURegister fs, FPURegister ft) {
+  GenInstrRegister(COP1, D, ft, fs, fd, SUB_D);
+}
+
+void Assembler::mul_d(FPURegister fd, FPURegister fs, FPURegister ft) {
+  GenInstrRegister(COP1, D, ft, fs, fd, MUL_D);
+}
+
+void Assembler::div_d(FPURegister fd, FPURegister fs, FPURegister ft) {
+  GenInstrRegister(COP1, D, ft, fs, fd, DIV_D);
+}
+
+void Assembler::abs_d(FPURegister fd, FPURegister fs) {
+  GenInstrRegister(COP1, D, f0, fs, fd, ABS_D);
+}
+
+void Assembler::mov_d(FPURegister fd, FPURegister fs) {
+  GenInstrRegister(COP1, D, f0, fs, fd, MOV_D);
+}
+
+void Assembler::neg_d(FPURegister fd, FPURegister fs) {
+  GenInstrRegister(COP1, D, f0, fs, fd, NEG_D);
 }
 
 
@@ -948,6 +1104,16 @@ void Assembler::cvt_w_d(FPURegister fd, FPURegister fs) {
 }
 
 
+void Assembler::trunc_w_s(FPURegister fd, FPURegister fs) {
+  GenInstrRegister(COP1, S, f0, fs, fd, TRUNC_W_S);
+}
+
+
+void Assembler::trunc_w_d(FPURegister fd, FPURegister fs) {
+  GenInstrRegister(COP1, D, f0, fs, fd, TRUNC_W_D);
+}
+
+
 void Assembler::cvt_l_s(FPURegister fd, FPURegister fs) {
   GenInstrRegister(COP1, S, f0, fs, fd, CVT_L_S);
 }
@@ -955,6 +1121,16 @@ void Assembler::cvt_l_s(FPURegister fd, FPURegister fs) {
 
 void Assembler::cvt_l_d(FPURegister fd, FPURegister fs) {
   GenInstrRegister(COP1, D, f0, fs, fd, CVT_L_D);
+}
+
+
+void Assembler::trunc_l_s(FPURegister fd, FPURegister fs) {
+  GenInstrRegister(COP1, S, f0, fs, fd, TRUNC_L_S);
+}
+
+
+void Assembler::trunc_l_d(FPURegister fd, FPURegister fs) {
+  GenInstrRegister(COP1, D, f0, fs, fd, TRUNC_L_D);
 }
 
 
@@ -990,7 +1166,7 @@ void Assembler::cvt_d_s(FPURegister fd, FPURegister fs) {
 
 // Conditions.
 void Assembler::c(FPUCondition cond, SecondaryField fmt,
-    FPURegister ft, FPURegister fs, uint16_t cc) {
+    FPURegister fs, FPURegister ft, uint16_t cc) {
   ASSERT(is_uint3(cc));
   ASSERT((fmt & ~(31 << kRsShift)) == 0);
   Instr instr = COP1 | fmt | ft.code() << 16 | fs.code() << kFsShift
@@ -1133,6 +1309,15 @@ Address Assembler::target_address_at(Address pc) {
   Instr instr1 = instr_at(pc);
   Instr instr2 = instr_at(pc + kInstrSize);
   // Check we have 2 instructions generated by li.
+  
+  // if ( ! (((instr1 & kOpcodeMask) == LUI && (instr2 & kOpcodeMask) == ORI) ||
+  //        ((instr1 == nopInstr) && ((instr2 & kOpcodeMask) == ADDI ||
+  //                           (instr2 & kOpcodeMask) == ORI ||
+  //                           (instr2 & kOpcodeMask) == LUI)))) {
+  //   PrintF("target_address_at(): adr: %08x i1: %08x, i2: %08x\n",
+  //           pc, instr1, instr2);
+  // }
+  
   ASSERT(((instr1 & kOpcodeMask) == LUI && (instr2 & kOpcodeMask) == ORI) ||
          ((instr1 == nopInstr) && ((instr2 & kOpcodeMask) == ADDI ||
                             (instr2 & kOpcodeMask) == ORI ||
@@ -1166,7 +1351,7 @@ void Assembler::set_target_address_at(Address pc, Address target) {
 #ifdef DEBUG
   Instr instr1 = instr_at(pc);
 
-  // Check we have indeed the result from a li with MustUseAt true.
+  // Check we have indeed the result from a li with MustUseReg true.
   CHECK(((instr1 & kOpcodeMask) == LUI && (instr2 & kOpcodeMask) == ORI) ||
         ((instr1 == 0) && ((instr2 & kOpcodeMask)== ADDIU ||
                            (instr2 & kOpcodeMask)== ORI ||

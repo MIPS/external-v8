@@ -73,10 +73,10 @@ class VirtualFrame: public ZoneObject {
   static const int kIllegalIndex = -1;
 
   // Construct an initial virtual frame on entry to a JS function.
-  VirtualFrame();
+  inline VirtualFrame();
 
   // Construct a virtual frame as a clone of an existing one.
-  explicit VirtualFrame(VirtualFrame* original);
+  explicit inline VirtualFrame(VirtualFrame* original);
 
   CodeGenerator* cgen() { return CodeGeneratorScope::Current(); }
 
@@ -84,7 +84,7 @@ class VirtualFrame: public ZoneObject {
 
   // Create a duplicate of an existing valid frame element.
   FrameElement CopyElementAt(int index,
-    NumberInfo::Type info = NumberInfo::kUninitialized);
+    NumberInfo info = NumberInfo::Uninitialized());
 
   // The number of elements on the virtual frame.
   int element_count() { return elements_.length(); }
@@ -242,6 +242,11 @@ class VirtualFrame: public ZoneObject {
     PushFrameSlotAt(local0_index() + index);
   }
 
+  // Push a copy of the value of a local frame slot on top of the frame.
+  void UntaggedPushLocalAt(int index) {
+    UntaggedPushFrameSlotAt(local0_index() + index);
+  }
+
   // Push the value of a local frame slot on top of the frame and invalidate
   // the local slot.  The slot should be written to before trying to read
   // from it again.
@@ -280,6 +285,11 @@ class VirtualFrame: public ZoneObject {
   // Push a copy of the value of a parameter frame slot on top of the frame.
   void PushParameterAt(int index) {
     PushFrameSlotAt(param0_index() + index);
+  }
+
+  // Push a copy of the value of a parameter frame slot on top of the frame.
+  void UntaggedPushParameterAt(int index) {
+    UntaggedPushFrameSlotAt(param0_index() + index);
   }
 
   // Push the value of a paramter frame slot on top of the frame and
@@ -388,18 +398,18 @@ class VirtualFrame: public ZoneObject {
   // Push an element on top of the expression stack and emit a
   // corresponding push instruction.
   void EmitPush(Register reg,
-                NumberInfo::Type info = NumberInfo::kUnknown);
+                NumberInfo info = NumberInfo::Unknown());
   void EmitPush(Operand operand,
-                NumberInfo::Type info = NumberInfo::kUnknown);
+                NumberInfo info = NumberInfo::Unknown());
   void EmitPush(Immediate immediate,
-                NumberInfo::Type info = NumberInfo::kUnknown);
+                NumberInfo info = NumberInfo::Unknown());
 
   // Push an element on the virtual frame.
-  void Push(Register reg, NumberInfo::Type info = NumberInfo::kUnknown);
-  void Push(Handle<Object> value);
-  void Push(Smi* value) {
-    Push(Handle<Object> (value));
-  }
+  inline void Push(Register reg, NumberInfo info = NumberInfo::Unknown());
+  inline void Push(Handle<Object> value);
+  inline void Push(Smi* value);
+
+  void PushUntaggedElement(Handle<Object> value);
 
   // Pushing a result invalidates it (its contents become owned by the
   // frame).
@@ -412,6 +422,10 @@ class VirtualFrame: public ZoneObject {
       ASSERT(result->is_constant());
       Push(result->handle());
     }
+    if (cgen()->in_safe_int32_mode()) {
+      ASSERT(result->is_untagged_int32());
+      elements_[element_count() - 1].set_untagged_int32(true);
+    }
     result->Unuse();
   }
 
@@ -422,7 +436,19 @@ class VirtualFrame: public ZoneObject {
   // Nip removes zero or more elements from immediately below the top
   // of the frame, leaving the previous top-of-frame value on top of
   // the frame.  Nip(k) is equivalent to x = Pop(), Drop(k), Push(x).
-  void Nip(int num_dropped);
+  inline void Nip(int num_dropped);
+
+  // Check that the frame has no elements containing untagged int32 elements.
+  bool HasNoUntaggedInt32Elements() {
+    for (int i = 0; i < element_count(); ++i) {
+      if (elements_[i].is_untagged_int32()) return false;
+    }
+    return true;
+  }
+
+  // Update the type information of a variable frame element directly.
+  inline void SetTypeForLocalAt(int index, NumberInfo info);
+  inline void SetTypeForParamAt(int index, NumberInfo info);
 
  private:
   static const int kLocal0Offset = JavaScriptFrameConstants::kLocal0Offset;
@@ -530,7 +556,12 @@ class VirtualFrame: public ZoneObject {
 
   // Push a copy of a frame slot (typically a local or parameter) on top of
   // the frame.
-  void PushFrameSlotAt(int index);
+  inline void PushFrameSlotAt(int index);
+
+  // Push a copy of a frame slot (typically a local or parameter) on top of
+  // the frame, at an untagged int32 value.  Bails out if the value is not
+  // an int32.
+  void UntaggedPushFrameSlotAt(int index);
 
   // Push a the value of a frame slot (typically a local or parameter) on
   // top of the frame and invalidate the slot.
@@ -573,6 +604,14 @@ class VirtualFrame: public ZoneObject {
   // Register counts are correctly updated.
   int InvalidateFrameSlotAt(int index);
 
+  // This function assumes that a and b are the only results that could be in
+  // the registers a_reg or b_reg.  Other results can be live, but must not
+  //  be in the registers a_reg or b_reg.  The results a and b are invalidated.
+  void MoveResultsToRegisters(Result* a,
+                              Result* b,
+                              Register a_reg,
+                              Register b_reg);
+
   // Call a code stub that has already been prepared for calling (via
   // PrepareForCall).
   Result RawCallStub(CodeStub* stub);
@@ -581,7 +620,7 @@ class VirtualFrame: public ZoneObject {
   // (via PrepareForCall).
   Result RawCallCodeObject(Handle<Code> code, RelocInfo::Mode rmode);
 
-  bool Equals(VirtualFrame* other);
+  inline bool Equals(VirtualFrame* other);
 
   // Classes that need raw access to the elements_ array.
   friend class DeferredCode;

@@ -91,6 +91,10 @@ uint64_t OS::CpuFeaturesImpliedByPlatform() {
   return 1u << VFP3;
 #elif CAN_USE_ARMV7_INSTRUCTIONS
   return 1u << ARMv7;
+#elif(defined(__mips_hard_float) && __mips_hard_float != 0)
+    // Here gcc is telling us that we are on an MIPS and gcc is assuming that we
+    // have FPU instructions.  If gcc can assume it then so can we.
+    return 1u << FPU;
 #else
   return 0;  // Linux runs on anything.
 #endif
@@ -149,6 +153,66 @@ bool OS::ArmCpuHasFeature(CpuFeature feature) {
   return false;
 }
 #endif  // def __arm__
+
+
+#ifdef __mips__
+bool OS::MipsCpuHasFeature(CpuFeature feature) {
+  const char* search_string = NULL;
+  const char* file_name = "/proc/cpuinfo";
+  // Simple detection of FPU at runtime for Linux.
+  // It is based on /proc/cpuinfo, which reveals hardware configuration
+  // to user-space applications.  According to MIPS (early 2010), no similar
+  // facility is universally available on the MIPS architectures,
+  // so it's up to individual OSes to provide such.
+  //
+  // This is written as a straight shot one pass parser
+  // and not using STL string and ifstream because,
+  // on Linux, it's reading from a (non-mmap-able)
+  // character special device.
+
+  // ---------------------------------------------------------------------------
+
+  // HACK plind, due to issue 6, force FPU test true for now, with side-
+  // effect of using kernel FPU emulation.
+  return true;
+
+  // ---------------------------------------------------------------------------
+
+  switch (feature) {
+    case FPU:
+      search_string = "FPU";
+      break;
+    default:
+      UNREACHABLE();
+  }
+
+  FILE* f = NULL;
+  const char* what = search_string;
+
+  if (NULL == (f = fopen(file_name, "r")))
+    return false;
+
+  int k;
+  while (EOF != (k = fgetc(f))) {
+    if (k == *what) {
+      ++what;
+      while ((*what != '\0') && (*what == fgetc(f))) {
+        ++what;
+      }
+      if (*what == '\0') {
+        fclose(f);
+        return true;
+      } else {
+        what = search_string;
+      }
+    }
+  }
+  fclose(f);
+
+  // Did not find string in the proc file.
+  return false;
+}
+#endif  // def __mips__
 
 
 int OS::ActivationFrameAlignment() {
@@ -332,8 +396,8 @@ void OS::LogSharedLibraryAddresses() {
     if (fscanf(fp, " %c%c%c%c", &attr_r, &attr_w, &attr_x, &attr_p) != 4) break;
 
     int c;
-    if (attr_r == 'r' && attr_x == 'x') {
-      // Found a readable and executable entry. Skip characters until we reach
+    if (attr_r == 'r' && attr_w != 'w' && attr_x == 'x') {
+      // Found a read-only executable entry. Skip characters until we reach
       // the beginning of the filename or the end of the line.
       do {
         c = getc(fp);
@@ -722,12 +786,14 @@ static inline bool IsVmThread() {
 
 
 static void ProfilerSignalHandler(int signal, siginfo_t* info, void* context) {
-#ifndef V8_HOST_ARCH_MIPS
   USE(info);
   if (signal != SIGPROF) return;
   if (active_sampler_ == NULL) return;
 
   TickSample sample;
+
+  // We always sample the VM state.
+  sample.state = Logger::state();
 
   // If profiling, we extract the current pc and sp.
   if (active_sampler_->IsProfiling()) {
@@ -754,18 +820,15 @@ static void ProfilerSignalHandler(int signal, siginfo_t* info, void* context) {
     sample.fp = reinterpret_cast<Address>(mcontext.arm_fp);
 #endif
 #elif V8_HOST_ARCH_MIPS
-    // Implement this on MIPS.
-    UNIMPLEMENTED();
+    sample.pc = reinterpret_cast<Address>(mcontext.pc);
+    sample.sp = reinterpret_cast<Address>(mcontext.gregs[29]);
+    sample.fp = reinterpret_cast<Address>(mcontext.gregs[30]);
 #endif
     if (IsVmThread())
       active_sampler_->SampleStack(&sample);
   }
 
-  // We always sample the VM state.
-  sample.state = Logger::state();
-
   active_sampler_->Tick(&sample);
-#endif
 }
 
 

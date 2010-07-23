@@ -133,7 +133,8 @@ Object* Heap::AllocateRawMap() {
 #ifdef DEBUG
   if (!result->IsFailure()) {
     // Maps have their own alignment.
-    CHECK((OffsetFrom(result) & kMapAlignmentMask) == kHeapObjectTag);
+    CHECK((reinterpret_cast<intptr_t>(result) & kMapAlignmentMask) ==
+          static_cast<intptr_t>(kHeapObjectTag));
   }
 #endif
   return result;
@@ -184,6 +185,18 @@ void Heap::RecordWrite(Address address, int offset) {
   ASSERT(!new_space_.FromSpaceContains(address));
   SLOW_ASSERT(Contains(address + offset));
   Page::SetRSet(address, offset);
+}
+
+
+void Heap::RecordWrites(Address address, int start, int len) {
+  if (new_space_.Contains(address)) return;
+  ASSERT(!new_space_.FromSpaceContains(address));
+  for (int offset = start;
+       offset < start + len * kPointerSize;
+       offset += kPointerSize) {
+    SLOW_ASSERT(Contains(address + offset));
+    Page::SetRSet(address, offset);
+  }
 }
 
 
@@ -258,6 +271,25 @@ void Heap::ScavengeObject(HeapObject** p, HeapObject* object) {
 
   // Call the slow part of scavenge object.
   return ScavengeObjectSlow(p, object);
+}
+
+
+Object* Heap::PrepareForCompare(String* str) {
+  // Always flatten small strings and force flattening of long strings
+  // after we have accumulated a certain amount we failed to flatten.
+  static const int kMaxAlwaysFlattenLength = 32;
+  static const int kFlattenLongThreshold = 16*KB;
+
+  const int length = str->length();
+  Object* obj = str->TryFlatten();
+  if (length <= kMaxAlwaysFlattenLength ||
+      unflattened_strings_length_ >= kFlattenLongThreshold) {
+    return obj;
+  }
+  if (obj->IsFailure()) {
+    unflattened_strings_length_ += length;
+  }
+  return str;
 }
 
 

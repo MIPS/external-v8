@@ -114,6 +114,10 @@ int random();
 namespace v8 {
 namespace internal {
 
+// Use AtomicWord for a machine-sized pointer. It is assumed that
+// reads and writes of naturally aligned values of this type are atomic.
+typedef intptr_t AtomicWord;
+
 class Semaphore;
 
 double ceiling(double x);
@@ -266,6 +270,9 @@ class OS {
 
   // Support runtime detection of VFP3 on ARM CPUs.
   static bool ArmCpuHasFeature(CpuFeature feature);
+
+  // Support runtime detection of FPU on MIPS CPUs.
+  static bool MipsCpuHasFeature(CpuFeature feature);
 
   // Returns the activation frame alignment constraint or zero if
   // the platform doesn't care. Guaranteed to be a power of two.
@@ -525,7 +532,7 @@ class TickSample {
   Address function;  // The last called JS function.
   StateTag state;  // The state of the VM.
   static const int kMaxFramesCount = 100;
-  EmbeddedVector<Address, kMaxFramesCount> stack;  // Call stack.
+  Address stack[kMaxFramesCount];  // Call stack.
   int frames_count;  // Number of captured frames.
 };
 

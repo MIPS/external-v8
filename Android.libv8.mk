@@ -60,11 +60,18 @@ LOCAL_CFLAGS += \
 	-Wno-import \
 	-Wno-format \
 	-fno-exceptions \
+	-Umips \
+	-finline-limit=64 \
+	-fno-strict-aliasing \
 	-DENABLE_DEBUGGER_SUPPORT \
 	-DV8_NATIVE_REGEXP
 
 ifeq ($(TARGET_ARCH),arm)
 	LOCAL_CFLAGS += -DARM -DV8_TARGET_ARCH_ARM
+endif
+
+ifeq ($(TARGET_ARCH),mips)
+	LOCAL_CFLAGS += -DV8_TARGET_ARCH_MIPS
 endif
 
 ifeq ($(TARGET_ARCH),x86)

@@ -278,12 +278,6 @@ double OS::LocalTimeOffset() {
 
 
 int OS::StackWalk(Vector<StackFrame> frames) {
-#ifdef ANDROID
-  // For some reason the weak linkage doesn't work when building mksnapshot
-  // for android on macos. Just bail out as if we're on 10.4. We don't need
-  // stack walking for mksnapshot.
-  return 0;
-#else
   // If weak link to execinfo lib has failed, ie because we are on 10.4, abort.
   if (backtrace == NULL)
     return 0;
@@ -315,7 +309,6 @@ int OS::StackWalk(Vector<StackFrame> frames) {
   free(symbols);
 
   return frames_count;
-#endif // ANDROID
 }
 
 
@@ -555,6 +548,9 @@ class Sampler::PlatformData : public Malloced {
     while (sampler_->IsActive()) {
       TickSample sample;
 
+      // We always sample the VM state.
+      sample.state = Logger::state();
+
       // If profiling, we record the pc and sp of the profiled thread.
       if (sampler_->IsProfiling()
           && KERN_SUCCESS == thread_suspend(profiled_thread_)) {
@@ -592,8 +588,6 @@ class Sampler::PlatformData : public Malloced {
         thread_resume(profiled_thread_);
       }
 
-      // We always sample the VM state.
-      sample.state = Logger::state();
       // Invoke tick handler with program counter and stack pointer.
       sampler_->Tick(&sample);
 

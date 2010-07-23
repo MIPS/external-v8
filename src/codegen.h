@@ -58,7 +58,7 @@
 //   ProcessDeferred
 //   Generate
 //   ComputeLazyCompile
-//   BuildBoilerplate
+//   BuildFunctionInfo
 //   ComputeCallInitialize
 //   ComputeCallInitializeInLoop
 //   ProcessDeclarations
@@ -97,6 +97,36 @@ enum UncatchableExceptionType { OUT_OF_MEMORY, TERMINATION };
 
 namespace v8 {
 namespace internal {
+
+
+#define INLINE_RUNTIME_FUNCTION_LIST(F) \
+  F(IsSmi, 1, 1)                                                             \
+  F(IsNonNegativeSmi, 1, 1)                                                  \
+  F(IsArray, 1, 1)                                                           \
+  F(IsRegExp, 1, 1)                                                          \
+  F(IsConstructCall, 0, 1)                                                   \
+  F(ArgumentsLength, 0, 1)                                                   \
+  F(Arguments, 1, 1)                                                         \
+  F(ClassOf, 1, 1)                                                           \
+  F(ValueOf, 1, 1)                                                           \
+  F(SetValueOf, 2, 1)                                                        \
+  F(FastCharCodeAt, 2, 1)                                                    \
+  F(CharFromCode, 1, 1)                                                      \
+  F(ObjectEquals, 2, 1)                                                      \
+  F(Log, 3, 1)                                                               \
+  F(RandomPositiveSmi, 0, 1)                                                 \
+  F(IsObject, 1, 1)                                                          \
+  F(IsFunction, 1, 1)                                                        \
+  F(IsUndetectableObject, 1, 1)                                              \
+  F(StringAdd, 2, 1)                                                         \
+  F(SubString, 3, 1)                                                         \
+  F(StringCompare, 2, 1)                                                     \
+  F(RegExpExec, 4, 1)                                                        \
+  F(NumberToString, 1, 1)                                                    \
+  F(MathPow, 2, 1)                                                           \
+  F(MathSin, 1, 1)                                                           \
+  F(MathCos, 1, 1)                                                           \
+  F(MathSqrt, 1, 1)
 
 
 // Support for "structured" code comments.
@@ -173,7 +203,12 @@ class DeferredCode: public ZoneObject {
 #endif
 
   inline void Jump();
+#ifndef V8_TARGET_ARCH_MIPS
   inline void Branch(Condition cc);
+#else
+  inline void Branch(Condition cc, Register src1 = zero_reg,
+                                  const Operand& src2 = Operand(zero_reg));
+#endif
   void BindExit() { masm_->bind(&exit_label_); }
 
   void SaveRegisters();
@@ -330,6 +365,11 @@ class CompareStub: public CodeStub {
   // generating the minor key for other comparisons to avoid creating more
   // stubs.
   bool never_nan_nan_;
+
+  // Encoding of the minor key CCCCCCCCCCCCCCNS.
+  class StrictField: public BitField<bool, 0, 1> {};
+  class NeverNanNanField: public BitField<bool, 1, 1> {};
+  class ConditionField: public BitField<int, 2, 14> {};
 
   Major MajorKey() { return Compare; }
 

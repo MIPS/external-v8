@@ -31,9 +31,14 @@
 #include "checks.h"
 
 // UNIMPLEMENTED_ macro for MIPS.
+#ifdef DEBUG
 #define UNIMPLEMENTED_MIPS()                                                  \
   v8::internal::PrintF("%s, \tline %d: \tfunction %s not implemented. \n",    \
                        __FILE__, __LINE__, __func__)
+#else
+#define UNIMPLEMENTED_MIPS()
+#endif
+
 #define UNSUPPORTED_MIPS() v8::internal::PrintF("Unsupported instruction.\n")
 
 
@@ -61,7 +66,7 @@ static const int kNumSimuRegisters = 35;
 static const int kPCRegister = 34;
 
 // Number coprocessor registers.
-static const int kNumFPURegister = 32;
+static const int kNumFPURegisters = 32;
 static const int kInvalidFPURegister = -1;
 
 // Helper functions for converting between register numbers and names.
@@ -88,7 +93,7 @@ class Registers {
 };
 
 // Helper functions for converting between register numbers and names.
-class FPURegister {
+class FPURegisters {
  public:
   // Return the name of the register.
   static const char* Name(int reg);
@@ -103,7 +108,7 @@ class FPURegister {
 
  private:
 
-  static const char* names_[kNumFPURegister];
+  static const char* names_[kNumFPURegisters];
   static const RegisterAlias aliases_[];
 };
 
@@ -146,6 +151,14 @@ static const int kFsShift       = 11;
 static const int kFsBits        = 5;
 static const int kFtShift       = 16;
 static const int kFtBits        = 5;
+static const int kFdShift       = 6;
+static const int kFdBits        = 5;
+static const int kFCccShift     = 8;
+static const int kFCccBits      = 3;
+static const int kFBccShift     = 18;
+static const int kFBccBits      = 3;
+static const int kFBtrueShift   = 16;
+static const int kFBtrueBits    = 1;
 
 // ----- Miscellianous useful masks.
 // Instruction bit masks.
@@ -194,12 +207,20 @@ enum Opcode {
   BGTZL     =   ((2 << 3) + 7) << kOpcodeShift,
 
   SPECIAL2  =   ((3 << 3) + 4) << kOpcodeShift,
+  SPECIAL3  =   ((3 << 3) + 7) << kOpcodeShift,
 
   LB        =   ((4 << 3) + 0) << kOpcodeShift,
+  LH        =   ((4 << 3) + 1) << kOpcodeShift,
+  LWL       =   ((4 << 3) + 2) << kOpcodeShift,
   LW        =   ((4 << 3) + 3) << kOpcodeShift,
   LBU       =   ((4 << 3) + 4) << kOpcodeShift,
+  LHU       =   ((4 << 3) + 5) << kOpcodeShift,
+  LWR       =   ((4 << 3) + 6) << kOpcodeShift,
   SB        =   ((5 << 3) + 0) << kOpcodeShift,
+  SH        =   ((5 << 3) + 1) << kOpcodeShift,
+  SWL       =   ((5 << 3) + 2) << kOpcodeShift,
   SW        =   ((5 << 3) + 3) << kOpcodeShift,
+  SWR       =   ((5 << 3) + 6) << kOpcodeShift,
 
   LWC1      =   ((6 << 3) + 1) << kOpcodeShift,
   LDC1      =   ((6 << 3) + 5) << kOpcodeShift,
@@ -219,6 +240,8 @@ enum SecondaryField {
 
   JR        =   ((1 << 3) + 0),
   JALR      =   ((1 << 3) + 1),
+  MOVZ      =   ((1 << 3) + 2),
+  MOVN      =   ((1 << 3) + 3),
   BREAK     =   ((1 << 3) + 5),
 
   MFHI      =   ((2 << 3) + 0),
@@ -250,6 +273,12 @@ enum SecondaryField {
 
   // SPECIAL2 Encoding of Function Field.
   MUL       =   ((0 << 3) + 2),
+  CLZ       =   ((4 << 3) + 0),
+  CLO       =   ((4 << 3) + 1),
+
+  // SPECIAL3 Encoding of Function Field.
+  EXT       =   ((0 << 3) + 0),
+  INS       =   ((0 << 3) + 4),
 
   // REGIMM  encoding of rt Field.
   BLTZ      =   ((0 << 3) + 0) << 16,
@@ -269,14 +298,34 @@ enum SecondaryField {
   L         =   ((2 << 3) + 5) << 21,
   PS        =   ((2 << 3) + 6) << 21,
   // COP1 Encoding of Function Field When rs=S.
+  TRUNC_L_S =   ((1 << 3) + 1),
+  TRUNC_W_S =   ((1 << 3) + 5),
   CVT_D_S   =   ((4 << 3) + 1),
   CVT_W_S   =   ((4 << 3) + 4),
   CVT_L_S   =   ((4 << 3) + 5),
   CVT_PS_S  =   ((4 << 3) + 6),
   // COP1 Encoding of Function Field When rs=D.
+  ADD_D     =   ((0 << 3) + 0),
+  SUB_D     =   ((0 << 3) + 1),
+  MUL_D     =   ((0 << 3) + 2),
+  DIV_D     =   ((0 << 3) + 3),
+  SQRT_D    =   ((0 << 3) + 4),
+  ABS_D     =   ((0 << 3) + 5),
+  MOV_D     =   ((0 << 3) + 6),
+  NEG_D     =   ((0 << 3) + 7),
+  TRUNC_L_D =   ((1 << 3) + 1),
+  TRUNC_W_D =   ((1 << 3) + 5),
   CVT_S_D   =   ((4 << 3) + 0),
   CVT_W_D   =   ((4 << 3) + 4),
   CVT_L_D   =   ((4 << 3) + 5),
+  C_F_D     =   ((6 << 3) + 0),
+  C_UN_D    =   ((6 << 3) + 1),
+  C_EQ_D    =   ((6 << 3) + 2),
+  C_UEQ_D   =   ((6 << 3) + 3),
+  C_OLT_D   =   ((6 << 3) + 4),
+  C_ULT_D   =   ((6 << 3) + 5),
+  C_OLE_D   =   ((6 << 3) + 6),
+  C_ULE_D   =   ((6 << 3) + 7),
   // COP1 Encoding of Function Field When rs=W or L.
   CVT_S_W   =   ((4 << 3) + 0),
   CVT_D_W   =   ((4 << 3) + 1),
@@ -321,8 +370,20 @@ enum Condition {
   eq            = equal,
   not_zero      = not_equal,
   ne            = not_equal,
+  nz            = not_equal,
   sign          = negative,
   not_sign      = positive,
+  mi            = negative,
+  pl            = positive,
+  hi            = Ugreater,
+  ls            = Uless_equal,
+  ge            = greater_equal,
+  lt            = less,
+  gt            = greater,
+  le            = less_equal,
+  hs            = Ugreater_equal,
+  lo            = Uless,
+  al            = cc_always,
 
   cc_default    = no_condition
 };
@@ -421,12 +482,31 @@ class Instruction {
     return Bits(kFunctionShift + kFunctionBits - 1, kFunctionShift);
   }
 
+  inline int FdField() const {
+    return Bits(kFdShift + kFdBits - 1, kFdShift);
+  }
+
   inline int FsField() const {
-    return Bits(kFsShift + kRsBits - 1, kFsShift);
+    return Bits(kFsShift + kFsBits - 1, kFsShift);
   }
 
   inline int FtField() const {
-    return Bits(kFtShift + kRsBits - 1, kFtShift);
+    return Bits(kFtShift + kFtBits - 1, kFtShift);
+  }
+
+  // Float Compare condition code instruction bits.
+  inline int FCccField() const {
+    return Bits(kFCccShift + kFCccBits - 1, kFCccShift);
+  }
+
+  // Float Branch condition code instruction bits.
+  inline int FBccField() const {
+    return Bits(kFBccShift + kFBccBits - 1, kFBccShift);
+  }
+
+  // Float Branch true/false instruction bit.
+  inline int FBtrueField() const {
+    return Bits(kFBtrueShift + kFBtrueBits - 1, kFBtrueShift);
   }
 
   // Return the fields at their original place in the instruction encoding.
@@ -437,6 +517,11 @@ class Instruction {
   inline int RsFieldRaw() const {
     ASSERT(InstructionType() == kRegisterType ||
            InstructionType() == kImmediateType);
+    return InstructionBits() & kRsFieldMask;
+  }
+
+  // Same as above function, but safe to call within InstructionType().
+  inline int RsFieldRawNoAssert() const {
     return InstructionBits() & kRsFieldMask;
   }
 
@@ -510,13 +595,21 @@ class Instruction {
 // -----------------------------------------------------------------------------
 // MIPS assembly various constants.
 
+
 static const int kArgsSlotsSize  = 4 * Instruction::kInstructionSize;
 static const int kArgsSlotsNum   = 4;
+// C/C++ argument slots size.
+static const int kCArgsSlotsSize = 4 * Instruction::kInstructionSize;
+// JS argument slots size.
+static const int kJSArgsSlotsSize = 0 * Instruction::kInstructionSize;
+// Assembly builtins argument slots size.
+static const int kBArgsSlotsSize = 0 * Instruction::kInstructionSize;
 
 static const int kBranchReturnOffset = 2 * Instruction::kInstructionSize;
 
-static const int kDoubleAlignment = 2 * 8;
-static const int kDoubleAlignmentMask = kDoubleAlignmentMask - 1;
+static const int kDoubleAlignmentBits = 3;
+static const int kDoubleAlignment = (1 << kDoubleAlignmentBits);
+static const int kDoubleAlignmentMask = kDoubleAlignment - 1;
 
 
 } }   // namespace assembler::mips

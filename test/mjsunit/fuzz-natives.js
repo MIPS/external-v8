@@ -57,9 +57,17 @@ function makeFunction(name, argc) {
   return new Function(args.join(", "), "return %" + name + "(" + argsStr + ");");
 }
 
-function testArgumentCount(name) {
+function testArgumentCount(name, argc) {
   for (var i = 0; i < 10; i++) {
-    var func = makeFunction(name, i);
+    var func = null;
+    try {
+      func = makeFunction(name, i);
+    } catch (e) {
+      if (e != "SyntaxError: illegal access") throw e;
+    }
+    if (func === null && i == argc) {
+      throw "unexpected exception";
+    }
     var args = [ ];
     for (var j = 0; j < i; j++)
       args.push(0);
@@ -147,7 +155,19 @@ var knownProblems = {
   "DeclareGlobals": true,
 
   "PromoteScheduledException": true,
-  "DeleteHandleScopeExtensions": true
+  "DeleteHandleScopeExtensions": true,
+
+  // That can only be invoked on Array.prototype.
+  "FinishArrayPrototypeSetup": true,
+
+  // LiveEdit feature is under development currently and has fragile input.
+  "LiveEditFindSharedFunctionInfosForScript": true,
+  "LiveEditGatherCompileInfo": true,
+  "LiveEditReplaceScript": true,
+  "LiveEditReplaceFunctionCode": true,
+  "LiveEditRelinkFunctionToScript": true,
+  "LiveEditPatchFunctionPositions": true,
+  "LiveEditCheckStackActivations": true
 };
 
 var currentlyUncallable = {
@@ -164,7 +184,7 @@ function testNatives() {
       continue;
     print(name);
     var argc = nativeInfo[1];
-    testArgumentCount(name);
+    testArgumentCount(name, argc);
     testArgumentTypes(name, argc);
   }
 }

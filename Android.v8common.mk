@@ -9,6 +9,7 @@ V8_LOCAL_SRC_FILES := \
 	src/bootstrapper.cc \
 	src/builtins.cc \
 	src/checks.cc \
+	src/circular-queue.cc \
 	src/code-stubs.cc \
 	src/codegen.cc \
 	src/compilation-cache.cc \
@@ -21,9 +22,11 @@ V8_LOCAL_SRC_FILES := \
 	src/debug.cc \
 	src/debug-agent.cc \
 	src/disassembler.cc \
+	src/diy-fp.cc \
 	src/execution.cc \
 	src/factory.cc \
 	src/fast-codegen.cc \
+	src/fast-dtoa.cc \
 	src/flags.cc \
 	src/frame-element.cc \
 	src/frames.cc \
@@ -64,14 +67,13 @@ V8_LOCAL_SRC_FILES := \
 	src/token.cc \
 	src/top.cc \
 	src/unicode.cc \
-	src/usage-analyzer.cc \
 	src/utils.cc \
 	src/v8-counters.cc \
 	src/v8.cc \
 	src/v8threads.cc \
 	src/variables.cc \
-	src/virtual-frame.cc \
 	src/version.cc \
+	src/virtual-frame.cc \
 	src/zone.cc
 
 ifeq ($(TARGET_ARCH),arm)
@@ -93,6 +95,27 @@ ifeq ($(TARGET_ARCH),arm)
 		src/arm/register-allocator-arm.cc \
 		src/arm/stub-cache-arm.cc \
 		src/arm/virtual-frame-arm.cc
+endif
+
+ifeq ($(TARGET_ARCH),mips)
+  V8_LOCAL_SRC_FILES += \
+		src/mips/assembler-mips.cc \
+		src/mips/builtins-mips.cc \
+		src/mips/codegen-mips.cc \
+		src/mips/constants-mips.cc \
+		src/mips/cpu-mips.cc \
+		src/mips/debug-mips.cc \
+		src/mips/disasm-mips.cc \
+		src/mips/frames-mips.cc \
+		src/mips/fast-codegen-mips.cc \
+		src/mips/full-codegen-mips.cc \
+		src/mips/ic-mips.cc \
+		src/mips/jump-target-mips.cc \
+		src/mips/macro-assembler-mips.cc \
+		src/mips/regexp-macro-assembler-mips.cc \
+		src/mips/register-allocator-mips.cc \
+		src/mips/stub-cache-mips.cc \
+		src/mips/virtual-frame-mips.cc
 endif
 
 ifeq ($(TARGET_ARCH),x86)

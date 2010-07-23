@@ -43,6 +43,7 @@ SOURCES = {
     bootstrapper.cc
     builtins.cc
     checks.cc
+    circular-queue.cc
     code-stubs.cc
     codegen.cc
     compilation-cache.cc
@@ -50,11 +51,13 @@ SOURCES = {
     contexts.cc
     conversions.cc
     counters.cc
+    cpu-profiler.cc
     data-flow.cc
     dateparser.cc
     debug-agent.cc
     debug.cc
     disassembler.cc
+    diy-fp.cc
     execution.cc
     factory.cc
     flags.cc
@@ -63,6 +66,7 @@ SOURCES = {
     full-codegen.cc
     func-name-inferrer.cc
     global-handles.cc
+    fast-dtoa.cc
     handles.cc
     hashmap.cc
     heap-profiler.cc
@@ -79,6 +83,7 @@ SOURCES = {
     objects.cc
     oprofile-agent.cc
     parser.cc
+    profile-generator.cc
     property.cc
     regexp-macro-assembler-irregexp.cc
     regexp-macro-assembler.cc
@@ -97,7 +102,6 @@ SOURCES = {
     token.cc
     top.cc
     unicode.cc
-    usage-analyzer.cc
     utils.cc
     v8-counters.cc
     v8.cc
@@ -147,6 +151,7 @@ SOURCES = {
     mips/ic-mips.cc
     mips/jump-target-mips.cc
     mips/macro-assembler-mips.cc
+    mips/regexp-macro-assembler-mips.cc
     mips/register-allocator-mips.cc
     mips/stub-cache-mips.cc
     mips/virtual-frame-mips.cc
@@ -251,6 +256,7 @@ apinatives.js
 date.js
 regexp.js
 json.js
+liveedit-debugger.js
 mirror-debugger.js
 debug-debugger.js
 '''.split()

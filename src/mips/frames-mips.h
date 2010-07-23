@@ -104,7 +104,7 @@ class ExitFrameConstants : public AllStatic {
   static const int kCallerPCOffset = +1 * kPointerSize;
 
   // FP-relative displacement of the caller's SP.
-  static const int kCallerSPDisplacement = +4 * kPointerSize;
+  static const int kCallerSPDisplacement = +3 * kPointerSize;
 };
 
 
@@ -126,6 +126,8 @@ class StandardFrameConstants : public AllStatic {
   static const int kCArgsSlotsSize = 4 * kPointerSize;
   // JS argument slots size.
   static const int kJSArgsSlotsSize = 0 * kPointerSize;
+  // Assembly builtins argument slots size.
+  static const int kBArgsSlotsSize = 0 * kPointerSize;
 };
 
 

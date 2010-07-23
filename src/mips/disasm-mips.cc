@@ -97,7 +97,7 @@ class Decoder {
 
   // Printing of common values.
   void PrintRegister(int reg);
-  void PrintCRegister(int creg);
+  void PrintFPURegister(int freg);
   void PrintRs(Instruction* instr);
   void PrintRt(Instruction* instr);
   void PrintRd(Instruction* instr);
@@ -105,6 +105,9 @@ class Decoder {
   void PrintFt(Instruction* instr);
   void PrintFd(Instruction* instr);
   void PrintSa(Instruction* instr);
+  void PrintSd(Instruction* instr);
+  void PrintBc(Instruction* instr);
+  void PrintCc(Instruction* instr);
   void PrintFunction(Instruction* instr);
   void PrintSecondaryField(Instruction* instr);
   void PrintUImm16(Instruction* instr);
@@ -117,7 +120,7 @@ class Decoder {
 
   // Handle formatting of instructions and their options.
   int FormatRegister(Instruction* instr, const char* option);
-  int FormatCRegister(Instruction* instr, const char* option);
+  int FormatFPURegister(Instruction* instr, const char* option);
   int FormatOption(Instruction* instr, const char* option);
   void Format(Instruction* instr, const char* format);
   void Unknown(Instruction* instr);
@@ -181,27 +184,27 @@ void Decoder::PrintRd(Instruction* instr) {
 }
 
 
-// Print the Cregister name according to the active name converter.
-void Decoder::PrintCRegister(int creg) {
-  Print(converter_.NameOfXMMRegister(creg));
+// Print the FPUregister name according to the active name converter.
+void Decoder::PrintFPURegister(int freg) {
+  Print(converter_.NameOfXMMRegister(freg));
 }
 
 
 void Decoder::PrintFs(Instruction* instr) {
-  int creg = instr->RsField();
-  PrintCRegister(creg);
+  int freg = instr->RsField();
+  PrintFPURegister(freg);
 }
 
 
 void Decoder::PrintFt(Instruction* instr) {
-  int creg = instr->RtField();
-  PrintCRegister(creg);
+  int freg = instr->RtField();
+  PrintFPURegister(freg);
 }
 
 
 void Decoder::PrintFd(Instruction* instr) {
-  int creg = instr->RdField();
-  PrintCRegister(creg);
+  int freg = instr->RdField();
+  PrintFPURegister(freg);
 }
 
 
@@ -210,6 +213,30 @@ void Decoder::PrintSa(Instruction* instr) {
   int sa = instr->SaField();
   out_buffer_pos_ += v8i::OS::SNPrintF(out_buffer_ + out_buffer_pos_,
                                        "%d", sa);
+}
+
+
+// Print the integer value of the rd field, (when it is not used as reg).
+void Decoder::PrintSd(Instruction* instr) {
+  int sd = instr->RdField();
+  out_buffer_pos_ += v8i::OS::SNPrintF(out_buffer_ + out_buffer_pos_,
+                                       "%d", sd);
+}
+
+
+// Print the integer value of the cc field for the bc1t/f instructions.
+void Decoder::PrintBc(Instruction* instr) {
+  int cc = instr->FBccField();
+  out_buffer_pos_ += v8i::OS::SNPrintF(out_buffer_ + out_buffer_pos_,
+                                       "%d", cc);
+}
+
+
+// Print the integer value of the cc field for the FP compare instructions.
+void Decoder::PrintCc(Instruction* instr) {
+  int cc = instr->FCccField();
+  out_buffer_pos_ += v8i::OS::SNPrintF(out_buffer_ + out_buffer_pos_,
+                                       "cc(%d)", cc);
 }
 
 
@@ -253,7 +280,8 @@ void Decoder::PrintCode(Instruction* instr) {
     case BREAK: {
       int32_t code = instr->Bits(25, 6);
       out_buffer_pos_ +=
-          v8i::OS::SNPrintF(out_buffer_ + out_buffer_pos_, "0x%05x", code);
+          v8i::OS::SNPrintF(out_buffer_ + out_buffer_pos_, "0x%05x (%d)",
+              code, code);
       break;
                 }
     case TGE:
@@ -300,21 +328,21 @@ int Decoder::FormatRegister(Instruction* instr, const char* format) {
 }
 
 
-// Handle all Cregister based formatting in this function to reduce the
+// Handle all FPUregister based formatting in this function to reduce the
 // complexity of FormatOption.
-int Decoder::FormatCRegister(Instruction* instr, const char* format) {
+int Decoder::FormatFPURegister(Instruction* instr, const char* format) {
   ASSERT(format[0] == 'f');
   if (format[1] == 's') {  // 'fs: fs register
-    int reg = instr->RsField();
-    PrintCRegister(reg);
+    int reg = instr->FsField();
+    PrintFPURegister(reg);
     return 2;
   } else if (format[1] == 't') {  // 'ft: ft register
-    int reg = instr->RtField();
-    PrintCRegister(reg);
+    int reg = instr->FtField();
+    PrintFPURegister(reg);
     return 2;
   } else if (format[1] == 'd') {  // 'fd: fd register
-    int reg = instr->RdField();
-    PrintCRegister(reg);
+    int reg = instr->FdField();
+    PrintFPURegister(reg);
     return 2;
   }
   UNREACHABLE();
@@ -357,12 +385,31 @@ int Decoder::FormatOption(Instruction* instr, const char* format) {
     case 'r': {   // 'r: registers
       return FormatRegister(instr, format);
     }
-    case 'f': {   // 'f: Cregisters
-      return FormatCRegister(instr, format);
+    case 'f': {   // 'f: FPUregisters
+      return FormatFPURegister(instr, format);
     }
     case 's': {   // 'sa
-      ASSERT(STRING_STARTS_WITH(format, "sa"));
-      PrintSa(instr);
+      switch (format[1]) {
+        case 'a': {
+          ASSERT(STRING_STARTS_WITH(format, "sa"));
+          PrintSa(instr);
+          return 2;
+        }
+        case 'd': {
+          ASSERT(STRING_STARTS_WITH(format, "sd"));
+          PrintSd(instr);
+          return 2;
+        }
+      }
+    }
+    case 'b': {   // 'bc - Special for bc1 cc field.
+      ASSERT(STRING_STARTS_WITH(format, "bc"));
+      PrintBc(instr);
+      return 2;
+    }
+    case 'C': {   // 'Cc - Special for c.xx.d cc field.
+      ASSERT(STRING_STARTS_WITH(format, "Cc"));
+      PrintCc(instr);
       return 2;
     }
   };
@@ -399,41 +446,117 @@ void Decoder::DecodeTypeRegister(Instruction* instr) {
   switch (instr->OpcodeFieldRaw()) {
     case COP1:    // Coprocessor instructions
       switch (instr->RsFieldRaw()) {
-        case BC1:   // branch on coprocessor condition
+        case BC1:   // bc1 handled in DecodeTypeImmediate.
           UNREACHABLE();
           break;
         case MFC1:
-          Format(instr, "mfc1 'rt, 'fs");
+          Format(instr, "mfc1   'rt, 'fs");
           break;
         case MFHC1:
-          Format(instr, "mfhc1  rt, 'fs");
+          Format(instr, "mfhc1  'rt, 'fs");
           break;
         case MTC1:
-          Format(instr, "mtc1 'rt, 'fs");
+          Format(instr, "mtc1   'rt, 'fs");
           break;
         case MTHC1:
-          Format(instr, "mthc1  rt, 'fs");
+          Format(instr, "mthc1  'rt, 'fs");
+          break;
+        case D:
+          switch (instr->FunctionFieldRaw()) {
+            case ADD_D:
+              Format(instr, "add.d   'fd, 'fs, 'ft");
+              break;
+            case SUB_D:
+              Format(instr, "sub.d   'fd, 'fs, 'ft");
+              break;
+            case MUL_D:
+              Format(instr, "mul.d   'fd, 'fs, 'ft");
+              break;
+            case DIV_D:
+              Format(instr, "div.d   'fd, 'fs, 'ft");
+              break;
+            case ABS_D:
+              Format(instr, "abs.d   'fd, 'fs");
+              break;
+            case MOV_D:
+              Format(instr, "mov.d   'fd, 'fs");
+              break;
+            case NEG_D:
+              Format(instr, "neg.d   'fd, 'fs");
+              break;
+            case CVT_W_D:
+              Format(instr, "cvt.w.d 'fd, 'fs");
+              break;
+            case CVT_L_D:
+              Format(instr, "cvt.l.d 'fd, 'fs");
+              break;
+            case TRUNC_W_D:
+              Format(instr, "trunc.w.d 'fd, 'fs");
+              break;
+            case TRUNC_L_D:
+              Format(instr, "trunc.l.d 'fd, 'fs");
+              break;
+            case CVT_S_D:
+              Format(instr, "cvt.s.d 'fd, 'fs");
+              break;
+            case C_F_D:
+              Format(instr, "c.f.d   'fs, 'ft, 'Cc");
+              break;
+            case C_UN_D:
+              Format(instr, "c.un.d  'fs, 'ft, 'Cc");
+              break;
+            case C_EQ_D:
+              Format(instr, "c.eq.d  'fs, 'ft, 'Cc");
+              break;
+            case C_UEQ_D:
+              Format(instr, "c.ueq.d 'fs, 'ft, 'Cc");
+              break;
+            case C_OLT_D:
+              Format(instr, "c.olt.d 'fs, 'ft, 'Cc");
+              break;
+            case C_ULT_D:
+              Format(instr, "c.ult.d 'fs, 'ft, 'Cc");
+              break;
+            case C_OLE_D:
+              Format(instr, "c.ole.d 'fs, 'ft, 'Cc");
+              break;
+            case C_ULE_D:
+              Format(instr, "c.ule.d 'fs, 'ft, 'Cc");
+              break;
+            default:
+              Format(instr, "unknown.cop1.d");
+              break;
+          };
           break;
         case S:
-        case D:
           UNIMPLEMENTED_MIPS();
           break;
         case W:
           switch (instr->FunctionFieldRaw()) {
-            case CVT_S_W:
-              UNIMPLEMENTED_MIPS();
+            case CVT_S_W:   // Convert word to float (single).
+              Format(instr, "cvt.s.w 'fd, 'fs");
               break;
             case CVT_D_W:   // Convert word to double.
-              Format(instr, "cvt.d.w  'fd, 'fs");
+              Format(instr, "cvt.d.w 'fd, 'fs");
               break;
             default:
               UNREACHABLE();
           };
           break;
         case L:
+          switch (instr->FunctionFieldRaw()) {
+            case CVT_D_L:
+              Format(instr, "cvt.d.l 'fd, 'fs");
+              break;
+            case CVT_S_L:
+              Format(instr, "cvt.s.l 'fd, 'fs");
+              break;
+            default:
+              UNREACHABLE();
+          }
+          break;
         case PS:
           UNIMPLEMENTED_MIPS();
-          break;
           break;
         default:
           UNREACHABLE();
@@ -454,7 +577,11 @@ void Decoder::DecodeTypeRegister(Instruction* instr) {
             Format(instr, "sll  'rd, 'rt, 'sa");
           break;
         case SRL:
-          Format(instr, "srl  'rd, 'rt, 'sa");
+          if (instr->RsField() == 0) {
+            Format(instr, "srl  'rd, 'rt, 'sa");
+          } else {
+            Format(instr, "rotr  'rd, 'rt, 'sa");
+          }
           break;
         case SRA:
           Format(instr, "sra  'rd, 'rt, 'sa");
@@ -463,7 +590,11 @@ void Decoder::DecodeTypeRegister(Instruction* instr) {
           Format(instr, "sllv 'rd, 'rt, 'rs");
           break;
         case SRLV:
-          Format(instr, "srlv 'rd, 'rt, 'rs");
+          if (instr->SaField() == 0) {
+            Format(instr, "srlv 'rd, 'rt, 'rs");
+          } else {
+            Format(instr, "rotrv 'rd, 'rt, 'rs");
+          }
           break;
         case SRAV:
           Format(instr, "srav 'rd, 'rt, 'rs");
@@ -543,6 +674,12 @@ void Decoder::DecodeTypeRegister(Instruction* instr) {
         case TNE:
           Format(instr, "tne  'rs, 'rt, code: 'code");
           break;
+        case MOVZ:
+          Format(instr, "movz 'rd, 'rs, 'rt");
+          break;
+        case MOVN:
+          Format(instr, "movn 'rd, 'rs, 'rt");
+          break;
         default:
           UNREACHABLE();
       };
@@ -550,6 +687,22 @@ void Decoder::DecodeTypeRegister(Instruction* instr) {
     case SPECIAL2:
       switch (instr->FunctionFieldRaw()) {
         case MUL:
+          Format(instr, "mul  'rd, 'rs, 'rt");
+          break;
+        case CLZ:
+          Format(instr, "clz  'rd, 'rs");
+          break;
+        default:
+          UNREACHABLE();
+      };
+      break;
+    case SPECIAL3:
+      switch (instr->FunctionFieldRaw()) {
+        case INS:
+          Format(instr, "ins  'rt, 'rs, 'sd, 'sa");
+          break;
+        case EXT:
+          Format(instr, "ext  'rt, 'rs, 'sd, 'sa");
           break;
         default:
           UNREACHABLE();
@@ -564,6 +717,19 @@ void Decoder::DecodeTypeRegister(Instruction* instr) {
 void Decoder::DecodeTypeImmediate(Instruction* instr) {
   switch (instr->OpcodeFieldRaw()) {
     // ------------- REGIMM class.
+    case COP1:
+      switch (instr->RsFieldRaw()) {
+        case BC1:
+          if (instr->FBtrueField()) {
+            Format(instr, "bc1t    'bc, 'imm16u");
+          } else {
+            Format(instr, "bc1f    'bc, 'imm16u");
+          }
+          break;
+        default:
+          UNREACHABLE();
+      };
+      break;  // Case COP1.
     case REGIMM:
       switch (instr->RtFieldRaw()) {
         case BLTZ:
@@ -581,7 +747,7 @@ void Decoder::DecodeTypeImmediate(Instruction* instr) {
         default:
           UNREACHABLE();
       };
-    break;  // case REGIMM
+    break;  // Case REGIMM.
     // ------------- Branch instructions.
     case BEQ:
       Format(instr, "beq  'rs, 'rt, 'imm16u");
@@ -624,17 +790,38 @@ void Decoder::DecodeTypeImmediate(Instruction* instr) {
     case LB:
       Format(instr, "lb     'rt, 'imm16s('rs)");
       break;
+    case LH:
+      Format(instr, "lh     'rt, 'imm16s('rs)");
+      break;
+    case LWL:
+      Format(instr, "lwl    'rt, 'imm16s('rs)");
+      break;
     case LW:
       Format(instr, "lw     'rt, 'imm16s('rs)");
       break;
     case LBU:
       Format(instr, "lbu    'rt, 'imm16s('rs)");
       break;
+    case LHU:
+      Format(instr, "lhu    'rt, 'imm16s('rs)");
+      break;
+    case LWR:
+      Format(instr, "lwr    'rt, 'imm16s('rs)");
+      break;
     case SB:
       Format(instr, "sb     'rt, 'imm16s('rs)");
       break;
+    case SH:
+      Format(instr, "sh     'rt, 'imm16s('rs)");
+      break;
+    case SWL:
+      Format(instr, "swl    'rt, 'imm16s('rs)");
+      break;
     case SW:
       Format(instr, "sw     'rt, 'imm16s('rs)");
+      break;
+    case SWR:
+      Format(instr, "swr    'rt, 'imm16s('rs)");
       break;
     case LWC1:
       Format(instr, "lwc1   'ft, 'imm16s('rs)");
@@ -643,10 +830,10 @@ void Decoder::DecodeTypeImmediate(Instruction* instr) {
       Format(instr, "ldc1   'ft, 'imm16s('rs)");
       break;
     case SWC1:
-      Format(instr, "swc1   'rt, 'imm16s('fs)");
+      Format(instr, "swc1   'ft, 'imm16s('rs)");
       break;
     case SDC1:
-      Format(instr, "sdc1   'rt, 'imm16s('fs)");
+      Format(instr, "sdc1   'ft, 'imm16s('rs)");
       break;
     default:
       UNREACHABLE();
@@ -726,7 +913,7 @@ const char* NameConverter::NameOfCPURegister(int reg) const {
 
 
 const char* NameConverter::NameOfXMMRegister(int reg) const {
-  return assembler::mips::FPURegister::Name(reg);
+  return assembler::mips::FPURegisters::Name(reg);
 }
 
 
@@ -758,9 +945,8 @@ int Disassembler::InstructionDecode(v8::internal::Vector<char> buffer,
   return d.InstructionDecode(instruction);
 }
 
-
+// The MIPS assembler does not currently use constant pools.
 int Disassembler::ConstantPoolSizeAt(byte_* instruction) {
-  UNIMPLEMENTED_MIPS();
   return -1;
 }
 

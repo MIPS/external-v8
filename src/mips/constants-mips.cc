@@ -99,20 +99,20 @@ int Registers::Number(const char* name) {
 }
 
 
-const char* FPURegister::names_[kNumFPURegister] = {
+const char* FPURegisters::names_[kNumFPURegisters] = {
   "f0", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11",
   "f12", "f13", "f14", "f15", "f16", "f17", "f18", "f19", "f20", "f21",
   "f22", "f23", "f24", "f25", "f26", "f27", "f28", "f29", "f30", "f31"
 };
 
 // List of alias names which can be used when referring to MIPS registers.
-const FPURegister::RegisterAlias FPURegister::aliases_[] = {
+const FPURegisters::RegisterAlias FPURegisters::aliases_[] = {
   {kInvalidRegister, NULL}
 };
 
-const char* FPURegister::Name(int creg) {
+const char* FPURegisters::Name(int creg) {
   const char* result;
-  if ((0 <= creg) && (creg < kNumFPURegister)) {
+  if ((0 <= creg) && (creg < kNumFPURegisters)) {
     result = names_[creg];
   } else {
     result = "nocreg";
@@ -121,9 +121,9 @@ const char* FPURegister::Name(int creg) {
 }
 
 
-int FPURegister::Number(const char* name) {
+int FPURegisters::Number(const char* name) {
   // Look through the canonical names.
-  for (int i = 0; i < kNumSimuRegisters; i++) {
+  for (int i = 0; i < kNumFPURegisters; i++) {
     if (strcmp(names_[i], name) == 0) {
       return i;
     }
@@ -190,9 +190,14 @@ bool Instruction::IsLinkingInstruction() {
   int op = OpcodeFieldRaw();
   switch (op) {
     case JAL:
-    case BGEZAL:
-    case BLTZAL:
-      return true;
+    case REGIMM:
+      switch (RtFieldRaw()) {
+        case BGEZAL:
+        case BLTZAL:
+          return true;
+      default:
+        return false;
+      };
     case SPECIAL:
       switch (FunctionFieldRaw()) {
         case JALR:
@@ -261,6 +266,8 @@ Instruction::Type Instruction::InstructionType() const {
         case TLTU:
         case TEQ:
         case TNE:
+        case MOVZ:
+        case MOVN:
           return kRegisterType;
         default:
           UNREACHABLE();
@@ -269,13 +276,23 @@ Instruction::Type Instruction::InstructionType() const {
     case SPECIAL2:
       switch (FunctionFieldRaw()) {
         case MUL:
+        case CLZ:
+          return kRegisterType;
+        default:
+          UNREACHABLE();
+      };
+      break;
+    case SPECIAL3:
+      switch (FunctionFieldRaw()) {
+        case INS:
+        case EXT:
           return kRegisterType;
         default:
           UNREACHABLE();
       };
       break;
     case COP1:    // Coprocessor instructions
-      switch (FunctionFieldRaw()) {
+      switch (RsFieldRawNoAssert()) {
         case BC1:   // branch on coprocessor condition
           return kImmediateType;
         default:
@@ -301,10 +318,17 @@ Instruction::Type Instruction::InstructionType() const {
     case BLEZL:
     case BGTZL:
     case LB:
+    case LH:
+    case LWL:
     case LW:
     case LBU:
+    case LHU:
+    case LWR:
     case SB:
+    case SH:
+    case SWL:
     case SW:
+    case SWR:
     case LWC1:
     case LDC1:
     case SWC1:

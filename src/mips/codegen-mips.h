@@ -42,7 +42,77 @@ enum InitState { CONST_INIT, NOT_CONST_INIT };
 enum TypeofState { INSIDE_TYPEOF, NOT_INSIDE_TYPEOF };
 
 
-// -------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// Reference support
+
+// A reference is a C++ stack-allocated object that keeps an ECMA
+// reference on the execution stack while in scope. For variables
+// the reference is empty, indicating that it isn't necessary to
+// store state on the stack for keeping track of references to those.
+// For properties, we keep either one (named) or two (indexed) values
+// on the execution stack to represent the reference.
+class Reference BASE_EMBEDDED {
+ public:
+  // The values of the types is important, see size().
+  enum Type { UNLOADED = -2, ILLEGAL = -1, SLOT = 0, NAMED = 1, KEYED = 2 };
+  Reference(CodeGenerator* cgen,
+            Expression* expression,
+            bool persist_after_get = false);
+  ~Reference();
+
+  Expression* expression() const { return expression_; }
+  Type type() const { return type_; }
+  void set_type(Type value) {
+    ASSERT_EQ(ILLEGAL, type_);
+    type_ = value;
+  }
+
+  void set_unloaded() {
+    ASSERT_NE(ILLEGAL, type_);
+    ASSERT_NE(UNLOADED, type_);
+    type_ = UNLOADED;
+  }
+  // The size the reference takes up on the stack.
+  int size() const {
+    return (type_ < SLOT) ? 0 : type_;
+  }
+
+  bool is_illegal() const { return type_ == ILLEGAL; }
+  bool is_slot() const { return type_ == SLOT; }
+  bool is_property() const { return type_ == NAMED || type_ == KEYED; }
+  bool is_unloaded() const { return type_ == UNLOADED; }
+
+  // Return the name. Only valid for named property references.
+  Handle<String> GetName();
+
+  // Generate code to push the value of the reference on top of the
+  // expression stack.  The reference is expected to be already on top of
+  // the expression stack, and it is consumed by the call unless the
+  // reference is for a compound assignment.
+  // If the reference is not consumed, it is left in place under its value.
+  void GetValue();
+
+  // Generate code to pop a reference, push the value of the reference,
+  // and then spill the stack frame.
+  inline void GetValueAndSpill();
+
+  // Generate code to store the value on top of the expression stack in the
+  // reference.  The reference is expected to be immediately below the value
+  // on the expression stack.  The  value is stored in the location specified
+  // by the reference, and is left on top of the stack, after the reference
+  // is popped from beneath it (unloaded).
+  void SetValue(InitState init_state);
+
+ private:
+  CodeGenerator* cgen_;
+  Expression* expression_;
+  Type type_;
+  // Keep the reference on the stack after get, so it can be used by set later.
+  bool persist_after_get_;
+};
+
+
+// -----------------------------------------------------------------------------
 // Code generation state
 
 // The state is passed down the AST by the code generator (and back up, in
@@ -89,7 +159,7 @@ class CodeGenState BASE_EMBEDDED {
 
 
 
-// -------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // CodeGenerator
 
 class CodeGenerator: public AstVisitor {
@@ -150,18 +220,17 @@ class CodeGenerator: public AstVisitor {
 
   static const int kUnknownIntValue = -1;
 
-  // Number of instructions used for the JS return sequence. The constant is
-  // used by the debugger to patch the JS return sequence.
-  static const int kJSReturnSequenceLength = 6;
+  // If the name is an inline runtime function call return the number of
+  // expected arguments. Otherwise return -1.
+  static int InlineRuntimeCallArgumentsCount(Handle<String> name);
 
  private:
   // Construction/Destruction.
   explicit CodeGenerator(MacroAssembler* masm);
-  virtual ~CodeGenerator() { delete masm_; }
 
   // Accessors.
   inline bool is_eval();
-  Scope* scope() const { return scope_; }
+  inline Scope* scope();
 
   // Generating deferred code.
   void ProcessDeferred();
@@ -183,12 +252,110 @@ class CodeGenerator: public AstVisitor {
   AST_NODE_LIST(DEF_VISIT)
 #undef DEF_VISIT
 
+  // Visit a statement and then spill the virtual frame if control flow can
+  // reach the end of the statement (ie, it does not exit via break,
+  // continue, return, or throw).  This function is used temporarily while
+  // the code generator is being transformed.
+  inline void VisitAndSpill(Statement* statement);
+
+  // Visit a list of statements and then spill the virtual frame if control
+  // flow can reach the end of the list.
+  inline void VisitStatementsAndSpill(ZoneList<Statement*>* statements);
+
   // Main code generation function
-  void Generate(CompilationInfo* info, Mode mode);
+  void Generate(CompilationInfo* info);
+
+  // The following are used by class Reference.
+  void LoadReference(Reference* ref);
+  void UnloadReference(Reference* ref);
+
+  MemOperand ContextOperand(Register context, int index) const {
+    return MemOperand(context, Context::SlotOffset(index));
+  }
+
+  MemOperand SlotOperand(Slot* slot, Register tmp);
+
+  MemOperand ContextSlotOperandCheckExtensions(Slot* slot,
+                                               Register tmp,
+                                               Register tmp2,
+                                               JumpTarget* slow);
+
+  // Expressions
+  MemOperand GlobalObject() const  {
+    return ContextOperand(cp, Context::GLOBAL_INDEX);
+  }
+
+  void LoadCondition(Expression* x,
+                     JumpTarget* true_target,
+                     JumpTarget* false_target,
+                     bool force_cc);
+  void Load(Expression* x);
+  void LoadGlobal();
+  void LoadGlobalReceiver(Register scratch);
+
+  // Generate code to push the value of an expression on top of the frame
+  // and then spill the frame fully to memory.  This function is used
+  // temporarily while the code generator is being transformed.
+  inline void LoadAndSpill(Expression* expression);
+
+  // Call LoadCondition and then spill the virtual frame unless control flow
+  // cannot reach the end of the expression (ie, by emitting only
+  // unconditional jumps to the control targets).
+  inline void LoadConditionAndSpill(Expression* expression,
+                                    JumpTarget* true_target,
+                                    JumpTarget* false_target,
+                                    bool force_control);
+
+  // Special code for typeof expressions: Unfortunately, we must
+  // be careful when loading the expression in 'typeof'
+  // expressions. We are not allowed to throw reference errors for
+  // non-existing properties of the global object, so we must make it
+  // look like an explicit property access, instead of an access
+  // through the context chain.
+  void LoadTypeofExpression(Expression* x);
+
+  // Read a value from a slot and leave it on top of the expression stack.
+  void LoadFromSlot(Slot* slot, TypeofState typeof_state);
+  void LoadFromGlobalSlotCheckExtensions(Slot* slot,
+                                         TypeofState typeof_state,
+                                         Register tmp,
+                                         Register tmp2,
+                                         JumpTarget* slow);
+
+  // Store the value on top of the stack to a slot.
+  void StoreToSlot(Slot* slot, InitState init_state);
+  // Load a keyed property, leaving it in v0. The receiver and key are
+  // passed on the stack, and remain there.
+  void EmitKeyedLoad(bool is_global);
+
+  void ToBoolean(JumpTarget* true_target, JumpTarget* false_target);
+
+  void GenericBinaryOperation(Token::Value op,
+                              OverwriteMode overwrite_mode,
+                              int known_rhs = kUnknownIntValue);
+
+  void SmiOperation(Token::Value op,
+                    Handle<Object> value,
+                    bool reversed,
+                    OverwriteMode mode);
+
+  void Comparison(Condition cc,
+                  Expression* left,
+                  Expression* right,
+                  bool strict = false);
+
+  void CallWithArguments(ZoneList<Expression*>* arguments,
+                         CallFunctionFlags flags,
+                         int position);
+
+  // Control flow
+  void Branch(bool if_true, JumpTarget* target);
+  void CheckStack();
 
   struct InlineRuntimeLUT {
     void (CodeGenerator::*method)(ZoneList<Expression*>*);
     const char* name;
+    int nargs;
   };
 
   static InlineRuntimeLUT* FindInlineRuntimeLUT(Handle<String> name);
@@ -206,6 +373,9 @@ class CodeGenerator: public AstVisitor {
   // name/value pairs.
   void DeclareGlobals(Handle<FixedArray> pairs);
 
+  // Instantiate the function based on the shared function info.
+  void InstantiateFunction(Handle<SharedFunctionInfo> function_info);
+
   // Support for type checks.
   void GenerateIsSmi(ZoneList<Expression*>* args);
   void GenerateIsNonNegativeSmi(ZoneList<Expression*>* args);
@@ -217,7 +387,7 @@ class CodeGenerator: public AstVisitor {
 
   // Support for arguments.length and arguments[?].
   void GenerateArgumentsLength(ZoneList<Expression*>* args);
-  void GenerateArgumentsAccess(ZoneList<Expression*>* args);
+  void GenerateArguments(ZoneList<Expression*>* args);
 
   // Support for accessing the class and value fields of an object.
   void GenerateClassOf(ZoneList<Expression*>* args);
@@ -226,6 +396,9 @@ class CodeGenerator: public AstVisitor {
 
   // Fast support for charCodeAt(n).
   void GenerateFastCharCodeAt(ZoneList<Expression*>* args);
+
+  // Fast support for string.charAt(n) and string[n].
+  void GenerateCharFromCode(ZoneList<Expression*>* args);
 
   // Fast support for object equality testing.
   void GenerateObjectEquals(ZoneList<Expression*>* args);
@@ -244,10 +417,11 @@ class CodeGenerator: public AstVisitor {
   void GenerateRegExpExec(ZoneList<Expression*>* args);
   void GenerateNumberToString(ZoneList<Expression*>* args);
 
-
-  // Fast support for Math.sin and Math.cos.
-  inline void GenerateMathSin(ZoneList<Expression*>* args);
-  inline void GenerateMathCos(ZoneList<Expression*>* args);
+  // Fast call to math functions.
+  void GenerateMathPow(ZoneList<Expression*>* args);
+  void GenerateMathSin(ZoneList<Expression*>* args);
+  void GenerateMathCos(ZoneList<Expression*>* args);
+  void GenerateMathSqrt(ZoneList<Expression*>* args);
 
   // Simple condition analysis.
   enum ConditionAnalysis {
@@ -282,7 +456,6 @@ class CodeGenerator: public AstVisitor {
   CompilationInfo* info_;
 
   // Code generation state
-  Scope* scope_;
   VirtualFrame* frame_;
   RegisterAllocator* allocator_;
   Condition cc_reg_;
@@ -302,9 +475,282 @@ class CodeGenerator: public AstVisitor {
   friend class JumpTarget;
   friend class Reference;
   friend class FastCodeGenerator;
+  friend class FullCodeGenerator;
   friend class FullCodeGenSyntaxChecker;
 
   DISALLOW_COPY_AND_ASSIGN(CodeGenerator);
+};
+
+
+class GenericBinaryOpStub : public CodeStub {
+ public:
+  GenericBinaryOpStub(Token::Value op,
+                      OverwriteMode mode,
+                      int constant_rhs = CodeGenerator::kUnknownIntValue)
+      : op_(op),
+        mode_(mode),
+        constant_rhs_(constant_rhs),
+        specialized_on_rhs_(RhsIsOneWeWantToOptimizeFor(op, constant_rhs)),
+        name_(NULL) { }
+
+ private:
+  Token::Value op_;
+  OverwriteMode mode_;
+  int constant_rhs_;
+  bool specialized_on_rhs_;
+  char* name_;
+
+  static const int kMaxKnownRhs = 0x40000000;
+
+  // Minor key encoding in 16 bits.
+  class ModeBits: public BitField<OverwriteMode, 0, 2> {};
+  class OpBits: public BitField<Token::Value, 2, 6> {};
+  class KnownIntBits: public BitField<int, 8, 8> {};
+
+  Major MajorKey() { return GenericBinaryOp; }
+  int MinorKey() {
+    // Encode the parameters in a unique 16 bit value.
+    return OpBits::encode(op_)
+           | ModeBits::encode(mode_)
+           | KnownIntBits::encode(MinorKeyForKnownInt());
+  }
+
+  void Generate(MacroAssembler* masm);
+  void HandleNonSmiBitwiseOp(MacroAssembler* masm);
+
+  static bool RhsIsOneWeWantToOptimizeFor(Token::Value op, int constant_rhs) {
+    if (constant_rhs == CodeGenerator::kUnknownIntValue) return false;
+    if (op == Token::DIV) return constant_rhs >= 2 && constant_rhs <= 3;
+    if (op == Token::MOD) {
+      if (constant_rhs <= 1) return false;
+      if (constant_rhs <= 10) return true;
+      if (constant_rhs <= kMaxKnownRhs && IsPowerOf2(constant_rhs)) return true;
+      return false;
+    }
+    return false;
+  }
+
+  int MinorKeyForKnownInt() {
+    if (!specialized_on_rhs_) return 0;
+    if (constant_rhs_ <= 10) return constant_rhs_ + 1;
+    ASSERT(IsPowerOf2(constant_rhs_));
+    int key = 12;
+    int d = constant_rhs_;
+    while ((d & 1) == 0) {
+      key++;
+      d >>= 1;
+    }
+    return key;
+  }
+
+  const char* GetName();
+
+#ifdef DEBUG
+  void Print() {
+    if (!specialized_on_rhs_) {
+      PrintF("GenericBinaryOpStub (%s)\n", Token::String(op_));
+    } else {
+      PrintF("GenericBinaryOpStub (%s by %d)\n",
+             Token::String(op_),
+             constant_rhs_);
+    }
+  }
+#endif
+};
+
+
+class StringStubBase: public CodeStub {
+ public:
+  // Generate code for copying characters using a simple loop. This should only
+  // be used in places where the number of characters is small and the
+  // additional setup and checking in GenerateCopyCharactersLong adds too much
+  // overhead. Copying of overlapping regions is not supported.
+  // Dest register ends at the position after the last character written.
+  void GenerateCopyCharacters(MacroAssembler* masm,
+                              Register dest,
+                              Register src,
+                              Register count,
+                              Register scratch,
+                              bool ascii);
+
+  // Generate code for copying a large number of characters. This function
+  // is allowed to spend extra time setting up conditions to make copying
+  // faster. Copying of overlapping regions is not supported.
+  // Dest register ends at the position after the last character written.
+  void GenerateCopyCharactersLong(MacroAssembler* masm,
+                                  Register dest,
+                                  Register src,
+                                  Register count,
+                                  Register scratch1,
+                                  Register scratch2,
+                                  Register scratch3,
+                                  Register scratch4,
+                                  Register scratch5,
+                                  int flags);
+
+
+  // Probe the symbol table for a two character string. If the string is
+  // not found by probing a jump to the label not_found is performed. This jump
+  // does not guarantee that the string is not in the symbol table. If the
+  // string is found the code falls through with the string in register r0.
+  // Contents of both c1 and c2 registers are modified. At the exit c1 is
+  // guaranteed to contain halfword with low and high bytes equal to
+  // initial contents of c1 and c2 respectively.
+  void GenerateTwoCharacterSymbolTableProbe(MacroAssembler* masm,
+                                            Register c1,
+                                            Register c2,
+                                            Register scratch1,
+                                            Register scratch2,
+                                            Register scratch3,
+                                            Register scratch4,
+                                            Register scratch5,
+                                            Label* not_found);
+
+  // Generate string hash.
+  void GenerateHashInit(MacroAssembler* masm,
+                        Register hash,
+                        Register character);
+
+  void GenerateHashAddCharacter(MacroAssembler* masm,
+                                Register hash,
+                                Register character);
+
+  void GenerateHashGetHash(MacroAssembler* masm,
+                           Register hash);
+};
+
+
+// Flag that indicates how to generate code for the stub StringAddStub.
+enum StringAddFlags {
+  NO_STRING_ADD_FLAGS = 0,
+  NO_STRING_CHECK_IN_STUB = 1 << 0  // Omit string check in stub.
+};
+
+
+class StringAddStub: public StringStubBase {
+ public:
+  explicit StringAddStub(StringAddFlags flags) {
+    string_check_ = ((flags & NO_STRING_CHECK_IN_STUB) == 0);
+  }
+
+ private:
+  Major MajorKey() { return StringAdd; }
+  int MinorKey() { return string_check_ ? 0 : 1; }
+
+  void Generate(MacroAssembler* masm);
+
+  // Should the stub check whether arguments are strings?
+  bool string_check_;
+};
+
+
+class SubStringStub: public StringStubBase {
+ public:
+  SubStringStub() {}
+
+ private:
+  Major MajorKey() { return SubString; }
+  int MinorKey() { return 0; }
+
+  void Generate(MacroAssembler* masm);
+};
+
+
+class StringCompareStub: public CodeStub {
+ public:
+  StringCompareStub() { }
+
+  // Compare two flat ASCII strings and returns result in v0.
+  // Does not use the stack.
+  static void GenerateCompareFlatAsciiStrings(MacroAssembler* masm,
+                                              Register left,
+                                              Register right,
+                                              Register scratch1,
+                                              Register scratch2,
+                                              Register scratch3,
+                                              Register scratch4);
+
+ private:
+  Major MajorKey() { return StringCompare; }
+  int MinorKey() { return 0; }
+
+  void Generate(MacroAssembler* masm);
+};
+
+
+// This stub can convert a signed int32 to a heap number (double).  It does
+// not work for int32s that are in Smi range!  No GC occurs during this stub
+// so you don't have to set up the frame.
+class WriteInt32ToHeapNumberStub : public CodeStub {
+ public:
+  WriteInt32ToHeapNumberStub(Register the_int,
+                             Register the_heap_number,
+                             Register scratch,
+                             Register scratch2)
+      : the_int_(the_int),
+        the_heap_number_(the_heap_number),
+        scratch_(scratch),
+        sign_(scratch2) { }
+
+ private:
+  Register the_int_;
+  Register the_heap_number_;
+  Register scratch_;
+  Register sign_;
+
+  // Minor key encoding in 16 bits.
+  class IntRegisterBits: public BitField<int, 0, 4> {};
+  class HeapNumberRegisterBits: public BitField<int, 4, 4> {};
+  class ScratchRegisterBits: public BitField<int, 8, 4> {};
+
+  Major MajorKey() { return WriteInt32ToHeapNumber; }
+  int MinorKey() {
+    // Encode the parameters in a unique 16 bit value.
+    return IntRegisterBits::encode(the_int_.code())
+           | HeapNumberRegisterBits::encode(the_heap_number_.code())
+           | ScratchRegisterBits::encode(scratch_.code());
+  }
+
+  void Generate(MacroAssembler* masm);
+
+  const char* GetName() { return "WriteInt32ToHeapNumberStub"; }
+
+#ifdef DEBUG
+  void Print() { PrintF("WriteInt32ToHeapNumberStub\n"); }
+#endif
+};
+
+
+class NumberToStringStub: public CodeStub {
+ public:
+  NumberToStringStub() { }
+
+  // Generate code to do a lookup in the number string cache. If the number in
+  // the register object is found in the cache the generated code falls through
+  // with the result in the result register. The object and the result register
+  // can be the same. If the number is not found in the cache the code jumps to
+  // the label not_found with only the content of register object unchanged.
+  static void GenerateLookupNumberStringCache(MacroAssembler* masm,
+                                              Register object,
+                                              Register result,
+                                              Register scratch1,
+                                              Register scratch2,
+                                              bool object_is_smi,
+                                              Label* not_found);
+
+ private:
+  Major MajorKey() { return NumberToString; }
+  int MinorKey() { return 0; }
+
+  void Generate(MacroAssembler* masm);
+
+  const char* GetName() { return "NumberToStringStub"; }
+
+#ifdef DEBUG
+  void Print() {
+    PrintF("NumberToStringStub\n");
+  }
+#endif
 };
 
 

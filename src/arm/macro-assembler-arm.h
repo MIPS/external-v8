@@ -239,6 +239,12 @@ class MacroAssembler: public Assembler {
                                Register scratch2,
                                Label* gc_required);
 
+  // Allocates a heap number or jumps to the need_gc label if the young space
+  // is full and a scavenge is needed.
+  void AllocateHeapNumber(Register result,
+                          Register scratch1,
+                          Register scratch2,
+                          Label* gc_required);
 
   // ---------------------------------------------------------------------------
   // Support functions.
@@ -319,6 +325,12 @@ class MacroAssembler: public Assembler {
                                          Register outHighReg,
                                          Register outLowReg);
 
+  // Count leading zeros in a 32 bit word.  On ARM5 and later it uses the clz
+  // instruction.  On pre-ARM5 hardware this routine gives the wrong answer
+  // for 0 (31 instead of 32).
+  void CountLeadingZeros(Register source,
+                         Register scratch,
+                         Register zeros);
 
   // ---------------------------------------------------------------------------
   // Runtime calls
@@ -333,7 +345,6 @@ class MacroAssembler: public Assembler {
   void StubReturn(int argc);
 
   // Call a runtime routine.
-  // Eventually this should be used for all C calls.
   void CallRuntime(Runtime::Function* f, int num_arguments);
 
   // Convenience function: Same as above, but takes the fid instead.
@@ -344,14 +355,19 @@ class MacroAssembler: public Assembler {
                              int num_arguments);
 
   // Tail call of a runtime routine (jump).
-  // Like JumpToRuntime, but also takes care of passing the number
+  // Like JumpToExternalReference, but also takes care of passing the number
   // of parameters.
-  void TailCallRuntime(const ExternalReference& ext,
+  void TailCallExternalReference(const ExternalReference& ext,
+                                 int num_arguments,
+                                 int result_size);
+
+  // Convenience function: tail call a runtime routine (jump).
+  void TailCallRuntime(Runtime::FunctionId fid,
                        int num_arguments,
                        int result_size);
 
   // Jump to a runtime routine.
-  void JumpToRuntime(const ExternalReference& builtin);
+  void JumpToExternalReference(const ExternalReference& builtin);
 
   // Invoke specified builtin JavaScript function. Adds an entry to
   // the unresolved list if the name does not resolve.
@@ -411,7 +427,7 @@ class MacroAssembler: public Assembler {
                                                   Register object2,
                                                   Register scratch1,
                                                   Register scratch2,
-                                                  Label *failure);
+                                                  Label* failure);
 
   // Checks if both objects are sequential ASCII strings and jumps to label
   // if either is not.
@@ -420,6 +436,22 @@ class MacroAssembler: public Assembler {
                                            Register scratch1,
                                            Register scratch2,
                                            Label* not_flat_ascii_strings);
+
+  // Checks if both instance types are sequential ASCII strings and jumps to
+  // label if either is not.
+  void JumpIfBothInstanceTypesAreNotSequentialAscii(
+      Register first_object_instance_type,
+      Register second_object_instance_type,
+      Register scratch1,
+      Register scratch2,
+      Label* failure);
+
+  // Check if instance type is sequential ASCII string and jump to label if
+  // it is not.
+  void JumpIfInstanceTypeIsNotSequentialAscii(Register type,
+                                              Register scratch,
+                                              Label* failure);
+
 
  private:
   void Jump(intptr_t target, RelocInfo::Mode rmode, Condition cond = al);

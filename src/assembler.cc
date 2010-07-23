@@ -53,6 +53,8 @@
 #include "x64/regexp-macro-assembler-x64.h"
 #elif V8_TARGET_ARCH_ARM
 #include "arm/regexp-macro-assembler-arm.h"
+#elif V8_TARGET_ARCH_MIPS
+#include "mips/regexp-macro-assembler-mips.h"
 #else  // Unknown architecture.
 #error "Unknown architecture."
 #endif  // Target architecture.
@@ -664,6 +666,16 @@ ExternalReference ExternalReference::scheduled_exception_address() {
 }
 
 
+ExternalReference ExternalReference::compile_array_pop_call() {
+  return ExternalReference(FUNCTION_ADDR(CompileArrayPopCall));
+}
+
+
+ExternalReference ExternalReference::compile_array_push_call() {
+  return ExternalReference(FUNCTION_ADDR(CompileArrayPushCall));
+}
+
+
 #ifdef V8_NATIVE_REGEXP
 
 ExternalReference ExternalReference::re_check_stack_guard_state() {
@@ -674,6 +686,8 @@ ExternalReference ExternalReference::re_check_stack_guard_state() {
   function = FUNCTION_ADDR(RegExpMacroAssemblerIA32::CheckStackGuardState);
 #elif V8_TARGET_ARCH_ARM
   function = FUNCTION_ADDR(RegExpMacroAssemblerARM::CheckStackGuardState);
+#elif V8_TARGET_ARCH_MIPS
+  function = FUNCTION_ADDR(RegExpMacroAssemblerMIPS::CheckStackGuardState);
 #else
   UNREACHABLE();
 #endif

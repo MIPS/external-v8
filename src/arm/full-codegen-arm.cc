@@ -32,6 +32,7 @@
 #include "debug.h"
 #include "full-codegen.h"
 #include "parser.h"
+#include "scopes.h"
 
 namespace v8 {
 namespace internal {
@@ -56,6 +57,7 @@ void FullCodeGenerator::Generate(CompilationInfo* info, Mode mode) {
   ASSERT(info_ == NULL);
   info_ = info;
   SetFunctionPosition(function());
+  Comment cmnt(masm_, "[ function compiled by full code generator");
 
   if (mode == PRIMARY) {
     int locals_count = scope()->num_stack_slots();
@@ -665,14 +667,12 @@ void FullCodeGenerator::VisitFunctionLiteral(FunctionLiteral* expr) {
   Comment cmnt(masm_, "[ FunctionLiteral");
 
   // Build the function boilerplate and instantiate it.
-  Handle<JSFunction> boilerplate =
-      Compiler::BuildBoilerplate(expr, script(), this);
+  Handle<SharedFunctionInfo> function_info =
+      Compiler::BuildFunctionInfo(expr, script(), this);
   if (HasStackOverflow()) return;
 
-  ASSERT(boilerplate->IsBoilerplate());
-
   // Create a new closure.
-  __ mov(r0, Operand(boilerplate));
+  __ mov(r0, Operand(function_info));
   __ stm(db_w, sp, cp.bit() | r0.bit());
   __ CallRuntime(Runtime::kNewClosure, 2);
   Apply(context_, r0);
@@ -781,15 +781,16 @@ void FullCodeGenerator::VisitRegExpLiteral(RegExpLiteral* expr) {
 
 void FullCodeGenerator::VisitObjectLiteral(ObjectLiteral* expr) {
   Comment cmnt(masm_, "[ ObjectLiteral");
-  __ ldr(r2, MemOperand(fp,  JavaScriptFrameConstants::kFunctionOffset));
-  __ ldr(r2, FieldMemOperand(r2, JSFunction::kLiteralsOffset));
-  __ mov(r1, Operand(Smi::FromInt(expr->literal_index())));
-  __ mov(r0, Operand(expr->constant_properties()));
-  __ stm(db_w, sp, r2.bit() | r1.bit() | r0.bit());
+  __ ldr(r3, MemOperand(fp,  JavaScriptFrameConstants::kFunctionOffset));
+  __ ldr(r3, FieldMemOperand(r3, JSFunction::kLiteralsOffset));
+  __ mov(r2, Operand(Smi::FromInt(expr->literal_index())));
+  __ mov(r1, Operand(expr->constant_properties()));
+  __ mov(r0, Operand(Smi::FromInt(expr->fast_elements() ? 1 : 0)));
+  __ stm(db_w, sp, r3.bit() | r2.bit() | r1.bit() | r0.bit());
   if (expr->depth() > 1) {
-    __ CallRuntime(Runtime::kCreateObjectLiteral, 3);
+    __ CallRuntime(Runtime::kCreateObjectLiteral, 4);
   } else {
-    __ CallRuntime(Runtime::kCreateObjectLiteralShallow, 3);
+    __ CallRuntime(Runtime::kCreateObjectLiteralShallow, 4);
   }
 
   // If result_saved is true the result is on top of the stack.  If
@@ -1592,9 +1593,10 @@ void FullCodeGenerator::VisitCountOperation(CountOperation* expr) {
 
   // Inline smi case if we are in a loop.
   Label stub_call, done;
-  int count_value = expr->op() == Token::INC ? 1 : -1;
   if (loop_depth() > 0) {
-    __ add(r0, r0, Operand(Smi::FromInt(count_value)), SetCC);
+    __ add(r0, r0, Operand(expr->op() == Token::INC
+                           ? Smi::FromInt(1)
+                           : Smi::FromInt(-1)));
     __ b(vs, &stub_call);
     // We could eliminate this smi check if we split the code at
     // the first smi check before calling ToNumber.
@@ -1602,9 +1604,11 @@ void FullCodeGenerator::VisitCountOperation(CountOperation* expr) {
     __ b(eq, &done);
     __ bind(&stub_call);
     // Call stub. Undo operation first.
-    __ sub(r0, r0, Operand(Smi::FromInt(count_value)));
+    __ sub(r0, r0, Operand(r1));
   }
-  __ mov(r1, Operand(Smi::FromInt(count_value)));
+  __ mov(r1, Operand(expr->op() == Token::INC
+                     ? Smi::FromInt(1)
+                     : Smi::FromInt(-1)));
   GenericBinaryOpStub stub(Token::ADD, NO_OVERWRITE);
   __ CallStub(&stub);
   __ bind(&done);

@@ -129,7 +129,7 @@ Register ToRegister(int num);
 
 // Coprocessor register.
 struct FPURegister {
-  bool is_valid() const  { return 0 <= code_ && code_ < kNumFPURegister ; }
+  bool is_valid() const  { return 0 <= code_ && code_ < kNumFPURegisters ; }
   bool is(FPURegister creg) const  { return code_ == creg.code_; }
   int code() const  {
     ASSERT(is_valid());
@@ -139,7 +139,10 @@ struct FPURegister {
     ASSERT(is_valid());
     return 1 << code_;
   }
-
+  void setcode(int f) {
+    code_ = f;
+    ASSERT(is_valid());
+  }
   // Unfortunately we can't make this private in a struct.
   int code_;
 };
@@ -267,6 +270,52 @@ class MemOperand : public Operand {
 };
 
 
+// CpuFeatures keeps track of which features are supported by the target CPU.
+// Supported features must be enabled by a Scope before use.
+class CpuFeatures : public AllStatic {
+ public:
+  // Detect features of the target CPU. Set safe defaults if the serializer
+  // is enabled (snapshots must be portable).
+  static void Probe();
+
+  // Check whether a feature is supported by the target CPU.
+  static bool IsSupported(CpuFeature f) {
+    if (f == FPU && !FLAG_enable_fpu) return false;
+    return (supported_ & (1u << f)) != 0;
+  }
+
+  // Check whether a feature is currently enabled.
+  static bool IsEnabled(CpuFeature f) {
+    return (enabled_ & (1u << f)) != 0;
+  }
+
+  // Enable a specified feature within a scope.
+  class Scope BASE_EMBEDDED {
+#ifdef DEBUG
+   public:
+    explicit Scope(CpuFeature f) {
+      ASSERT(CpuFeatures::IsSupported(f));
+      ASSERT(!Serializer::enabled() ||
+             (found_by_runtime_probing_ & (1u << f)) == 0);
+      old_enabled_ = CpuFeatures::enabled_;
+      CpuFeatures::enabled_ |= 1u << f;
+    }
+    ~Scope() { CpuFeatures::enabled_ = old_enabled_; }
+   private:
+    unsigned old_enabled_;
+#else
+   public:
+    explicit Scope(CpuFeature f) {}
+#endif
+  };
+
+ private:
+  static unsigned supported_;
+  static unsigned enabled_;
+  static unsigned found_by_runtime_probing_;
+};
+
+
 class Assembler : public Malloced {
  public:
   // Create an assembler. Instructions and relocation information are emitted
@@ -355,6 +404,10 @@ class Assembler : public Malloced {
   // to jump to.
   static const int kPatchReturnSequenceAddressOffset = kInstrSize;
 
+  // Number of instructions used for the JS return sequence. The constant is
+  // used by the debugger to patch the JS return sequence.
+  static const int kJSReturnSequenceLength = 7;
+
 
   // ---------------------------------------------------------------------------
   // Code generation.
@@ -397,9 +450,7 @@ class Assembler : public Malloced {
   //-------Data-processing-instructions---------
 
   // Arithmetic.
-  void add(Register rd, Register rs, Register rt);
   void addu(Register rd, Register rs, Register rt);
-  void sub(Register rd, Register rs, Register rt);
   void subu(Register rd, Register rs, Register rt);
   void mult(Register rs, Register rt);
   void multu(Register rs, Register rt);
@@ -407,7 +458,6 @@ class Assembler : public Malloced {
   void divu(Register rs, Register rt);
   void mul(Register rd, Register rs, Register rt);
 
-  void addi(Register rd, Register rs, int32_t j);
   void addiu(Register rd, Register rs, int32_t j);
 
   // Logical.
@@ -428,15 +478,24 @@ class Assembler : public Malloced {
   void srlv(Register rd, Register rt, Register rs);
   void sra(Register rt, Register rd, uint16_t sa);
   void srav(Register rt, Register rd, Register rs);
+  void rotr(Register rd, Register rt, uint16_t sa);
+  void rotrv(Register rd, Register rt, Register rs);
 
 
   //------------Memory-instructions-------------
 
   void lb(Register rd, const MemOperand& rs);
   void lbu(Register rd, const MemOperand& rs);
+  void lh(Register rd, const MemOperand& rs);
+  void lhu(Register rd, const MemOperand& rs);
   void lw(Register rd, const MemOperand& rs);
+  void lwl(Register rd, const MemOperand& rs);
+  void lwr(Register rd, const MemOperand& rs);
   void sb(Register rd, const MemOperand& rs);
+  void sh(Register rd, const MemOperand& rs);
   void sw(Register rd, const MemOperand& rs);
+  void swl(Register rd, const MemOperand& rs);
+  void swr(Register rd, const MemOperand& rs);
 
 
   //-------------Misc-instructions--------------
@@ -460,6 +519,14 @@ class Assembler : public Malloced {
   void slti(Register rd, Register rs, int32_t j);
   void sltiu(Register rd, Register rs, int32_t j);
 
+  // Conditional move.
+  void movz(Register rd, Register rs, Register rt);
+  void movn(Register rd, Register rs, Register rt);
+
+  // Bit twiddling.
+  void clz(Register rd, Register rs);
+  void ins(Register rt, Register rs, uint16_t pos, uint16_t size);
+  void ext(Register rt, Register rs, uint16_t pos, uint16_t size);
 
   //--------Coprocessor-instructions----------------
 
@@ -470,19 +537,28 @@ class Assembler : public Malloced {
   void swc1(FPURegister fs, const MemOperand& dst);
   void sdc1(FPURegister fs, const MemOperand& dst);
 
-  // When paired with MTC1 to write a value to a 64-bit FPR, the MTC1 must be
-  // executed first, followed by the MTHC1.
-  void mtc1(FPURegister fs, Register rt);
-  void mthc1(FPURegister fs, Register rt);
-  void mfc1(FPURegister fs, Register rt);
-  void mfhc1(FPURegister fs, Register rt);
+  void mtc1(Register rt, FPURegister fs);
+  void mfc1(Register rt, FPURegister fs);
+
+  // Arithmetic.
+  void add_d(FPURegister fd, FPURegister fs, FPURegister ft);
+  void sub_d(FPURegister fd, FPURegister fs, FPURegister ft);
+  void mul_d(FPURegister fd, FPURegister fs, FPURegister ft);
+  void div_d(FPURegister fd, FPURegister fs, FPURegister ft);
+  void abs_d(FPURegister fd, FPURegister fs);
+  void mov_d(FPURegister fd, FPURegister fs);
+  void neg_d(FPURegister fd, FPURegister fs);
 
   // Conversion.
   void cvt_w_s(FPURegister fd, FPURegister fs);
   void cvt_w_d(FPURegister fd, FPURegister fs);
+  void trunc_w_s(FPURegister fd, FPURegister fs);
+  void trunc_w_d(FPURegister fd, FPURegister fs);
 
   void cvt_l_s(FPURegister fd, FPURegister fs);
   void cvt_l_d(FPURegister fd, FPURegister fs);
+  void trunc_l_s(FPURegister fd, FPURegister fs);
+  void trunc_l_d(FPURegister fd, FPURegister fs);
 
   void cvt_s_w(FPURegister fd, FPURegister fs);
   void cvt_s_l(FPURegister fd, FPURegister fs);
@@ -555,7 +631,7 @@ class Assembler : public Malloced {
   void target_at_put(int32_t pos, int32_t target_pos);
 
   // Say if we need to relocate with this mode.
-  bool MustUseAt(RelocInfo::Mode rmode);
+  bool MustUseReg(RelocInfo::Mode rmode);
 
   // Record reloc info for current pc_.
   void RecordRelocInfo(RelocInfo::Mode rmode, intptr_t data = 0);
@@ -615,6 +691,13 @@ class Assembler : public Malloced {
                         SecondaryField func = NULLSF);
 
   void GenInstrRegister(Opcode opcode,
+                        Register rs,
+                        Register rt,
+                        uint16_t msb,
+                        uint16_t lsb,
+                        SecondaryField func);
+
+  void GenInstrRegister(Opcode opcode,
                         SecondaryField fmt,
                         FPURegister ft,
                         FPURegister fs,
@@ -655,6 +738,7 @@ class Assembler : public Malloced {
 
   friend class RegExpMacroAssemblerMIPS;
   friend class RelocInfo;
+  friend class CodePatcher;
 };
 
 } }  // namespace v8::internal
