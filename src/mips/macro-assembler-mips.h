@@ -37,26 +37,37 @@ namespace internal {
 // Forward declaration.
 class JumpTarget;
 
+
 // Reserved Register Usage Summary.
 //
-// Registers t8, t9, and at are reserved for use by the MacroAssembler.
+// Registers t8, t9, and 'at' are reserved for use by the MacroAssembler.
+// The MacroAssembler may clobber these three, but won't touch other registers
+// except in special cases.
 //
-// The programmer should know that the MacroAssembler may clobber these two,
-// but won't touch other registers except in special cases.
+//     Per the MIPS ABI, register t9 must be used for indirect function call
+//     via 'jalr t9' or 'jr t9' instructions. This is relied upon by gcc when
+//     updating gp register for position-independent-code. Whenever generated
+//     code calls C code, it must be via t9 register.
+// 
+// Registers k0 and k1 are reserved by ABI for use of interrupt handlers,
+// and these registers can get clobbered at any time.
 //
-// Per the MIPS ABI, register t9 must be used for indirect function call
-// via 'jalr t9' or 'jr t9' instructions. This is relied upon by gcc when
-// trying to update gp register for position-independent-code. Whenever
-// MIPS generated code calls C code, it must be via t9 register.
+// All s-registers are callee saved by C code per the ABI.
+//
+// Registers s0, s1, s2 are used by the CEntryStub when calling to C code.
+// They may be used by generated code, but will be clobbered when calling
+// to runtime / external-reference. 
+//
+// Registers s4 through s8/fp are reserved, as described below, and should
+// NOT be used by generated code, other than for the specified purpose.
+// 
+// Register aliases.
+const Register condReg1 = s4;  // Condition evaluation (lhs).
+const Register condReg2 = s5;  // Condition evaluation (rhs).
+const Register roots = s6;     // Roots array pointer.
+const Register cp = s7;        // JavaScript context pointer.
+const Register fp = s8_fp;     // Frame pointer.
 
-// Registers aliases
-// cp is assumed to be a callee saved register.
-const Register roots = s6;  // Roots array pointer.
-const Register cp = s7;     // JavaScript context pointer
-const Register fp = s8_fp;  // Alias fp
-// Register used for condition evaluation.
-const Register condReg1 = s4;
-const Register condReg2 = s5;
 
 enum InvokeJSFlags {
   CALL_JS,

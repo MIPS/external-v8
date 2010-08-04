@@ -90,6 +90,8 @@ struct Register {
 
 extern const Register no_reg;
 
+// Please refer to 'Reserved Register Usage Summary' in macro-assembler-mips.h
+// to understand which of these registers are reserved for special purpose.
 extern const Register zero_reg;
 extern const Register at;
 extern const Register v0;
