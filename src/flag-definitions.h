@@ -201,7 +201,7 @@ DEFINE_bool(native_code_counters, false,
 
 // mark-compact.cc
 DEFINE_bool(always_compact, false, "Perform compaction on every full GC")
-DEFINE_bool(never_compact, true,
+DEFINE_bool(never_compact, false,
             "Never perform compaction on full GC - testing only")
 DEFINE_bool(cleanup_ics_at_gc, true,
             "Flush inline caches prior to mark compact collection.")
