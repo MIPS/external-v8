@@ -1661,6 +1661,14 @@ bool Debug::IsDebugGlobal(GlobalObject* global) {
 
 
 void Debug::ClearMirrorCache() {
+  // plind, workaround, we are in the debugger without a valid
+  // debug_context(), and this code explodes. This is a consequence
+  // of mips debugger implementation not being complete. This WAR
+  // must be reverted when debugger is fixed.
+  if(!IsLoaded()) {
+    return;
+  }
+
   HandleScope scope;
   ASSERT(Top::context() == *Debug::debug_context());
 
