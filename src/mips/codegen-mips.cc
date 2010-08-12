@@ -4996,14 +4996,14 @@ static void EmitTwoNonNanDoubleComparison(MacroAssembler* masm, Condition cc) {
     __ Branch(&return_result_not_equal, ne, v0, Operand(zero_reg));
 
     __ subu(v0, rhs_exponent, lhs_exponent);
+    __ Branch(&return_result_equal, eq, v0, Operand(zero_reg));
     // 0, -0 case
     __ sll(rhs_exponent, rhs_exponent, kSmiTagSize);
     __ sll(lhs_exponent, lhs_exponent, kSmiTagSize);
-    __ addu(t4, rhs_exponent, lhs_exponent);
-    __ addu(t4, t4, rhs_mantissa);
+    __ or_(t4, rhs_exponent, lhs_exponent);
+    __ or_(t4, t4, rhs_mantissa);
 
-    __ Branch(&return_result_equal, eq, t4, Operand(zero_reg));
-    __ Branch(&return_result_not_equal, ne, v0, Operand(zero_reg));
+    __ Branch(&return_result_not_equal, ne, t4, Operand(zero_reg));
 
     __ bind(&return_result_equal);
     __ li(v0, Operand(EQUAL));
