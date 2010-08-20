@@ -5015,8 +5015,16 @@ static void EmitTwoNonNanDoubleComparison(MacroAssembler* masm, Condition cc) {
   if (!CpuFeatures::IsSupported(FPU)) {
     __ Push(ra);
     __ PrepareCallCFunction(4, t4);  // Two doubles count as 4 arguments.
+#if(defined(__mips_hard_float) && __mips_hard_float != 0)
+    // We want to call run-time with wrong calling convention.
+    // Parameters for hard-float ABI must be in f12 and f14.
+    __ mtc1(a0, f12);
+    __ mtc1(a1, f13);
+    __ mtc1(a2, f14);
+    __ mtc1(a3, f15);
+#endif
     __ CallCFunction(ExternalReference::compare_doubles(), 4);
-    __ Pop(ra);
+    __ Pop(ra);  // Because this function returns int, result is in v0.
     __ Ret();
   } else {
     CpuFeatures::Scope scope(FPU);
@@ -5991,8 +5999,7 @@ static void HandleBinaryOpSlowCases(MacroAssembler* masm,
   // If we have floating point hardware, inline ADD, SUB, MUL, and DIV,
   // using registers f12 and f14 for the double values.
 
-  bool use_fp_registers = CpuFeatures::IsSupported(FPU) &&
-      Token::MOD != operation;
+  bool use_fp_registers = CpuFeatures::IsSupported(FPU);
 
   if (use_fp_registers) {
     CpuFeatures::Scope scope(FPU);
@@ -6193,6 +6200,33 @@ static void HandleBinaryOpSlowCases(MacroAssembler* masm,
       __ add_d(f0, f12, f14);
     } else if (Token::SUB == operation) {
       __ sub_d(f0, f12, f14);
+    } else if (Token::MOD == operation) {
+      // This is special case because only here we go to run-time 
+      // while using FPU registers. Current ABI must be taken into account.
+      __ Push(ra);
+      __ Push(t0);
+      __ PrepareCallCFunction(4, t1);  // Two doubles count as 4 arguments.
+#if(defined(__mips_soft_float) && __mips_soft_float != 0)
+      // We want to call run-time with wrong calling convention.
+      // Parameters for soft-float ABI must be in registers a0-a3.
+      __ mfc1(a0, f12);
+      __ mfc1(a1, f13);
+      __ mfc1(a2, f14);
+      __ mfc1(a3, f15);
+#endif
+      __ CallCFunction(ExternalReference::double_fp_operation(operation), 4);
+      __ Pop(t0);  // Address of heap number.
+      __ Pop(ra);
+#if(defined(__mips_soft_float) && __mips_soft_float != 0)
+      // Store answer in the overwritable heap number.
+      // Double returned in registers v0 and v1, not in f0 because of the 
+      // soft-float ABI.
+      __ sw(v0, FieldMemOperand(t0, HeapNumber::kValueOffset));
+      __ sw(v1, FieldMemOperand(t0, HeapNumber::kValueOffset + 4));
+      __ mov(v0, t0);  // Return object ptr to caller.
+      __ Ret();
+      return;
+#endif
     } else {
       UNREACHABLE();
     }
@@ -6215,14 +6249,33 @@ static void HandleBinaryOpSlowCases(MacroAssembler* masm,
 
   __ PrepareCallCFunction(4, t1);  // Two doubles count as 4 arguments.
   // Call C routine that may not cause GC or other trouble.
+#if(defined(__mips_hard_float) && __mips_hard_float != 0)
+  if(!use_fp_registers){
+    // We want to call run-time with wrong calling convention.
+    // Parameters for hard-float ABI must be in registers f12 and f14.
+    __ mtc1(a0, f12);
+    __ mtc1(a1, f13);
+    __ mtc1(a2, f14);
+    __ mtc1(a3, f15);
+  }
+#endif
   __ CallCFunction(ExternalReference::double_fp_operation(operation), 4);
-
+#if(defined(__mips_hard_float) && __mips_hard_float != 0)
+  if(!use_fp_registers){
+    // We want to call run-time with wrong calling convention.
+    // Return value for hard-float ABI is in f0/f1, we need it in v0/v1.
+    __ mfc1(v0, f0);
+    __ mfc1(v1, f1);
+  }
+#endif
   __ Pop(t0);  // Address of heap number.
   // Store answer in the overwritable heap number.
+
   // Double returned in registers v0 and v1.
   __ sw(v0, FieldMemOperand(t0, HeapNumber::kValueOffset));
   __ sw(v1, FieldMemOperand(t0, HeapNumber::kValueOffset + 4));
   __ mov(v0, t0);  // Return object ptr to caller.
+
   // And we are done.
   __ Pop(ra);
   __ Ret();
