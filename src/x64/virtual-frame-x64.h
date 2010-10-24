@@ -28,7 +28,7 @@
 #ifndef V8_X64_VIRTUAL_FRAME_X64_H_
 #define V8_X64_VIRTUAL_FRAME_X64_H_
 
-#include "number-info.h"
+#include "type-info.h"
 #include "register-allocator.h"
 #include "scopes.h"
 
@@ -83,7 +83,7 @@ class VirtualFrame : public ZoneObject {
 
   // Create a duplicate of an existing valid frame element.
   FrameElement CopyElementAt(int index,
-    NumberInfo info = NumberInfo::Uninitialized());
+    TypeInfo info = TypeInfo::Uninitialized());
 
   // The number of elements on the virtual frame.
   int element_count() { return elements_.length(); }
@@ -139,7 +139,7 @@ class VirtualFrame : public ZoneObject {
   void ForgetElements(int count);
 
   // Spill all values from the frame to memory.
-  void SpillAll();
+  inline void SpillAll();
 
   // Spill all occurrences of a specific register from the frame.
   void Spill(Register reg) {
@@ -200,7 +200,7 @@ class VirtualFrame : public ZoneObject {
   // Prepare for returning from the frame by spilling locals.  This
   // avoids generating unnecessary merge code when jumping to the
   // shared return site.  Emits code for spills.
-  void PrepareForReturn();
+  inline void PrepareForReturn();
 
   // Number of local variables after when we use a loop for allocating.
   static const int kLocalVarBound = 7;
@@ -318,6 +318,10 @@ class VirtualFrame : public ZoneObject {
   // arguments are consumed by the call.
   Result CallStub(CodeStub* stub, Result* arg0, Result* arg1);
 
+  // Call JS function from top of the stack with arguments
+  // taken from the stack.
+  Result CallJSFunction(int arg_count);
+
   // Call runtime given the number of arguments expected on (and
   // removed from) the stack.
   Result CallRuntime(Runtime::Function* f, int arg_count);
@@ -383,19 +387,19 @@ class VirtualFrame : public ZoneObject {
   // Push an element on top of the expression stack and emit a
   // corresponding push instruction.
   void EmitPush(Register reg,
-                NumberInfo info = NumberInfo::Unknown());
+                TypeInfo info = TypeInfo::Unknown());
   void EmitPush(const Operand& operand,
-                NumberInfo info = NumberInfo::Unknown());
+                TypeInfo info = TypeInfo::Unknown());
   void EmitPush(Heap::RootListIndex index,
-                NumberInfo info = NumberInfo::Unknown());
+                TypeInfo info = TypeInfo::Unknown());
   void EmitPush(Immediate immediate,
-                NumberInfo info = NumberInfo::Unknown());
+                TypeInfo info = TypeInfo::Unknown());
   void EmitPush(Smi* value);
   // Uses kScratchRegister, emits appropriate relocation info.
   void EmitPush(Handle<Object> value);
 
   // Push an element on the virtual frame.
-  inline void Push(Register reg, NumberInfo info = NumberInfo::Unknown());
+  inline void Push(Register reg, TypeInfo info = TypeInfo::Unknown());
   inline void Push(Handle<Object> value);
   inline void Push(Smi* value);
 
@@ -403,7 +407,7 @@ class VirtualFrame : public ZoneObject {
   // frame).
   void Push(Result* result) {
     if (result->is_register()) {
-      Push(result->reg(), result->number_info());
+      Push(result->reg(), result->type_info());
     } else {
       ASSERT(result->is_constant());
       Push(result->handle());
@@ -411,13 +415,17 @@ class VirtualFrame : public ZoneObject {
     result->Unuse();
   }
 
+  // Pushing an expression expects that the expression is trivial (according
+  // to Expression::IsTrivial).
+  void Push(Expression* expr);
+
   // Nip removes zero or more elements from immediately below the top
   // of the frame, leaving the previous top-of-frame value on top of
   // the frame.  Nip(k) is equivalent to x = Pop(), Drop(k), Push(x).
   inline void Nip(int num_dropped);
 
-  inline void SetTypeForLocalAt(int index, NumberInfo info);
-  inline void SetTypeForParamAt(int index, NumberInfo info);
+  inline void SetTypeForLocalAt(int index, TypeInfo info);
+  inline void SetTypeForParamAt(int index, TypeInfo info);
 
  private:
   static const int kLocal0Offset = JavaScriptFrameConstants::kLocal0Offset;

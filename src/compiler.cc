@@ -34,6 +34,7 @@
 #include "data-flow.h"
 #include "debug.h"
 #include "fast-codegen.h"
+#include "flow-graph.h"
 #include "full-codegen.h"
 #include "liveedit.h"
 #include "oprofile-agent.h"
@@ -89,33 +90,13 @@ static Handle<Code> MakeCode(Handle<Context> context, CompilationInfo* info) {
   }
 
   if (FLAG_use_flow_graph) {
-    int variable_count =
-        function->num_parameters() + function->scope()->num_stack_slots();
-    FlowGraphBuilder builder(variable_count);
-    builder.Build(function);
-
-    if (!builder.HasStackOverflow()) {
-      if (variable_count > 0) {
-        ReachingDefinitions rd(builder.postorder(),
-                               builder.body_definitions(),
-                               variable_count);
-        rd.Compute();
-
-        TypeAnalyzer ta(builder.postorder(),
-                        builder.body_definitions(),
-                        variable_count,
-                        function->num_parameters());
-        ta.Compute();
-
-        MarkLiveCode(builder.preorder(),
-                     builder.body_definitions(),
-                     variable_count);
-      }
-    }
+    FlowGraphBuilder builder;
+    FlowGraph* graph = builder.Build(function);
+    USE(graph);
 
 #ifdef DEBUG
     if (FLAG_print_graph_text && !builder.HasStackOverflow()) {
-      builder.graph()->PrintText(function, builder.postorder());
+      graph->PrintAsText(function->name());
     }
 #endif
   }
@@ -211,6 +192,8 @@ static Handle<SharedFunctionInfo> MakeFunctionInfo(bool is_global,
   FunctionLiteral* lit =
       MakeAST(is_global, script, extension, pre_data, is_json);
 
+  LiveEditFunctionTracker live_edit_tracker(lit);
+
   // Check for parse errors.
   if (lit == NULL) {
     ASSERT(Top::has_pending_exception());
@@ -235,27 +218,23 @@ static Handle<SharedFunctionInfo> MakeFunctionInfo(bool is_global,
     return Handle<SharedFunctionInfo>::null();
   }
 
-#if defined ENABLE_LOGGING_AND_PROFILING || defined ENABLE_OPROFILE_AGENT
-  // Log the code generation for the script. Check explicit whether logging is
-  // to avoid allocating when not required.
-  if (Logger::is_logging() || OProfileAgent::is_enabled()) {
-    if (script->name()->IsString()) {
-      SmartPointer<char> data =
-          String::cast(script->name())->ToCString(DISALLOW_NULLS);
-      LOG(CodeCreateEvent(is_eval ? Logger::EVAL_TAG : Logger::SCRIPT_TAG,
-                          *code, *data));
-      OProfileAgent::CreateNativeCodeRegion(*data,
-                                            code->instruction_start(),
-                                            code->instruction_size());
-    } else {
-      LOG(CodeCreateEvent(is_eval ? Logger::EVAL_TAG : Logger::SCRIPT_TAG,
-                          *code, ""));
-      OProfileAgent::CreateNativeCodeRegion(is_eval ? "Eval" : "Script",
-                                            code->instruction_start(),
-                                            code->instruction_size());
-    }
+  if (script->name()->IsString()) {
+    PROFILE(CodeCreateEvent(
+        is_eval ? Logger::EVAL_TAG :
+            Logger::ToNativeByScript(Logger::SCRIPT_TAG, *script),
+        *code, String::cast(script->name())));
+    OPROFILE(CreateNativeCodeRegion(String::cast(script->name()),
+                                    code->instruction_start(),
+                                    code->instruction_size()));
+  } else {
+    PROFILE(CodeCreateEvent(
+        is_eval ? Logger::EVAL_TAG :
+            Logger::ToNativeByScript(Logger::SCRIPT_TAG, *script),
+        *code, ""));
+    OPROFILE(CreateNativeCodeRegion(is_eval ? "Eval" : "Script",
+                                    code->instruction_start(),
+                                    code->instruction_size()));
   }
-#endif
 
   // Allocate function.
   Handle<SharedFunctionInfo> result =
@@ -275,6 +254,8 @@ static Handle<SharedFunctionInfo> MakeFunctionInfo(bool is_global,
   // Notify debugger
   Debugger::OnAfterCompile(script, Debugger::NO_AFTER_COMPILE_FLAGS);
 #endif
+
+  live_edit_tracker.RecordFunctionInfo(result, lit);
 
   return result;
 }
@@ -443,14 +424,12 @@ bool Compiler::CompileLazy(CompilationInfo* info) {
     return false;
   }
 
-#if defined ENABLE_LOGGING_AND_PROFILING || defined ENABLE_OPROFILE_AGENT
-  LogCodeCreateEvent(Logger::LAZY_COMPILE_TAG,
-                     name,
-                     Handle<String>(shared->inferred_name()),
-                     start_position,
-                     info->script(),
-                     code);
-#endif
+  RecordFunctionCompilation(Logger::LAZY_COMPILE_TAG,
+                            name,
+                            Handle<String>(shared->inferred_name()),
+                            start_position,
+                            info->script(),
+                            code);
 
   // Update the shared function info with the compiled code.
   shared->set_code(*code);
@@ -473,6 +452,7 @@ bool Compiler::CompileLazy(CompilationInfo* info) {
 Handle<SharedFunctionInfo> Compiler::BuildFunctionInfo(FunctionLiteral* literal,
                                                        Handle<Script> script,
                                                        AstVisitor* caller) {
+  LiveEditFunctionTracker live_edit_tracker(literal);
 #ifdef DEBUG
   // We should not try to compile the same function literal more than
   // once.
@@ -508,33 +488,13 @@ Handle<SharedFunctionInfo> Compiler::BuildFunctionInfo(FunctionLiteral* literal,
     }
 
     if (FLAG_use_flow_graph) {
-      int variable_count =
-          literal->num_parameters() + literal->scope()->num_stack_slots();
-      FlowGraphBuilder builder(variable_count);
-      builder.Build(literal);
-
-      if (!builder.HasStackOverflow()) {
-        if (variable_count > 0) {
-          ReachingDefinitions rd(builder.postorder(),
-                                 builder.body_definitions(),
-                                 variable_count);
-          rd.Compute();
-
-          TypeAnalyzer ta(builder.postorder(),
-                          builder.body_definitions(),
-                          variable_count,
-                          literal->num_parameters());
-          ta.Compute();
-
-          MarkLiveCode(builder.preorder(),
-                       builder.body_definitions(),
-                       variable_count);
-        }
-      }
+      FlowGraphBuilder builder;
+      FlowGraph* graph = builder.Build(literal);
+      USE(graph);
 
 #ifdef DEBUG
       if (FLAG_print_graph_text && !builder.HasStackOverflow()) {
-        builder.graph()->PrintText(literal, builder.postorder());
+        graph->PrintAsText(literal->name());
       }
 #endif
     }
@@ -578,18 +538,15 @@ Handle<SharedFunctionInfo> Compiler::BuildFunctionInfo(FunctionLiteral* literal,
     }
 
     // Function compilation complete.
-
-#if defined ENABLE_LOGGING_AND_PROFILING || defined ENABLE_OPROFILE_AGENT
-    LogCodeCreateEvent(Logger::FUNCTION_TAG,
-                       literal->name(),
-                       literal->inferred_name(),
-                       literal->start_position(),
-                       script,
-                       code);
-#endif
+    RecordFunctionCompilation(Logger::FUNCTION_TAG,
+                              literal->name(),
+                              literal->inferred_name(),
+                              literal->start_position(),
+                              script,
+                              code);
   }
 
-  // Create a boilerplate function.
+  // Create a shared function info object.
   Handle<SharedFunctionInfo> result =
       Factory::NewSharedFunctionInfo(literal->name(),
                                      literal->materialized_literal_count(),
@@ -600,6 +557,7 @@ Handle<SharedFunctionInfo> Compiler::BuildFunctionInfo(FunctionLiteral* literal,
   // the resulting function.
   SetExpectedNofPropertiesFromEstimate(result,
                                        literal->expected_property_count());
+  live_edit_tracker.RecordFunctionInfo(result, literal);
   return result;
 }
 
@@ -628,35 +586,38 @@ void Compiler::SetFunctionInfo(Handle<SharedFunctionInfo> function_info,
 }
 
 
-#if defined ENABLE_LOGGING_AND_PROFILING || defined ENABLE_OPROFILE_AGENT
-void Compiler::LogCodeCreateEvent(Logger::LogEventsAndTags tag,
-                                  Handle<String> name,
-                                  Handle<String> inferred_name,
-                                  int start_position,
-                                  Handle<Script> script,
-                                  Handle<Code> code) {
+void Compiler::RecordFunctionCompilation(Logger::LogEventsAndTags tag,
+                                         Handle<String> name,
+                                         Handle<String> inferred_name,
+                                         int start_position,
+                                         Handle<Script> script,
+                                         Handle<Code> code) {
   // Log the code generation. If source information is available
   // include script name and line number. Check explicitly whether
   // logging is enabled as finding the line number is not free.
-  if (Logger::is_logging() || OProfileAgent::is_enabled()) {
+  if (Logger::is_logging()
+      || OProfileAgent::is_enabled()
+      || CpuProfiler::is_profiling()) {
     Handle<String> func_name(name->length() > 0 ? *name : *inferred_name);
     if (script->name()->IsString()) {
       int line_num = GetScriptLineNumber(script, start_position) + 1;
-      LOG(CodeCreateEvent(tag, *code, *func_name,
-                          String::cast(script->name()), line_num));
-      OProfileAgent::CreateNativeCodeRegion(*func_name,
-                                            String::cast(script->name()),
-                                            line_num,
-                                            code->instruction_start(),
-                                            code->instruction_size());
+      USE(line_num);
+      PROFILE(CodeCreateEvent(Logger::ToNativeByScript(tag, *script),
+                              *code, *func_name,
+                              String::cast(script->name()), line_num));
+      OPROFILE(CreateNativeCodeRegion(*func_name,
+                                      String::cast(script->name()),
+                                      line_num,
+                                      code->instruction_start(),
+                                      code->instruction_size()));
     } else {
-      LOG(CodeCreateEvent(tag, *code, *func_name));
-      OProfileAgent::CreateNativeCodeRegion(*func_name,
-                                            code->instruction_start(),
-                                            code->instruction_size());
+      PROFILE(CodeCreateEvent(Logger::ToNativeByScript(tag, *script),
+                              *code, *func_name));
+      OPROFILE(CreateNativeCodeRegion(*func_name,
+                                      code->instruction_start(),
+                                      code->instruction_size()));
     }
   }
 }
-#endif
 
 } }  // namespace v8::internal

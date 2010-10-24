@@ -814,6 +814,8 @@ Object* Debug::Break(Arguments args) {
   HandleScope scope;
   ASSERT(args.length() == 0);
 
+  thread_local_.frames_are_dropped_ = false;
+
   // Get the top-most JavaScript frame.
   JavaScriptFrameIterator it;
   JavaScriptFrame* frame = it.frame();
@@ -890,8 +892,13 @@ Object* Debug::Break(Arguments args) {
     PrepareStep(step_action, step_count);
   }
 
-  // Install jump to the call address which was overwritten.
-  SetAfterBreakTarget(frame);
+  if (thread_local_.frames_are_dropped_) {
+    // We must have been calling IC stub. Do not return there anymore.
+    Code* plain_return = Builtins::builtin(Builtins::PlainReturn_LiveEdit);
+    thread_local_.after_break_target_ = plain_return->entry();
+  } else {
+    SetAfterBreakTarget(frame);
+  }
 
   return Heap::undefined_value();
 }
@@ -1655,20 +1662,18 @@ void Debug::SetAfterBreakTarget(JavaScriptFrame* frame) {
 }
 
 
+void Debug::FramesHaveBeenDropped(StackFrame::Id new_break_frame_id) {
+  thread_local_.frames_are_dropped_ = true;
+  thread_local_.break_frame_id_ = new_break_frame_id;
+}
+
+
 bool Debug::IsDebugGlobal(GlobalObject* global) {
   return IsLoaded() && global == Debug::debug_context()->global();
 }
 
 
 void Debug::ClearMirrorCache() {
-  // plind, workaround, we are in the debugger without a valid
-  // debug_context(), and this code explodes. This is a consequence
-  // of mips debugger implementation not being complete. This WAR
-  // must be reverted when debugger is fixed.
-  if(!IsLoaded()) {
-    return;
-  }
-
   HandleScope scope;
   ASSERT(Top::context() == *Debug::debug_context());
 
@@ -2125,6 +2130,13 @@ void Debugger::ProcessDebugEvent(v8::DebugEvent event,
       // Silently ignore exceptions from debug event listeners.
     }
   }
+}
+
+
+Handle<Context> Debugger::GetDebugContext() {
+    never_unload_debugger_ = true;
+    EnterDebugger debugger;
+    return Debug::debug_context();
 }
 
 

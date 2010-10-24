@@ -1,4 +1,4 @@
-// Copyright 2006-2010 the V8 project authors. All rights reserved.
+// Copyright 2010 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -25,10 +25,25 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef TEST_INTERFACE_MIPS_H_
-#define TEST_INTERFACE_MIPS_H_
+#include "v8.h"
 
-// MIPS shell.
-int TestMIPS1(int argc, char* argv[]);
+#include "codegen-inl.h"
+#include "register-allocator-inl.h"
+#include "virtual-frame-inl.h"
 
-#endif
+namespace v8 {
+namespace internal {
+
+void VirtualFrame::Adjust(int count) {
+  ASSERT(count >= 0);
+  element_count_ += count;
+}
+
+
+// If there are any registers referenced only by the frame, spill one.
+Register VirtualFrame::SpillAnyRegister() {
+  UNIMPLEMENTED();
+  return no_reg;
+}
+
+} }  // namespace v8::internal

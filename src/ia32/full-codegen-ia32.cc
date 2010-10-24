@@ -776,7 +776,8 @@ void FullCodeGenerator::DeclareGlobals(Handle<FixedArray> pairs) {
 void FullCodeGenerator::VisitFunctionLiteral(FunctionLiteral* expr) {
   Comment cmnt(masm_, "[ FunctionLiteral");
 
-  // Build the function boilerplate and instantiate it.
+  // Build the shared function info and instantiate the function based
+  // on it.
   Handle<SharedFunctionInfo> function_info =
       Compiler::BuildFunctionInfo(expr, script(), this);
   if (HasStackOverflow()) return;
@@ -1130,7 +1131,7 @@ void FullCodeGenerator::EmitBinaryOp(Token::Value op,
   GenericBinaryOpStub stub(op,
                            NO_OVERWRITE,
                            NO_GENERIC_BINARY_FLAGS,
-                           NumberInfo::Unknown());
+                           TypeInfo::Unknown());
   __ CallStub(&stub);
   Apply(context, eax);
 }
@@ -1745,7 +1746,7 @@ void FullCodeGenerator::VisitCountOperation(CountOperation* expr) {
   GenericBinaryOpStub stub(expr->binary_op(),
                            NO_OVERWRITE,
                            NO_GENERIC_BINARY_FLAGS,
-                           NumberInfo::Unknown());
+                           TypeInfo::Unknown());
   stub.GenerateCall(masm(), eax, Smi::FromInt(1));
   __ bind(&done);
 

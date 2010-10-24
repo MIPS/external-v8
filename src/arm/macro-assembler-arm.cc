@@ -117,18 +117,19 @@ void MacroAssembler::Call(intptr_t target, RelocInfo::Mode rmode,
   //  ldr ip, [pc, #...]
   //  blx ip
 
-  // The two instructions (ldr and blx) could be separated by a literal
+  // The two instructions (ldr and blx) could be separated by a constant
   // pool and the code would still work. The issue comes from the
   // patching code which expect the ldr to be just above the blx.
-  BlockConstPoolFor(2);
-  // Statement positions are expected to be recorded when the target
-  // address is loaded. The mov method will automatically record
-  // positions when pc is the target, since this is not the case here
-  // we have to do it explicitly.
-  WriteRecordedPositions();
+  { BlockConstPoolScope block_const_pool(this);
+    // Statement positions are expected to be recorded when the target
+    // address is loaded. The mov method will automatically record
+    // positions when pc is the target, since this is not the case here
+    // we have to do it explicitly.
+    WriteRecordedPositions();
 
-  mov(ip, Operand(target, rmode), LeaveCC, cond);
-  blx(ip, cond);
+    mov(ip, Operand(target, rmode), LeaveCC, cond);
+    blx(ip, cond);
+  }
 
   ASSERT(kCallTargetAddressOffset == 2 * kInstrSize);
 #else
@@ -180,6 +181,19 @@ void MacroAssembler::Drop(int count, Condition cond) {
 }
 
 
+void MacroAssembler::Swap(Register reg1, Register reg2, Register scratch) {
+  if (scratch.is(no_reg)) {
+    eor(reg1, reg1, Operand(reg2));
+    eor(reg2, reg2, Operand(reg1));
+    eor(reg1, reg1, Operand(reg2));
+  } else {
+    mov(scratch, reg1);
+    mov(reg1, reg2);
+    mov(reg2, scratch);
+  }
+}
+
+
 void MacroAssembler::Call(Label* target) {
   bl(target);
 }
@@ -187,6 +201,13 @@ void MacroAssembler::Call(Label* target) {
 
 void MacroAssembler::Move(Register dst, Handle<Object> value) {
   mov(dst, Operand(value));
+}
+
+
+void MacroAssembler::Move(Register dst, Register src) {
+  if (!dst.is(src)) {
+    mov(dst, src);
+  }
 }
 
 
@@ -211,30 +232,23 @@ void MacroAssembler::LoadRoot(Register destination,
 }
 
 
-// Will clobber 4 registers: object, offset, scratch, ip.  The
-// register 'object' contains a heap object pointer.  The heap object
-// tag is shifted away.
-void MacroAssembler::RecordWrite(Register object, Register offset,
-                                 Register scratch) {
-  // The compiled code assumes that record write doesn't change the
-  // context register, so we check that none of the clobbered
-  // registers are cp.
-  ASSERT(!object.is(cp) && !offset.is(cp) && !scratch.is(cp));
+void MacroAssembler::RecordWriteHelper(Register object,
+                                       Register offset,
+                                       Register scratch) {
+  if (FLAG_debug_code) {
+    // Check that the object is not in new space.
+    Label not_in_new_space;
+    InNewSpace(object, scratch, ne, &not_in_new_space);
+    Abort("new-space object passed to RecordWriteHelper");
+    bind(&not_in_new_space);
+  }
 
   // This is how much we shift the remembered set bit offset to get the
   // offset of the word in the remembered set.  We divide by kBitsPerInt (32,
   // shift right 5) and then multiply by kIntSize (4, shift left 2).
   const int kRSetWordShift = 3;
 
-  Label fast, done;
-
-  // First, test that the object is not in the new space.  We cannot set
-  // remembered set bits in the new space.
-  // object: heap object pointer (with tag)
-  // offset: offset to store location from the object
-  and_(scratch, object, Operand(ExternalReference::new_space_mask()));
-  cmp(scratch, Operand(ExternalReference::new_space_start()));
-  b(eq, &done);
+  Label fast;
 
   // Compute the bit offset in the remembered set.
   // object: heap object pointer (with tag)
@@ -286,6 +300,38 @@ void MacroAssembler::RecordWrite(Register object, Register offset,
   mov(ip, Operand(1));
   orr(scratch, scratch, Operand(ip, LSL, offset));
   str(scratch, MemOperand(object));
+}
+
+
+void MacroAssembler::InNewSpace(Register object,
+                                Register scratch,
+                                Condition cc,
+                                Label* branch) {
+  ASSERT(cc == eq || cc == ne);
+  and_(scratch, object, Operand(ExternalReference::new_space_mask()));
+  cmp(scratch, Operand(ExternalReference::new_space_start()));
+  b(cc, branch);
+}
+
+
+// Will clobber 4 registers: object, offset, scratch, ip.  The
+// register 'object' contains a heap object pointer.  The heap object
+// tag is shifted away.
+void MacroAssembler::RecordWrite(Register object, Register offset,
+                                 Register scratch) {
+  // The compiled code assumes that record write doesn't change the
+  // context register, so we check that none of the clobbered
+  // registers are cp.
+  ASSERT(!object.is(cp) && !offset.is(cp) && !scratch.is(cp));
+
+  Label done;
+
+  // First, test that the object is not in the new space.  We cannot set
+  // remembered set bits in the new space.
+  InNewSpace(object, scratch, eq, &done);
+
+  // Record the actual write.
+  RecordWriteHelper(object, offset, scratch);
 
   bind(&done);
 
@@ -335,10 +381,19 @@ void MacroAssembler::EnterExitFrame(ExitFrame::Mode mode) {
   // ip = sp + kPointerSize * #args;
   add(ip, sp, Operand(r0, LSL, kPointerSizeLog2));
 
-  // Align the stack at this point.  After this point we have 5 pushes,
-  // so in fact we have to unalign here!  See also the assert on the
-  // alignment in AlignStack.
-  AlignStack(1);
+  // Prepare the stack to be aligned when calling into C. After this point there
+  // are 5 pushes before the call into C, so the stack needs to be aligned after
+  // 5 pushes.
+  int frame_alignment = ActivationFrameAlignment();
+  int frame_alignment_mask = frame_alignment - 1;
+  if (frame_alignment != kPointerSize) {
+    // The following code needs to be more general if this assert does not hold.
+    ASSERT(frame_alignment == 2 * kPointerSize);
+    // With 5 pushes left the frame must be unaligned at this point.
+    mov(r7, Operand(Smi::FromInt(0)));
+    tst(sp, Operand((frame_alignment - kPointerSize) & frame_alignment_mask));
+    push(r7, eq);  // Push if aligned to make it unaligned.
+  }
 
   // Push in reverse order: caller_fp, sp_on_exit, and caller_pc.
   stm(db_w, sp, fp.bit() | ip.bit() | lr.bit());
@@ -369,27 +424,34 @@ void MacroAssembler::EnterExitFrame(ExitFrame::Mode mode) {
 }
 
 
-void MacroAssembler::AlignStack(int offset) {
+void MacroAssembler::InitializeNewString(Register string,
+                                         Register length,
+                                         Heap::RootListIndex map_index,
+                                         Register scratch1,
+                                         Register scratch2) {
+  mov(scratch1, Operand(length, LSL, kSmiTagSize));
+  LoadRoot(scratch2, map_index);
+  str(scratch1, FieldMemOperand(string, String::kLengthOffset));
+  mov(scratch1, Operand(String::kEmptyHashField));
+  str(scratch2, FieldMemOperand(string, HeapObject::kMapOffset));
+  str(scratch1, FieldMemOperand(string, String::kHashFieldOffset));
+}
+
+
+int MacroAssembler::ActivationFrameAlignment() {
 #if defined(V8_HOST_ARCH_ARM)
   // Running on the real platform. Use the alignment as mandated by the local
   // environment.
   // Note: This will break if we ever start generating snapshots on one ARM
   // platform for another ARM platform with a different alignment.
-  int activation_frame_alignment = OS::ActivationFrameAlignment();
+  return OS::ActivationFrameAlignment();
 #else  // defined(V8_HOST_ARCH_ARM)
   // If we are using the simulator then we should always align to the expected
   // alignment. As the simulator is used to generate snapshots we do not know
-  // if the target platform will need alignment, so we will always align at
-  // this point here.
-  int activation_frame_alignment = 2 * kPointerSize;
+  // if the target platform will need alignment, so this is controlled from a
+  // flag.
+  return FLAG_sim_stack_alignment;
 #endif  // defined(V8_HOST_ARCH_ARM)
-  if (activation_frame_alignment != kPointerSize) {
-    // This code needs to be made more general if this assert doesn't hold.
-    ASSERT(activation_frame_alignment == 2 * kPointerSize);
-    mov(r7, Operand(Smi::FromInt(0)));
-    tst(sp, Operand(activation_frame_alignment - offset));
-    push(r7, eq);  // Conditional push instruction.
-  }
 }
 
 
@@ -699,6 +761,7 @@ void MacroAssembler::PopTryHandler() {
 Register MacroAssembler::CheckMaps(JSObject* object, Register object_reg,
                                    JSObject* holder, Register holder_reg,
                                    Register scratch,
+                                   int save_at_depth,
                                    Label* miss) {
   // Make sure there's no overlap between scratch and the other
   // registers.
@@ -706,7 +769,11 @@ Register MacroAssembler::CheckMaps(JSObject* object, Register object_reg,
 
   // Keep track of the current object in register reg.
   Register reg = object_reg;
-  int depth = 1;
+  int depth = 0;
+
+  if (save_at_depth == depth) {
+    str(reg, MemOperand(sp));
+  }
 
   // Check the maps in the prototype chain.
   // Traverse the prototype chain from the object and do map checks.
@@ -746,6 +813,10 @@ Register MacroAssembler::CheckMaps(JSObject* object, Register object_reg,
       mov(reg, Operand(Handle<JSObject>(prototype)));
     }
 
+    if (save_at_depth == depth) {
+      str(reg, MemOperand(sp));
+    }
+
     // Go to the next object in the prototype chain.
     object = prototype;
   }
@@ -756,7 +827,7 @@ Register MacroAssembler::CheckMaps(JSObject* object, Register object_reg,
   b(ne, miss);
 
   // Log the check depth.
-  LOG(IntEvent("check-maps-depth", depth));
+  LOG(IntEvent("check-maps-depth", depth + 1));
 
   // Perform security check for access to the global object and return
   // the holder register.
@@ -997,11 +1068,11 @@ void MacroAssembler::AllocateTwoByteString(Register result,
                      TAG_OBJECT);
 
   // Set the map, length and hash field.
-  LoadRoot(scratch1, Heap::kStringMapRootIndex);
-  str(length, FieldMemOperand(result, String::kLengthOffset));
-  str(scratch1, FieldMemOperand(result, HeapObject::kMapOffset));
-  mov(scratch2, Operand(String::kEmptyHashField));
-  str(scratch2, FieldMemOperand(result, String::kHashFieldOffset));
+  InitializeNewString(result,
+                      length,
+                      Heap::kStringMapRootIndex,
+                      scratch1,
+                      scratch2);
 }
 
 
@@ -1031,12 +1102,11 @@ void MacroAssembler::AllocateAsciiString(Register result,
                      TAG_OBJECT);
 
   // Set the map, length and hash field.
-  LoadRoot(scratch1, Heap::kAsciiStringMapRootIndex);
-  mov(scratch1, Operand(Factory::ascii_string_map()));
-  str(length, FieldMemOperand(result, String::kLengthOffset));
-  str(scratch1, FieldMemOperand(result, HeapObject::kMapOffset));
-  mov(scratch2, Operand(String::kEmptyHashField));
-  str(scratch2, FieldMemOperand(result, String::kHashFieldOffset));
+  InitializeNewString(result,
+                      length,
+                      Heap::kAsciiStringMapRootIndex,
+                      scratch1,
+                      scratch2);
 }
 
 
@@ -1051,11 +1121,12 @@ void MacroAssembler::AllocateTwoByteConsString(Register result,
                      scratch2,
                      gc_required,
                      TAG_OBJECT);
-  LoadRoot(scratch1, Heap::kConsStringMapRootIndex);
-  mov(scratch2, Operand(String::kEmptyHashField));
-  str(length, FieldMemOperand(result, String::kLengthOffset));
-  str(scratch1, FieldMemOperand(result, HeapObject::kMapOffset));
-  str(scratch2, FieldMemOperand(result, String::kHashFieldOffset));
+
+  InitializeNewString(result,
+                      length,
+                      Heap::kConsStringMapRootIndex,
+                      scratch1,
+                      scratch2);
 }
 
 
@@ -1070,19 +1141,20 @@ void MacroAssembler::AllocateAsciiConsString(Register result,
                      scratch2,
                      gc_required,
                      TAG_OBJECT);
-  LoadRoot(scratch1, Heap::kConsAsciiStringMapRootIndex);
-  mov(scratch2, Operand(String::kEmptyHashField));
-  str(length, FieldMemOperand(result, String::kLengthOffset));
-  str(scratch1, FieldMemOperand(result, HeapObject::kMapOffset));
-  str(scratch2, FieldMemOperand(result, String::kHashFieldOffset));
+
+  InitializeNewString(result,
+                      length,
+                      Heap::kConsAsciiStringMapRootIndex,
+                      scratch1,
+                      scratch2);
 }
 
 
-void MacroAssembler::CompareObjectType(Register function,
+void MacroAssembler::CompareObjectType(Register object,
                                        Register map,
                                        Register type_reg,
                                        InstanceType type) {
-  ldr(map, FieldMemOperand(function, HeapObject::kMapOffset));
+  ldr(map, FieldMemOperand(object, HeapObject::kMapOffset));
   CompareInstanceType(map, type_reg, type);
 }
 
@@ -1289,15 +1361,29 @@ void MacroAssembler::InvokeBuiltin(Builtins::JavaScript id,
 
 
 void MacroAssembler::GetBuiltinEntry(Register target, Builtins::JavaScript id) {
+  ASSERT(!target.is(r1));
+
+  // Load the builtins object into target register.
+  ldr(target, MemOperand(cp, Context::SlotOffset(Context::GLOBAL_INDEX)));
+  ldr(target, FieldMemOperand(target, GlobalObject::kBuiltinsOffset));
+
   // Load the JavaScript builtin function from the builtins object.
-  ldr(r1, MemOperand(cp, Context::SlotOffset(Context::GLOBAL_INDEX)));
-  ldr(r1, FieldMemOperand(r1, GlobalObject::kBuiltinsOffset));
-  int builtins_offset =
-      JSBuiltinsObject::kJSBuiltinsOffset + (id * kPointerSize);
-  ldr(r1, FieldMemOperand(r1, builtins_offset));
-  // Load the code entry point from the function into the target register.
-  ldr(target, FieldMemOperand(r1, JSFunction::kSharedFunctionInfoOffset));
-  ldr(target, FieldMemOperand(target, SharedFunctionInfo::kCodeOffset));
+  ldr(r1, FieldMemOperand(target,
+                          JSBuiltinsObject::OffsetOfFunctionWithId(id)));
+
+  // Load the code entry point from the builtins object.
+  ldr(target, FieldMemOperand(target,
+                              JSBuiltinsObject::OffsetOfCodeWithId(id)));
+  if (FLAG_debug_code) {
+    // Make sure the code objects in the builtins object and in the
+    // builtin function are the same.
+    push(r1);
+    ldr(r1, FieldMemOperand(r1, JSFunction::kSharedFunctionInfoOffset));
+    ldr(r1, FieldMemOperand(r1, SharedFunctionInfo::kCodeOffset));
+    cmp(r1, target);
+    Assert(eq, "Builtin code object changed");
+    pop(r1);
+  }
   add(target, target, Operand(Code::kHeaderSize - kHeapObjectTag));
 }
 
@@ -1534,6 +1620,65 @@ void MacroAssembler::JumpIfInstanceTypeIsNotSequentialAscii(Register type,
   and_(scratch, type, Operand(kFlatAsciiStringMask));
   cmp(scratch, Operand(kFlatAsciiStringTag));
   b(ne, failure);
+}
+
+
+void MacroAssembler::PrepareCallCFunction(int num_arguments, Register scratch) {
+  int frame_alignment = ActivationFrameAlignment();
+  // Up to four simple arguments are passed in registers r0..r3.
+  int stack_passed_arguments = (num_arguments <= 4) ? 0 : num_arguments - 4;
+  if (frame_alignment > kPointerSize) {
+    // Make stack end at alignment and make room for num_arguments - 4 words
+    // and the original value of sp.
+    mov(scratch, sp);
+    sub(sp, sp, Operand((stack_passed_arguments + 1) * kPointerSize));
+    ASSERT(IsPowerOf2(frame_alignment));
+    and_(sp, sp, Operand(-frame_alignment));
+    str(scratch, MemOperand(sp, stack_passed_arguments * kPointerSize));
+  } else {
+    sub(sp, sp, Operand(stack_passed_arguments * kPointerSize));
+  }
+}
+
+
+void MacroAssembler::CallCFunction(ExternalReference function,
+                                   int num_arguments) {
+  mov(ip, Operand(function));
+  CallCFunction(ip, num_arguments);
+}
+
+
+void MacroAssembler::CallCFunction(Register function, int num_arguments) {
+  // Make sure that the stack is aligned before calling a C function unless
+  // running in the simulator. The simulator has its own alignment check which
+  // provides more information.
+#if defined(V8_HOST_ARCH_ARM)
+  if (FLAG_debug_code) {
+    int frame_alignment = OS::ActivationFrameAlignment();
+    int frame_alignment_mask = frame_alignment - 1;
+    if (frame_alignment > kPointerSize) {
+      ASSERT(IsPowerOf2(frame_alignment));
+      Label alignment_as_expected;
+      tst(sp, Operand(frame_alignment_mask));
+      b(eq, &alignment_as_expected);
+      // Don't use Check here, as it will call Runtime_Abort possibly
+      // re-entering here.
+      stop("Unexpected alignment");
+      bind(&alignment_as_expected);
+    }
+  }
+#endif
+
+  // Just call directly. The function called cannot cause a GC, or
+  // allow preemption, so the return address in the link register
+  // stays correct.
+  Call(function);
+  int stack_passed_arguments = (num_arguments <= 4) ? 0 : num_arguments - 4;
+  if (OS::ActivationFrameAlignment() > kPointerSize) {
+    ldr(sp, MemOperand(sp, stack_passed_arguments * kPointerSize));
+  } else {
+    add(sp, sp, Operand(stack_passed_arguments * sizeof(kPointerSize)));
+  }
 }
 
 

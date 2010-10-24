@@ -43,7 +43,7 @@
 #include "regexp-macro-assembler-irregexp.h"
 #include "regexp-stack.h"
 
-#ifdef V8_NATIVE_REGEXP
+#ifndef V8_INTERPRETED_REGEXP
 #if V8_TARGET_ARCH_IA32
 #include "ia32/regexp-macro-assembler-ia32.h"
 #elif V8_TARGET_ARCH_X64
@@ -124,6 +124,7 @@ Handle<Object> RegExpImpl::Compile(Handle<JSRegExp> re,
   }
   FlattenString(pattern);
   CompilationZoneScope zone_scope(DELETE_ON_EXIT);
+  PostponeInterruptsScope postpone;
   RegExpCompileData parse_result;
   FlatStringReader reader(pattern);
   if (!ParseRegExp(&reader, flags.is_multiline(), &parse_result)) {
@@ -237,10 +238,10 @@ Handle<Object> RegExpImpl::AtomExec(Handle<JSRegExp> re,
 // returns false.
 bool RegExpImpl::EnsureCompiledIrregexp(Handle<JSRegExp> re, bool is_ascii) {
   Object* compiled_code = re->DataAt(JSRegExp::code_index(is_ascii));
-#ifdef V8_NATIVE_REGEXP
-  if (compiled_code->IsCode()) return true;
-#else  // ! V8_NATIVE_REGEXP (RegExp interpreter code)
+#ifdef V8_INTERPRETED_REGEXP
   if (compiled_code->IsByteArray()) return true;
+#else  // V8_INTERPRETED_REGEXP (RegExp native code)
+  if (compiled_code->IsCode()) return true;
 #endif
   return CompileIrregexp(re, is_ascii);
 }
@@ -249,6 +250,7 @@ bool RegExpImpl::EnsureCompiledIrregexp(Handle<JSRegExp> re, bool is_ascii) {
 bool RegExpImpl::CompileIrregexp(Handle<JSRegExp> re, bool is_ascii) {
   // Compile the RegExp.
   CompilationZoneScope zone_scope(DELETE_ON_EXIT);
+  PostponeInterruptsScope postpone;
   Object* entry = re->DataAt(JSRegExp::code_index(is_ascii));
   if (entry->IsJSObject()) {
     // If it's a JSObject, a previous compilation failed and threw this object.
@@ -360,14 +362,14 @@ int RegExpImpl::IrregexpPrepare(Handle<JSRegExp> regexp,
   if (!EnsureCompiledIrregexp(regexp, is_ascii)) {
     return -1;
   }
-#ifdef V8_NATIVE_REGEXP
+#ifdef V8_INTERPRETED_REGEXP
+  // Byte-code regexp needs space allocated for all its registers.
+  return IrregexpNumberOfRegisters(FixedArray::cast(regexp->data()));
+#else  // V8_INTERPRETED_REGEXP
   // Native regexp only needs room to output captures. Registers are handled
   // internally.
   return (IrregexpNumberOfCaptures(FixedArray::cast(regexp->data())) + 1) * 2;
-#else  // !V8_NATIVE_REGEXP
-  // Byte-code regexp needs space allocated for all its registers.
-  return IrregexpNumberOfRegisters(FixedArray::cast(regexp->data()));
-#endif  // V8_NATIVE_REGEXP
+#endif  // V8_INTERPRETED_REGEXP
 }
 
 
@@ -381,7 +383,7 @@ RegExpImpl::IrregexpResult RegExpImpl::IrregexpExecOnce(Handle<JSRegExp> regexp,
   ASSERT(index <= subject->length());
   ASSERT(subject->IsFlat());
 
-#ifdef V8_NATIVE_REGEXP
+#ifndef V8_INTERPRETED_REGEXP
   ASSERT(output.length() >=
       (IrregexpNumberOfCaptures(*irregexp) + 1) * 2);
   do {
@@ -414,7 +416,7 @@ RegExpImpl::IrregexpResult RegExpImpl::IrregexpExecOnce(Handle<JSRegExp> regexp,
   } while (true);
   UNREACHABLE();
   return RE_EXCEPTION;
-#else  // ndef V8_NATIVE_REGEXP
+#else  // V8_INTERPRETED_REGEXP
 
   ASSERT(output.length() >= IrregexpNumberOfRegisters(*irregexp));
   bool is_ascii = subject->IsAsciiRepresentation();
@@ -435,7 +437,7 @@ RegExpImpl::IrregexpResult RegExpImpl::IrregexpExecOnce(Handle<JSRegExp> regexp,
     return RE_SUCCESS;
   }
   return RE_FAILURE;
-#endif  // ndef V8_NATIVE_REGEXP
+#endif  // V8_INTERPRETED_REGEXP
 }
 
 
@@ -446,7 +448,7 @@ Handle<Object> RegExpImpl::IrregexpExec(Handle<JSRegExp> jsregexp,
   ASSERT_EQ(jsregexp->TypeTag(), JSRegExp::IRREGEXP);
 
   // Prepare space for the return values.
-#ifndef V8_NATIVE_REGEXP
+#ifdef V8_INTERPRETED_REGEXP
 #ifdef DEBUG
   if (FLAG_trace_regexp_bytecodes) {
     String* pattern = jsregexp->Pattern();
@@ -4872,17 +4874,18 @@ void Analysis::VisitAssertion(AssertionNode* that) {
 
     SetRelation word_relation =
         CharacterRange::WordCharacterRelation(following_chars);
-    if (word_relation.ContainedIn()) {
-      // Following character is definitely a word character.
-      type = (type == AssertionNode::AT_BOUNDARY) ?
-                  AssertionNode::AFTER_NONWORD_CHARACTER :
-                  AssertionNode::AFTER_WORD_CHARACTER;
-      that->set_type(type);
-    } else if (word_relation.Disjoint()) {
+    if (word_relation.Disjoint()) {
+      // Includes the case where following_chars is empty (e.g., end-of-input).
       // Following character is definitely *not* a word character.
       type = (type == AssertionNode::AT_BOUNDARY) ?
-                  AssertionNode::AFTER_WORD_CHARACTER :
-                  AssertionNode::AFTER_NONWORD_CHARACTER;
+                 AssertionNode::AFTER_WORD_CHARACTER :
+                 AssertionNode::AFTER_NONWORD_CHARACTER;
+      that->set_type(type);
+    } else if (word_relation.ContainedIn()) {
+      // Following character is definitely a word character.
+      type = (type == AssertionNode::AT_BOUNDARY) ?
+                 AssertionNode::AFTER_NONWORD_CHARACTER :
+                 AssertionNode::AFTER_WORD_CHARACTER;
       that->set_type(type);
     }
   }
@@ -4989,7 +4992,9 @@ int AssertionNode::ComputeFirstCharacterSet(int budget) {
       case AFTER_WORD_CHARACTER: {
         ASSERT_NOT_NULL(on_success());
         budget = on_success()->ComputeFirstCharacterSet(budget);
-        set_first_character_set(on_success()->first_character_set());
+        if (budget >= 0) {
+          set_first_character_set(on_success()->first_character_set());
+        }
         break;
       }
     }
@@ -5015,6 +5020,10 @@ int ActionNode::ComputeFirstCharacterSet(int budget) {
 int BackReferenceNode::ComputeFirstCharacterSet(int budget) {
   // We don't know anything about the first character of a backreference
   // at this point.
+  // The potential first characters are the first characters of the capture,
+  // and the first characters of the on_success node, depending on whether the
+  // capture can be empty and whether it is known to be participating or known
+  // not to be.
   return kComputeFirstCharacterSetFail;
 }
 
@@ -5034,8 +5043,11 @@ int TextNode::ComputeFirstCharacterSet(int budget) {
     } else {
       ASSERT(text.type == TextElement::CHAR_CLASS);
       RegExpCharacterClass* char_class = text.data.u_char_class;
+      ZoneList<CharacterRange>* ranges = char_class->ranges();
+      // TODO(lrn): Canonicalize ranges when they are created
+      // instead of waiting until now.
+      CharacterRange::Canonicalize(ranges);
       if (char_class->is_negated()) {
-        ZoneList<CharacterRange>* ranges = char_class->ranges();
         int length = ranges->length();
         int new_length = length + 1;
         if (length > 0) {
@@ -5049,7 +5061,7 @@ int TextNode::ComputeFirstCharacterSet(int budget) {
         CharacterRange::Negate(ranges, negated_ranges);
         set_first_character_set(negated_ranges);
       } else {
-        set_first_character_set(char_class->ranges());
+        set_first_character_set(ranges);
       }
     }
   }
@@ -5223,7 +5235,7 @@ RegExpEngine::CompilationResult RegExpEngine::Compile(RegExpCompileData* data,
   NodeInfo info = *node->info();
 
   // Create the correct assembler for the architecture.
-#ifdef V8_NATIVE_REGEXP
+#ifndef V8_INTERPRETED_REGEXP
   // Native regexp implementation.
 
   NativeRegExpMacroAssembler::Mode mode =
@@ -5240,11 +5252,11 @@ RegExpEngine::CompilationResult RegExpEngine::Compile(RegExpCompileData* data,
   RegExpMacroAssemblerMIPS macro_assembler(mode, (data->capture_count + 1) * 2);
 #endif
 
-#else  // ! V8_NATIVE_REGEXP
+#else  // V8_INTERPRETED_REGEXP
   // Interpreted regexp implementation.
   EmbeddedVector<byte, 1024> codes;
   RegExpMacroAssemblerIrregexp macro_assembler(codes);
-#endif
+#endif  // V8_INTERPRETED_REGEXP
 
   return compiler.Assemble(&macro_assembler,
                            node,

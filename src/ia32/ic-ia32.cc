@@ -73,11 +73,10 @@ static void GenerateDictionaryLoad(MacroAssembler* masm,
   // Check for the absence of an interceptor.
   // Load the map into r0.
   __ mov(r0, FieldOperand(receiver, JSObject::kMapOffset));
-  // Test the has_named_interceptor bit in the map.
-  __ test(FieldOperand(r0, Map::kInstanceAttributesOffset),
-          Immediate(1 << (Map::kHasNamedInterceptor + (3 * 8))));
 
-  // Jump to miss if the interceptor bit is set.
+  // Bail out if the receiver has a named interceptor.
+  __ test(FieldOperand(r0, Map::kBitFieldOffset),
+          Immediate(1 << Map::kHasNamedInterceptor));
   __ j(not_zero, miss_label, not_taken);
 
   // Bail out if we have a JS global proxy object.
@@ -202,16 +201,9 @@ static void GenerateNumberDictionaryLoad(MacroAssembler* masm,
   __ xor_(r0, Operand(r1));
 
   // Compute capacity mask.
-  const int kCapacityOffset =
-      NumberDictionary::kHeaderSize +
-      NumberDictionary::kCapacityIndex * kPointerSize;
-  __ mov(r1, FieldOperand(elements, kCapacityOffset));
+  __ mov(r1, FieldOperand(elements, NumberDictionary::kCapacityOffset));
   __ shr(r1, kSmiTagSize);  // convert smi to int
   __ dec(r1);
-
-  const int kElementsStartOffset =
-      NumberDictionary::kHeaderSize +
-      NumberDictionary::kElementsStartIndex * kPointerSize;
 
   // Generate an unrolled loop that performs a few probes before giving up.
   const int kProbes = 4;
@@ -232,7 +224,7 @@ static void GenerateNumberDictionaryLoad(MacroAssembler* masm,
     __ cmp(key, FieldOperand(elements,
                              r2,
                              times_pointer_size,
-                             kElementsStartOffset));
+                             NumberDictionary::kElementsStartOffset));
     if (i != (kProbes - 1)) {
       __ j(equal, &done, taken);
     } else {
@@ -242,14 +234,16 @@ static void GenerateNumberDictionaryLoad(MacroAssembler* masm,
 
   __ bind(&done);
   // Check that the value is a normal propety.
-  const int kDetailsOffset = kElementsStartOffset + 2 * kPointerSize;
+  const int kDetailsOffset =
+      NumberDictionary::kElementsStartOffset + 2 * kPointerSize;
   ASSERT_EQ(NORMAL, 0);
   __ test(FieldOperand(elements, r2, times_pointer_size, kDetailsOffset),
           Immediate(PropertyDetails::TypeField::mask() << kSmiTagSize));
   __ j(not_zero, miss);
 
   // Get the value at the masked, scaled index.
-  const int kValueOffset = kElementsStartOffset + kPointerSize;
+  const int kValueOffset =
+      NumberDictionary::kElementsStartOffset + kPointerSize;
   __ mov(key, FieldOperand(elements, r2, times_pointer_size, kValueOffset));
 }
 
@@ -497,39 +491,70 @@ void KeyedLoadIC::GenerateGeneric(MacroAssembler* masm) {
 
 void KeyedLoadIC::GenerateString(MacroAssembler* masm) {
   // ----------- S t a t e -------------
-  //  -- eax    : key
+  //  -- eax    : key (index)
   //  -- edx    : receiver
   //  -- esp[0] : return address
   // -----------------------------------
-  Label miss, index_ok;
+  Label miss;
+  Label index_not_smi;
+  Label index_out_of_range;
+  Label slow_char_code;
+  Label got_char_code;
 
-  // Pop return address.
-  // Performing the load early is better in the common case.
-  __ pop(ebx);
+  Register receiver = edx;
+  Register index = eax;
+  Register code = ebx;
+  Register scratch = ecx;
 
-  __ test(edx, Immediate(kSmiTagMask));
-  __ j(zero, &miss);
-  __ mov(ecx, FieldOperand(edx, HeapObject::kMapOffset));
-  __ movzx_b(ecx, FieldOperand(ecx, Map::kInstanceTypeOffset));
-  __ test(ecx, Immediate(kIsNotStringMask));
-  __ j(not_zero, &miss);
+  StringHelper::GenerateFastCharCodeAt(masm,
+                                       receiver,
+                                       index,
+                                       scratch,
+                                       code,
+                                       &miss,  // When not a string.
+                                       &index_not_smi,
+                                       &index_out_of_range,
+                                       &slow_char_code);
+  // If we didn't bail out, code register contains smi tagged char
+  // code.
+  __ bind(&got_char_code);
+  StringHelper::GenerateCharFromCode(masm, code, eax, JUMP_FUNCTION);
+#ifdef DEBUG
+  __ Abort("Unexpected fall-through from char from code tail call");
+#endif
 
-  // Check if key is a smi or a heap number.
-  __ test(eax, Immediate(kSmiTagMask));
-  __ j(zero, &index_ok);
-  __ mov(ecx, FieldOperand(eax, HeapObject::kMapOffset));
-  __ cmp(ecx, Factory::heap_number_map());
-  __ j(not_equal, &miss);
+  // Check if key is a heap number.
+  __ bind(&index_not_smi);
+  __ CheckMap(index, Factory::heap_number_map(), &miss, true);
 
-  __ bind(&index_ok);
-  // Push receiver and key on the stack, and make a tail call.
-  __ push(edx);  // receiver
-  __ push(eax);  // key
-  __ push(ebx);  // return address
-  __ InvokeBuiltin(Builtins::STRING_CHAR_AT, JUMP_FUNCTION);
+  // Push receiver and key on the stack (now that we know they are a
+  // string and a number), and call runtime.
+  __ bind(&slow_char_code);
+  __ EnterInternalFrame();
+  __ push(receiver);
+  __ push(index);
+  __ CallRuntime(Runtime::kStringCharCodeAt, 2);
+  ASSERT(!code.is(eax));
+  __ mov(code, eax);
+  __ LeaveInternalFrame();
+
+  // Check if the runtime call returned NaN char code. If yes, return
+  // undefined. Otherwise, we can continue.
+  if (FLAG_debug_code) {
+    ASSERT(kSmiTag == 0);
+    __ test(code, Immediate(kSmiTagMask));
+    __ j(zero, &got_char_code);
+    __ mov(scratch, FieldOperand(code, HeapObject::kMapOffset));
+    __ cmp(scratch, Factory::heap_number_map());
+    __ Assert(equal, "StringCharCodeAt must return smi or heap number");
+  }
+  __ cmp(code, Factory::nan_value());
+  __ j(not_equal, &got_char_code);
+  __ bind(&index_out_of_range);
+  __ Set(eax, Immediate(Factory::undefined_value()));
+  __ ret(0);
 
   __ bind(&miss);
-  __ push(ebx);
   GenerateMiss(masm);
 }
 

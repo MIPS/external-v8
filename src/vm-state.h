@@ -1,4 +1,4 @@
-// Copyright 2006-2010 the V8 project authors. All rights reserved.
+// Copyright 2010 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -25,38 +25,51 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include <stdint.h>
+#ifndef V8_VM_STATE_H_
+#define V8_VM_STATE_H_
 
-#include <v8.h>
+namespace v8 {
+namespace internal {
 
-#include "test-interface-mips.h"
+class VMState BASE_EMBEDDED {
+#ifdef ENABLE_VMSTATE_TRACKING
+ public:
+  inline VMState(StateTag state);
+  inline ~VMState();
 
-using namespace v8;
+  StateTag state() { return state_; }
+  void set_external_callback(Address external_callback) {
+    external_callback_ = external_callback;
+  }
+
+  // Used for debug asserts.
+  static bool is_outermost_external() {
+    return current_state_ == NULL;
+  }
+
+  static StateTag current_state() {
+    return current_state_ ? current_state_->state() : EXTERNAL;
+  }
+
+  static Address external_callback() {
+    return current_state_ ? current_state_->external_callback_ : NULL;
+  }
+
+ private:
+  bool disabled_;
+  StateTag state_;
+  VMState* previous_;
+  Address external_callback_;
+
+  // A stack of VM states.
+  static VMState* current_state_;
+#else
+ public:
+  explicit VMState(StateTag state) {}
+#endif
+};
+
+} }  // namespace v8::internal
 
 
-// Functions corresponding to different tests.
-int RunTest1(int argc, char* argv[]);
-int RunTest2(int argc, char* argv[]);
-
-int main(int argc, char* argv[]) {
-  int32_t test = 1;
-
-  switch (test) {
-    case 1:
-      printf("case 1.\n");
-      return RunTest1(argc, argv);
-      break;
-    default:
-      printf("No test to run.\n");
-      return -1;
-      break;
-  };
-
-  return -1;
-}
-
-int RunTest1(int argc, char* argv[]) {
-  int res = TestMIPS1(argc, argv);
-  printf("TestMIPSStub returned %#x.\n", res);
-  return 0;
-}
+#endif  // V8_VM_STATE_H_

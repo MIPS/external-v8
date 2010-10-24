@@ -203,6 +203,7 @@ void FlattenString(Handle<String> string) {
 
 Handle<Object> SetPrototype(Handle<JSFunction> function,
                             Handle<Object> prototype) {
+  ASSERT(function->should_have_prototype());
   CALL_HEAP_FUNCTION(Accessors::FunctionSetPrototype(*function,
                                                      *prototype,
                                                      NULL),
@@ -457,6 +458,16 @@ void InitScriptLineEnds(Handle<Script> script) {
   }
 
   Handle<String> src(String::cast(script->source()));
+
+  Handle<FixedArray> array = CalculateLineEnds(src, true);
+
+  script->set_line_ends(*array);
+  ASSERT(script->line_ends()->IsFixedArray());
+}
+
+
+Handle<FixedArray> CalculateLineEnds(Handle<String> src,
+                                     bool with_imaginary_last_new_line) {
   const int src_len = src->length();
   Handle<String> new_line = Factory::NewStringFromAscii(CStrVector("\n"));
 
@@ -468,8 +479,12 @@ void InitScriptLineEnds(Handle<Script> script) {
     if (position != -1) {
       position++;
     }
-    // Even if the last line misses a line end, it is counted.
-    line_count++;
+    if (position != -1) {
+      line_count++;
+    } else if (with_imaginary_last_new_line) {
+      // Even if the last line misses a line end, it is counted.
+      line_count++;
+    }
   }
 
   // Pass 2: Fill in line ends positions
@@ -478,15 +493,17 @@ void InitScriptLineEnds(Handle<Script> script) {
   position = 0;
   while (position != -1 && position < src_len) {
     position = Runtime::StringMatch(src, new_line, position);
-    // If the script does not end with a line ending add the final end
-    // position as just past the last line ending.
-    array->set(array_index++,
-               Smi::FromInt(position != -1 ? position++ : src_len));
+    if (position != -1) {
+      array->set(array_index++, Smi::FromInt(position++));
+    } else if (with_imaginary_last_new_line) {
+      // If the script does not end with a line ending add the final end
+      // position as just past the last line ending.
+      array->set(array_index++, Smi::FromInt(src_len));
+    }
   }
   ASSERT(array_index == line_count);
 
-  script->set_line_ends(*array);
-  ASSERT(script->line_ends()->IsFixedArray());
+  return array;
 }
 
 
@@ -541,7 +558,7 @@ int GetScriptLineNumberSafe(Handle<Script> script, int code_pos) {
 
 
 void CustomArguments::IterateInstance(ObjectVisitor* v) {
-  v->VisitPointers(values_, values_ + 4);
+  v->VisitPointers(values_, values_ + ARRAY_SIZE(values_));
 }
 
 
@@ -737,7 +754,7 @@ bool CompileLazy(Handle<JSFunction> function,
                  ClearExceptionFlag flag) {
   CompilationInfo info(function, 0, receiver);
   bool result = CompileLazyHelper(&info, flag);
-  LOG(FunctionCreateEvent(*function));
+  PROFILE(FunctionCreateEvent(*function));
   return result;
 }
 
@@ -747,7 +764,7 @@ bool CompileLazyInLoop(Handle<JSFunction> function,
                        ClearExceptionFlag flag) {
   CompilationInfo info(function, 1, receiver);
   bool result = CompileLazyHelper(&info, flag);
-  LOG(FunctionCreateEvent(*function));
+  PROFILE(FunctionCreateEvent(*function));
   return result;
 }
 

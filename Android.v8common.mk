@@ -17,6 +17,7 @@ V8_LOCAL_SRC_FILES := \
 	src/contexts.cc \
 	src/conversions.cc \
 	src/counters.cc \
+	src/cpu-profiler.cc \
 	src/data-flow.cc \
 	src/dateparser.cc \
 	src/debug.cc \
@@ -28,6 +29,7 @@ V8_LOCAL_SRC_FILES := \
 	src/fast-codegen.cc \
 	src/fast-dtoa.cc \
 	src/flags.cc \
+	src/flow-graph.cc \
 	src/frame-element.cc \
 	src/frames.cc \
 	src/full-codegen.cc \
@@ -49,6 +51,7 @@ V8_LOCAL_SRC_FILES := \
 	src/objects.cc \
 	src/oprofile-agent.cc \
 	src/parser.cc \
+	src/profile-generator.cc \
 	src/property.cc \
 	src/regexp-macro-assembler.cc \
 	src/regexp-macro-assembler-irregexp.cc \
@@ -78,6 +81,9 @@ V8_LOCAL_SRC_FILES := \
 
 ifeq ($(TARGET_ARCH),arm)
   V8_LOCAL_SRC_FILES += \
+                src/fast-codegen.cc \
+                src/jump-target-light.cc \
+                src/virtual-frame-light.cc \
 		src/arm/assembler-arm.cc \
 		src/arm/builtins-arm.cc \
 		src/arm/codegen-arm.cc \
@@ -99,6 +105,9 @@ endif
 
 ifeq ($(TARGET_ARCH),mips)
   V8_LOCAL_SRC_FILES += \
+		src/fast-codegen.cc \
+		src/jump-target-light.cc \
+		src/virtual-frame-light.cc \
 		src/mips/assembler-mips.cc \
 		src/mips/builtins-mips.cc \
 		src/mips/codegen-mips.cc \

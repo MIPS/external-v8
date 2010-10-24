@@ -47,7 +47,9 @@ class Factory : public AllStatic {
       PretenureFlag pretenure = NOT_TENURED);
 
   // Allocate a new fixed array with non-existing entries (the hole).
-  static Handle<FixedArray> NewFixedArrayWithHoles(int size);
+  static Handle<FixedArray> NewFixedArrayWithHoles(
+      int size,
+      PretenureFlag pretenure = NOT_TENURED);
 
   static Handle<NumberDictionary> NewNumberDictionary(int at_least_space_for);
 
@@ -216,6 +218,8 @@ class Factory : public AllStatic {
   static Handle<JSFunction> NewFunction(Handle<String> name,
                                         Handle<Object> prototype);
 
+  static Handle<JSFunction> NewFunctionWithoutPrototype(Handle<String> name);
+
   static Handle<JSFunction> NewFunction(Handle<Object> super, bool is_global);
 
   static Handle<JSFunction> BaseNewFunctionFromSharedFunctionInfo(
@@ -288,6 +292,9 @@ class Factory : public AllStatic {
                                                      Handle<JSObject> prototype,
                                                      Handle<Code> code,
                                                      bool force_initial_map);
+
+  static Handle<JSFunction> NewFunctionWithoutPrototype(Handle<String> name,
+                                                        Handle<Code> code);
 
   static Handle<DescriptorArray> CopyAppendProxyDescriptor(
       Handle<DescriptorArray> array,
@@ -373,6 +380,9 @@ class Factory : public AllStatic {
  private:
   static Handle<JSFunction> NewFunctionHelper(Handle<String> name,
                                               Handle<Object> prototype);
+
+  static Handle<JSFunction> NewFunctionWithoutPrototypeHelper(
+      Handle<String> name);
 
   static Handle<DescriptorArray> CopyAppendCallbackDescriptors(
       Handle<DescriptorArray> array,

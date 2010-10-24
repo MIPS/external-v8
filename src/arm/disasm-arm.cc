@@ -34,10 +34,9 @@
 //   NameConverter converter;
 //   Disassembler d(converter);
 //   for (byte* pc = begin; pc < end;) {
-//     char buffer[128];
-//     buffer[0] = '\0';
+//     v8::internal::EmbeddedVector<char, 256> buffer;
 //     byte* prev_pc = pc;
-//     pc += d.InstructionDecode(buffer, sizeof buffer, pc);
+//     pc += d.InstructionDecode(buffer, pc);
 //     printf("%p    %08x      %s\n",
 //            prev_pc, *reinterpret_cast<int32_t*>(prev_pc), buffer);
 //   }
@@ -449,6 +448,14 @@ int Decoder::FormatOption(Instr* instr, const char* format) {
         out_buffer_pos_ += v8i::OS::SNPrintF(out_buffer_ + out_buffer_pos_,
                                             "%d", instr->ShiftAmountField());
         return 8;
+      } else if (format[3] == '0') {
+        // 'off0to3and8to19 16-bit immediate encoded in bits 19-8 and 3-0.
+        ASSERT(STRING_STARTS_WITH(format, "off0to3and8to19"));
+        out_buffer_pos_ += v8i::OS::SNPrintF(out_buffer_ + out_buffer_pos_,
+                                            "%d",
+                                            (instr->Bits(19, 8) << 4) +
+                                                instr->Bits(3, 0));
+        return 15;
       }
       // 'off8: 8-bit offset for extra load and store instructions
       ASSERT(STRING_STARTS_WITH(format, "off8"));
@@ -650,6 +657,34 @@ void Decoder::DecodeType01(Instr* instr) {
       }
       return;
     }
+  } else if ((type == 0) && instr->IsMiscType0()) {
+    if (instr->Bits(22, 21) == 1) {
+      switch (instr->Bits(7, 4)) {
+        case BX:
+          Format(instr, "bx'cond 'rm");
+          break;
+        case BLX:
+          Format(instr, "blx'cond 'rm");
+          break;
+        case BKPT:
+          Format(instr, "bkpt 'off0to3and8to19");
+          break;
+        default:
+          Unknown(instr);  // not used by V8
+          break;
+      }
+    } else if (instr->Bits(22, 21) == 3) {
+      switch (instr->Bits(7, 4)) {
+        case CLZ:
+          Format(instr, "clz'cond 'rd, 'rm");
+          break;
+        default:
+          Unknown(instr);  // not used by V8
+          break;
+      }
+    } else {
+      Unknown(instr);  // not used by V8
+    }
   } else {
     switch (instr->OpcodeField()) {
       case AND: {
@@ -696,17 +731,9 @@ void Decoder::DecodeType01(Instr* instr) {
         if (instr->HasS()) {
           Format(instr, "teq'cond 'rn, 'shift_op");
         } else {
-          switch (instr->Bits(7, 4)) {
-            case BX:
-              Format(instr, "bx'cond 'rm");
-              break;
-            case BLX:
-              Format(instr, "blx'cond 'rm");
-              break;
-            default:
-              Unknown(instr);  // not used by V8
-              break;
-          }
+          // Other instructions matching this pattern are handled in the
+          // miscellaneous instructions part above.
+          UNREACHABLE();
         }
         break;
       }
@@ -722,14 +749,9 @@ void Decoder::DecodeType01(Instr* instr) {
         if (instr->HasS()) {
           Format(instr, "cmn'cond 'rn, 'shift_op");
         } else {
-          switch (instr->Bits(7, 4)) {
-            case CLZ:
-              Format(instr, "clz'cond 'rd, 'rm");
-              break;
-            default:
-              Unknown(instr);  // not used by V8
-              break;
-          }
+          // Other instructions matching this pattern are handled in the
+          // miscellaneous instructions part above.
+          UNREACHABLE();
         }
         break;
       }

@@ -50,6 +50,14 @@ MacroAssembler::MacroAssembler(void* buffer, int size)
 void MacroAssembler::RecordWriteHelper(Register object,
                                        Register addr,
                                        Register scratch) {
+  if (FLAG_debug_code) {
+    // Check that the object is not in new space.
+    Label not_in_new_space;
+    InNewSpace(object, scratch, not_equal, &not_in_new_space);
+    Abort("new-space object passed to RecordWriteHelper");
+    bind(&not_in_new_space);
+  }
+
   Label fast;
 
   // Compute the page start address from the heap object pointer, and reuse
@@ -100,6 +108,7 @@ void MacroAssembler::InNewSpace(Register object,
                                 Register scratch,
                                 Condition cc,
                                 Label* branch) {
+  ASSERT(cc == equal || cc == not_equal);
   if (Serializer::enabled()) {
     // Can't do arithmetic on external references if it might get serialized.
     mov(scratch, Operand(object));
@@ -133,7 +142,7 @@ void MacroAssembler::RecordWrite(Register object, int offset,
 
   // First, check if a remembered set write is even needed. The tests below
   // catch stores of Smis and stores into young gen (which does not have space
-  // for the remembered set bits.
+  // for the remembered set bits).
   Label done;
 
   // Skip barrier if writing a smi.
@@ -143,7 +152,17 @@ void MacroAssembler::RecordWrite(Register object, int offset,
 
   InNewSpace(object, value, equal, &done);
 
-  if ((offset > 0) && (offset < Page::kMaxHeapObjectSize)) {
+  // The offset is relative to a tagged or untagged HeapObject pointer,
+  // so either offset or offset + kHeapObjectTag must be a
+  // multiple of kPointerSize.
+  ASSERT(IsAligned(offset, kPointerSize) ||
+         IsAligned(offset + kHeapObjectTag, kPointerSize));
+
+  // We use optimized write barrier code if the word being written to is not in
+  // a large object chunk or is in the first page of a large object chunk.
+  // We make sure that an offset is inside the right limits whether it is
+  // tagged or untagged.
+  if ((offset > 0) && (offset < Page::kMaxHeapObjectSize - kHeapObjectTag)) {
     // Compute the bit offset in the remembered set, leave it in 'value'.
     lea(value, Operand(object, offset));
     and_(value, Page::kPageAlignmentMask);
@@ -891,7 +910,9 @@ void MacroAssembler::AllocateTwoByteString(Register result,
   // Set the map, length and hash field.
   mov(FieldOperand(result, HeapObject::kMapOffset),
       Immediate(Factory::string_map()));
-  mov(FieldOperand(result, String::kLengthOffset), length);
+  mov(scratch1, length);
+  SmiTag(scratch1);
+  mov(FieldOperand(result, String::kLengthOffset), scratch1);
   mov(FieldOperand(result, String::kHashFieldOffset),
       Immediate(String::kEmptyHashField));
 }
@@ -924,7 +945,9 @@ void MacroAssembler::AllocateAsciiString(Register result,
   // Set the map, length and hash field.
   mov(FieldOperand(result, HeapObject::kMapOffset),
       Immediate(Factory::ascii_string_map()));
-  mov(FieldOperand(result, String::kLengthOffset), length);
+  mov(scratch1, length);
+  SmiTag(scratch1);
+  mov(FieldOperand(result, String::kLengthOffset), scratch1);
   mov(FieldOperand(result, String::kHashFieldOffset),
       Immediate(String::kEmptyHashField));
 }
@@ -1396,16 +1419,28 @@ void MacroAssembler::InvokeBuiltin(Builtins::JavaScript id, InvokeFlag flag) {
 
 
 void MacroAssembler::GetBuiltinEntry(Register target, Builtins::JavaScript id) {
+  ASSERT(!target.is(edi));
+
+  // Load the builtins object into target register.
+  mov(target, Operand(esi, Context::SlotOffset(Context::GLOBAL_INDEX)));
+  mov(target, FieldOperand(target, GlobalObject::kBuiltinsOffset));
+
   // Load the JavaScript builtin function from the builtins object.
-  mov(edi, Operand(esi, Context::SlotOffset(Context::GLOBAL_INDEX)));
-  mov(edi, FieldOperand(edi, GlobalObject::kBuiltinsOffset));
-  int builtins_offset =
-      JSBuiltinsObject::kJSBuiltinsOffset + (id * kPointerSize);
-  mov(edi, FieldOperand(edi, builtins_offset));
-  // Load the code entry point from the function into the target register.
-  mov(target, FieldOperand(edi, JSFunction::kSharedFunctionInfoOffset));
-  mov(target, FieldOperand(target, SharedFunctionInfo::kCodeOffset));
-  add(Operand(target), Immediate(Code::kHeaderSize - kHeapObjectTag));
+  mov(edi, FieldOperand(target, JSBuiltinsObject::OffsetOfFunctionWithId(id)));
+
+  // Load the code entry point from the builtins object.
+  mov(target, FieldOperand(target, JSBuiltinsObject::OffsetOfCodeWithId(id)));
+  if (FLAG_debug_code) {
+    // Make sure the code objects in the builtins object and in the
+    // builtin function are the same.
+    push(target);
+    mov(target, FieldOperand(edi, JSFunction::kSharedFunctionInfoOffset));
+    mov(target, FieldOperand(target, SharedFunctionInfo::kCodeOffset));
+    cmp(target, Operand(esp, 0));
+    Assert(equal, "Builtin code object changed");
+    pop(target);
+  }
+  lea(target, FieldOperand(target, Code::kHeaderSize));
 }
 
 
@@ -1523,6 +1558,21 @@ void MacroAssembler::Check(Condition cc, const char* msg) {
 }
 
 
+void MacroAssembler::CheckStackAlignment() {
+  int frame_alignment = OS::ActivationFrameAlignment();
+  int frame_alignment_mask = frame_alignment - 1;
+  if (frame_alignment > kPointerSize) {
+    ASSERT(IsPowerOf2(frame_alignment));
+    Label alignment_as_expected;
+    test(esp, Immediate(frame_alignment_mask));
+    j(zero, &alignment_as_expected);
+    // Abort if stack is not aligned.
+    int3();
+    bind(&alignment_as_expected);
+  }
+}
+
+
 void MacroAssembler::Abort(const char* msg) {
   // We want to pass the msg string like a smi to avoid GC
   // problems, however msg is not guaranteed to be aligned
@@ -1622,6 +1672,11 @@ void MacroAssembler::CallCFunction(ExternalReference function,
 
 void MacroAssembler::CallCFunction(Register function,
                                    int num_arguments) {
+  // Check stack alignment.
+  if (FLAG_debug_code) {
+    CheckStackAlignment();
+  }
+
   call(Operand(function));
   if (OS::ActivationFrameAlignment() != 0) {
     mov(esp, Operand(esp, num_arguments * kPointerSize));

@@ -42,7 +42,7 @@ namespace internal {
 template<class T>
 class Handle {
  public:
-  INLINE(Handle(T** location)) { location_ = location; }
+  INLINE(explicit Handle(T** location)) { location_ = location; }
   INLINE(explicit Handle(T* obj));
 
   INLINE(Handle()) : location_(NULL) {}
@@ -271,6 +271,11 @@ Handle<JSValue> GetScriptWrapper(Handle<Script> script);
 
 // Script line number computations.
 void InitScriptLineEnds(Handle<Script> script);
+// For string calculates an array of line end positions. If the string
+// does not end with a new line character, this character may optionally be
+// imagined.
+Handle<FixedArray> CalculateLineEnds(Handle<String> string,
+                                     bool with_imaginary_last_new_line);
 int GetScriptLineNumber(Handle<Script> script, int code_position);
 // The safe version does not make heap allocations but may work much slower.
 int GetScriptLineNumberSafe(Handle<Script> script, int code_position);

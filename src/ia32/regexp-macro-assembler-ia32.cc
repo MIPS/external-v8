@@ -38,7 +38,7 @@
 namespace v8 {
 namespace internal {
 
-#ifdef V8_NATIVE_REGEXP
+#ifndef V8_INTERPRETED_REGEXP
 /*
  * This assembler uses the following register assignment convention
  * - edx : current character. Must be loaded using LoadCurrentCharacter
@@ -832,7 +832,7 @@ Handle<Object> RegExpMacroAssemblerIA32::GetCode(Handle<String> source) {
                                        NULL,
                                        Code::ComputeFlags(Code::REGEXP),
                                        masm_->CodeObject());
-  LOG(RegExpCodeCreateEvent(*code, *source));
+  PROFILE(RegExpCodeCreateEvent(*code, *source));
   return Handle<Object>::cast(code);
 }
 
@@ -1102,19 +1102,22 @@ void RegExpMacroAssemblerIA32::BranchOrBacktrack(Condition condition,
 
 
 void RegExpMacroAssemblerIA32::SafeCall(Label* to) {
-  __ call(to);
+  Label return_to;
+  __ push(Immediate::CodeRelativeOffset(&return_to));
+  __ jmp(to);
+  __ bind(&return_to);
 }
 
 
 void RegExpMacroAssemblerIA32::SafeReturn() {
-  __ add(Operand(esp, 0), Immediate(masm_->CodeObject()));
-  __ ret(0);
+  __ pop(ebx);
+  __ add(Operand(ebx), Immediate(masm_->CodeObject()));
+  __ jmp(Operand(ebx));
 }
 
 
 void RegExpMacroAssemblerIA32::SafeCallTarget(Label* name) {
   __ bind(name);
-  __ sub(Operand(esp, 0), Immediate(masm_->CodeObject()));
 }
 
 
@@ -1195,6 +1198,6 @@ void RegExpMacroAssemblerIA32::LoadCurrentCharacterUnchecked(int cp_offset,
 
 #undef __
 
-#endif  // V8_NATIVE_REGEXP
+#endif  // V8_INTERPRETED_REGEXP
 
 }}  // namespace v8::internal

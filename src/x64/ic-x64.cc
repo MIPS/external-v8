@@ -72,11 +72,10 @@ static void GenerateDictionaryLoad(MacroAssembler* masm,
   // Check for the absence of an interceptor.
   // Load the map into r0.
   __ movq(r0, FieldOperand(r1, JSObject::kMapOffset));
-  // Test the has_named_interceptor bit in the map.
-  __ testl(FieldOperand(r0, Map::kInstanceAttributesOffset),
-          Immediate(1 << (Map::kHasNamedInterceptor + (3 * 8))));
 
-  // Jump to miss if the interceptor bit is set.
+  // Bail out if the receiver has a named interceptor.
+  __ testl(FieldOperand(r0, Map::kBitFieldOffset),
+           Immediate(1 << Map::kHasNamedInterceptor));
   __ j(not_zero, miss_label);
 
   // Bail out if we have a JS global proxy object.
@@ -201,16 +200,9 @@ static void GenerateNumberDictionaryLoad(MacroAssembler* masm,
   __ xorl(r0, r1);
 
   // Compute capacity mask.
-  const int kCapacityOffset =
-      StringDictionary::kHeaderSize +
-      StringDictionary::kCapacityIndex * kPointerSize;
-  __ movq(r1, FieldOperand(elements, kCapacityOffset));
+  __ movq(r1, FieldOperand(elements, NumberDictionary::kCapacityOffset));
   __ SmiToInteger32(r1, r1);
   __ decl(r1);
-
-  const int kElementsStartOffset =
-      NumberDictionary::kHeaderSize +
-      NumberDictionary::kElementsStartIndex * kPointerSize;
 
   // Generate an unrolled loop that performs a few probes before giving up.
   const int kProbes = 4;
@@ -231,7 +223,7 @@ static void GenerateNumberDictionaryLoad(MacroAssembler* masm,
     __ cmpq(key, FieldOperand(elements,
                               r2,
                               times_pointer_size,
-                              kElementsStartOffset));
+                              NumberDictionary::kElementsStartOffset));
     if (i != (kProbes - 1)) {
       __ j(equal, &done);
     } else {
@@ -241,14 +233,16 @@ static void GenerateNumberDictionaryLoad(MacroAssembler* masm,
 
   __ bind(&done);
   // Check that the value is a normal propety.
-  const int kDetailsOffset = kElementsStartOffset + 2 * kPointerSize;
+  const int kDetailsOffset =
+      NumberDictionary::kElementsStartOffset + 2 * kPointerSize;
   ASSERT_EQ(NORMAL, 0);
   __ Test(FieldOperand(elements, r2, times_pointer_size, kDetailsOffset),
           Smi::FromInt(PropertyDetails::TypeField::mask()));
   __ j(not_zero, miss);
 
   // Get the value at the masked, scaled index.
-  const int kValueOffset = kElementsStartOffset + kPointerSize;
+  const int kValueOffset =
+      NumberDictionary::kElementsStartOffset + kPointerSize;
   __ movq(r0, FieldOperand(elements, r2, times_pointer_size, kValueOffset));
 }
 
@@ -529,8 +523,72 @@ void KeyedLoadIC::GenerateString(MacroAssembler* masm) {
   //  -- rsp[8] : name
   //  -- rsp[16] : receiver
   // -----------------------------------
+  Label miss;
+  Label index_not_smi;
+  Label index_out_of_range;
+  Label slow_char_code;
+  Label got_char_code;
 
-  GenerateGeneric(masm);
+  Register receiver = rdx;
+  Register index = rax;
+  Register code = rbx;
+  Register scratch = rcx;
+
+  __ movq(index, Operand(rsp, 1 * kPointerSize));
+  __ movq(receiver, Operand(rsp, 2 * kPointerSize));
+
+  StringHelper::GenerateFastCharCodeAt(masm,
+                                       receiver,
+                                       index,
+                                       scratch,
+                                       code,
+                                       &miss,  // When not a string.
+                                       &index_not_smi,
+                                       &index_out_of_range,
+                                       &slow_char_code);
+  // If we didn't bail out, code register contains smi tagged char
+  // code.
+  __ bind(&got_char_code);
+  StringHelper::GenerateCharFromCode(masm, code, rax, scratch, JUMP_FUNCTION);
+#ifdef DEBUG
+  __ Abort("Unexpected fall-through from char from code tail call");
+#endif
+
+  // Check if key is a heap number.
+  __ bind(&index_not_smi);
+  __ CompareRoot(FieldOperand(index, HeapObject::kMapOffset),
+                 Heap::kHeapNumberMapRootIndex);
+  __ j(not_equal, &miss);
+
+  // Push receiver and key on the stack (now that we know they are a
+  // string and a number), and call runtime.
+  __ bind(&slow_char_code);
+  __ EnterInternalFrame();
+  __ push(receiver);
+  __ push(index);
+  __ CallRuntime(Runtime::kStringCharCodeAt, 2);
+  ASSERT(!code.is(rax));
+  __ movq(code, rax);
+  __ LeaveInternalFrame();
+
+  // Check if the runtime call returned NaN char code. If yes, return
+  // undefined. Otherwise, we can continue.
+  if (FLAG_debug_code) {
+    ASSERT(kSmiTag == 0);
+    __ JumpIfSmi(code, &got_char_code);
+    __ CompareRoot(FieldOperand(code, HeapObject::kMapOffset),
+                   Heap::kHeapNumberMapRootIndex);
+    __ Assert(equal, "StringCharCodeAt must return smi or heap number");
+  }
+  __ CompareRoot(code, Heap::kNanValueRootIndex);
+  __ j(not_equal, &got_char_code);
+
+  __ bind(&index_out_of_range);
+  __ LoadRoot(rax, Heap::kUndefinedValueRootIndex);
+  __ ret(0);
+
+  __ bind(&miss);
+  GenerateMiss(masm);
 }
 
 
@@ -1404,7 +1462,7 @@ void LoadIC::GenerateNormal(MacroAssembler* masm) {
 
   // Check for non-global object that requires access check.
   __ testl(FieldOperand(rbx, Map::kBitFieldOffset),
-          Immediate(1 << Map::kIsAccessCheckNeeded));
+           Immediate(1 << Map::kIsAccessCheckNeeded));
   __ j(not_zero, &miss);
 
   // Search the dictionary placing the result in rax.

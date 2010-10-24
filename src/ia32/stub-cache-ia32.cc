@@ -221,7 +221,6 @@ void StubCompiler::GenerateLoadStringLength(MacroAssembler* masm,
 
   // Load length from the string and convert to a smi.
   __ mov(eax, FieldOperand(receiver, String::kLengthOffset));
-  __ SmiTag(eax);
   __ ret(0);
 
   // Check if the object is a JSValue wrapper.
@@ -234,7 +233,6 @@ void StubCompiler::GenerateLoadStringLength(MacroAssembler* masm,
   __ mov(scratch2, FieldOperand(receiver, JSValue::kValueOffset));
   GenerateStringCheck(masm, scratch2, scratch1, miss, miss);
   __ mov(eax, FieldOperand(scratch2, String::kLengthOffset));
-  __ SmiTag(eax);
   __ ret(0);
 }
 
@@ -276,14 +274,15 @@ static void PushInterceptorArguments(MacroAssembler* masm,
                                      Register holder,
                                      Register name,
                                      JSObject* holder_obj) {
-  __ push(receiver);
-  __ push(holder);
   __ push(name);
   InterceptorInfo* interceptor = holder_obj->GetNamedInterceptor();
   ASSERT(!Heap::InNewSpace(interceptor));
-  __ mov(receiver, Immediate(Handle<Object>(interceptor)));
+  Register scratch = name;
+  __ mov(scratch, Immediate(Handle<Object>(interceptor)));
+  __ push(scratch);
   __ push(receiver);
-  __ push(FieldOperand(receiver, InterceptorInfo::kDataOffset));
+  __ push(holder);
+  __ push(FieldOperand(scratch, InterceptorInfo::kDataOffset));
 }
 
 
@@ -473,107 +472,6 @@ class LoadInterceptorCompiler BASE_EMBEDDED {
 
  private:
   Register name_;
-};
-
-
-// Holds information about possible function call optimizations.
-class CallOptimization BASE_EMBEDDED {
- public:
-  explicit CallOptimization(LookupResult* lookup) {
-    if (!lookup->IsProperty() || !lookup->IsCacheable() ||
-        lookup->type() != CONSTANT_FUNCTION) {
-      Initialize(NULL);
-    } else {
-      // We only optimize constant function calls.
-      Initialize(lookup->GetConstantFunction());
-    }
-  }
-
-  explicit CallOptimization(JSFunction* function) {
-    Initialize(function);
-  }
-
-  bool is_constant_call() const {
-    return constant_function_ != NULL;
-  }
-
-  JSFunction* constant_function() const {
-    ASSERT(constant_function_ != NULL);
-    return constant_function_;
-  }
-
-  bool is_simple_api_call() const {
-    return is_simple_api_call_;
-  }
-
-  FunctionTemplateInfo* expected_receiver_type() const {
-    ASSERT(is_simple_api_call_);
-    return expected_receiver_type_;
-  }
-
-  CallHandlerInfo* api_call_info() const {
-    ASSERT(is_simple_api_call_);
-    return api_call_info_;
-  }
-
-  // Returns the depth of the object having the expected type in the
-  // prototype chain between the two arguments.
-  int GetPrototypeDepthOfExpectedType(JSObject* object,
-                                      JSObject* holder) const {
-    ASSERT(is_simple_api_call_);
-    if (expected_receiver_type_ == NULL) return 0;
-    int depth = 0;
-    while (object != holder) {
-      if (object->IsInstanceOf(expected_receiver_type_)) return depth;
-      object = JSObject::cast(object->GetPrototype());
-      ++depth;
-    }
-    if (holder->IsInstanceOf(expected_receiver_type_)) return depth;
-    return kInvalidProtoDepth;
-  }
-
- private:
-  void Initialize(JSFunction* function) {
-    constant_function_ = NULL;
-    is_simple_api_call_ = false;
-    expected_receiver_type_ = NULL;
-    api_call_info_ = NULL;
-
-    if (function == NULL || !function->is_compiled()) return;
-
-    constant_function_ = function;
-    AnalyzePossibleApiFunction(function);
-  }
-
-  // Determines whether the given function can be called using the
-  // fast api call builtin.
-  void AnalyzePossibleApiFunction(JSFunction* function) {
-    SharedFunctionInfo* sfi = function->shared();
-    if (!sfi->IsApiFunction()) return;
-    FunctionTemplateInfo* info = sfi->get_api_func_data();
-
-    // Require a C++ callback.
-    if (info->call_code()->IsUndefined()) return;
-    api_call_info_ = CallHandlerInfo::cast(info->call_code());
-
-    // Accept signatures that either have no restrictions at all or
-    // only have restrictions on the receiver.
-    if (!info->signature()->IsUndefined()) {
-      SignatureInfo* signature = SignatureInfo::cast(info->signature());
-      if (!signature->args()->IsUndefined()) return;
-      if (!signature->receiver()->IsUndefined()) {
-        expected_receiver_type_ =
-            FunctionTemplateInfo::cast(signature->receiver());
-      }
-    }
-
-    is_simple_api_call_ = true;
-  }
-
-  JSFunction* constant_function_;
-  bool is_simple_api_call_;
-  FunctionTemplateInfo* expected_receiver_type_;
-  CallHandlerInfo* api_call_info_;
 };
 
 
@@ -949,6 +847,26 @@ void StubCompiler::GenerateStoreField(MacroAssembler* masm,
 }
 
 
+// Generate code to check that a global property cell is empty. Create
+// the property cell at compilation time if no cell exists for the
+// property.
+static Object* GenerateCheckPropertyCell(MacroAssembler* masm,
+                                         GlobalObject* global,
+                                         String* name,
+                                         Register scratch,
+                                         Label* miss) {
+  Object* probe = global->EnsurePropertyCell(name);
+  if (probe->IsFailure()) return probe;
+  JSGlobalPropertyCell* cell = JSGlobalPropertyCell::cast(probe);
+  ASSERT(cell->value()->IsTheHole());
+  __ mov(scratch, Immediate(Handle<Object>(cell)));
+  __ cmp(FieldOperand(scratch, JSGlobalPropertyCell::kValueOffset),
+         Immediate(Factory::the_hole_value()));
+  __ j(not_equal, miss, not_taken);
+  return cell;
+}
+
+
 #undef __
 #define __ ACCESS_MASM(masm())
 
@@ -967,21 +885,19 @@ Register StubCompiler::CheckPrototypes(JSObject* object,
                         push_at_depth, miss);
 
   // If we've skipped any global objects, it's not enough to verify
-  // that their maps haven't changed.
+  // that their maps haven't changed.  We also need to check that the
+  // property cell for the property is still empty.
   while (object != holder) {
     if (object->IsGlobalObject()) {
-      GlobalObject* global = GlobalObject::cast(object);
-      Object* probe = global->EnsurePropertyCell(name);
-      if (probe->IsFailure()) {
-        set_failure(Failure::cast(probe));
+      Object* cell = GenerateCheckPropertyCell(masm(),
+                                               GlobalObject::cast(object),
+                                               name,
+                                               scratch,
+                                               miss);
+      if (cell->IsFailure()) {
+        set_failure(Failure::cast(cell));
         return result;
       }
-      JSGlobalPropertyCell* cell = JSGlobalPropertyCell::cast(probe);
-      ASSERT(cell->value()->IsTheHole());
-      __ mov(scratch, Immediate(Handle<Object>(cell)));
-      __ cmp(FieldOperand(scratch, JSGlobalPropertyCell::kValueOffset),
-             Immediate(Factory::the_hole_value()));
-      __ j(not_equal, miss, not_taken);
     }
     object = JSObject::cast(object->GetPrototype());
   }
@@ -1045,17 +961,16 @@ bool StubCompiler::GenerateLoadCallback(JSObject* object,
   __ push(receiver);  // receiver
   __ push(reg);  // holder
   __ mov(other, Immediate(callback_handle));
-  __ push(other);
   __ push(FieldOperand(other, AccessorInfo::kDataOffset));  // data
   __ push(name_reg);  // name
   // Save a pointer to where we pushed the arguments pointer.
-  // This will be passed as the const Arguments& to the C++ callback.
+  // This will be passed as the const AccessorInfo& to the C++ callback.
   __ mov(eax, esp);
-  __ add(Operand(eax), Immediate(5 * kPointerSize));
+  __ add(Operand(eax), Immediate(4 * kPointerSize));
   __ mov(ebx, esp);
 
   // Do call through the api.
-  ASSERT_EQ(6, ApiGetterEntryStub::kStackSpace);
+  ASSERT_EQ(5, ApiGetterEntryStub::kStackSpace);
   Address getter_address = v8::ToCData<Address>(callback->getter());
   ApiFunction fun(getter_address);
   ApiGetterEntryStub stub(callback_handle, &fun);
@@ -1223,6 +1138,11 @@ Object* CallStubCompiler::CompileArrayPushCall(Object* object,
   // -----------------------------------
   ASSERT(check == RECEIVER_MAP_CHECK);
 
+  // If object is not an array, bail out to regular call.
+  if (!object->IsJSArray()) {
+    return Heap::undefined_value();
+  }
+
   Label miss;
 
   // Get the receiver from the stack.
@@ -1251,14 +1171,13 @@ Object* CallStubCompiler::CompileArrayPushCall(Object* object,
     __ j(not_equal, &miss);
 
     if (argc == 1) {  // Otherwise fall through to call builtin.
-      Label call_builtin, exit, with_rset_update,
-            attempt_to_grow_elements, finish_push;
+      Label call_builtin, exit, with_rset_update, attempt_to_grow_elements;
 
       // Get the array's length into eax and calculate new length.
       __ mov(eax, FieldOperand(edx, JSArray::kLengthOffset));
       STATIC_ASSERT(kSmiTagSize == 1);
       STATIC_ASSERT(kSmiTag == 0);
-      __ add(Operand(eax), Immediate(argc << 1));
+      __ add(Operand(eax), Immediate(Smi::FromInt(argc)));
 
       // Get the element's length into ecx.
       __ mov(ecx, FieldOperand(ebx, FixedArray::kLengthOffset));
@@ -1277,8 +1196,6 @@ Object* CallStubCompiler::CompileArrayPushCall(Object* object,
                                FixedArray::kHeaderSize - argc * kPointerSize));
       __ mov(ecx, Operand(esp, argc * kPointerSize));
       __ mov(Operand(edx, 0), ecx);
-
-      __ bind(&finish_push);
 
       // Check if value is a smi.
       __ test(ecx, Immediate(kSmiTagMask));
@@ -1313,15 +1230,18 @@ Object* CallStubCompiler::CompileArrayPushCall(Object* object,
       __ j(not_equal, &call_builtin);
       __ add(Operand(ecx), Immediate(kAllocationDelta * kPointerSize));
       __ cmp(ecx, Operand::StaticVariable(new_space_allocation_limit));
-      __ j(greater, &call_builtin);
+      __ j(above, &call_builtin);
 
       // We fit and could grow elements.
       __ mov(Operand::StaticVariable(new_space_allocation_top), ecx);
       __ mov(ecx, Operand(esp, argc * kPointerSize));
+
+      // Push the argument...
       __ mov(Operand(edx, 0), ecx);
+      // ... and fill the rest with holes.
       for (int i = 1; i < kAllocationDelta; i++) {
         __ mov(Operand(edx, i * kPointerSize),
-               Immediate(Factory::undefined_value()));
+               Immediate(Factory::the_hole_value()));
       }
 
       // Restore receiver to edx as finish sequence assumes it's here.
@@ -1332,7 +1252,8 @@ Object* CallStubCompiler::CompileArrayPushCall(Object* object,
              Immediate(kAllocationDelta));
       __ mov(FieldOperand(edx, JSArray::kLengthOffset), eax);
 
-      __ jmp(&finish_push);
+      // Elements are in new space, so no remembered set updates are necessary.
+      __ ret((argc + 1) * kPointerSize);
 
       __ bind(&call_builtin);
     }
@@ -1370,7 +1291,12 @@ Object* CallStubCompiler::CompileArrayPopCall(Object* object,
   // -----------------------------------
   ASSERT(check == RECEIVER_MAP_CHECK);
 
-  Label miss, empty_array, call_builtin;
+  // If object is not an array, bail out to regular call.
+  if (!object->IsJSArray()) {
+    return Heap::undefined_value();
+  }
+
+  Label miss, return_undefined, call_builtin;
 
   // Get the receiver from the stack.
   const int argc = arguments().immediate();
@@ -1379,7 +1305,6 @@ Object* CallStubCompiler::CompileArrayPopCall(Object* object,
   // Check that the receiver isn't a smi.
   __ test(edx, Immediate(kSmiTagMask));
   __ j(zero, &miss);
-
   CheckPrototypes(JSObject::cast(object), edx,
                   holder, ebx,
                   eax, name, &miss);
@@ -1395,7 +1320,7 @@ Object* CallStubCompiler::CompileArrayPopCall(Object* object,
   // Get the array's length into ecx and calculate new length.
   __ mov(ecx, FieldOperand(edx, JSArray::kLengthOffset));
   __ sub(Operand(ecx), Immediate(Smi::FromInt(1)));
-  __ j(negative, &empty_array);
+  __ j(negative, &return_undefined);
 
   // Get the last element.
   STATIC_ASSERT(kSmiTagSize == 1);
@@ -1416,12 +1341,11 @@ Object* CallStubCompiler::CompileArrayPopCall(Object* object,
          Immediate(Factory::the_hole_value()));
   __ ret((argc + 1) * kPointerSize);
 
-  __ bind(&empty_array);
+  __ bind(&return_undefined);
   __ mov(eax, Immediate(Factory::undefined_value()));
   __ ret((argc + 1) * kPointerSize);
 
   __ bind(&call_builtin);
-
   __ TailCallExternalReference(ExternalReference(Builtins::c_ArrayPop),
                                argc + 1,
                                1);
@@ -1457,7 +1381,11 @@ Object* CallStubCompiler::CompileCallConstant(Object* object,
   if (function_info->HasCustomCallGenerator()) {
     CustomCallGenerator generator =
         ToCData<CustomCallGenerator>(function_info->function_data());
-    return generator(this, object, holder, function, name, check);
+    Object* result = generator(this, object, holder, function, name, check);
+    // undefined means bail out to regular compiler.
+    if (!result->IsUndefined()) {
+      return result;
+    }
   }
 
   Label miss_in_smi_check;
@@ -1946,6 +1874,48 @@ Object* KeyedStoreStubCompiler::CompileStoreField(JSObject* object,
   return GetCode(transition == NULL ? FIELD : MAP_TRANSITION, name);
 }
 
+
+Object* LoadStubCompiler::CompileLoadNonexistent(String* name,
+                                                 JSObject* object,
+                                                 JSObject* last) {
+  // ----------- S t a t e -------------
+  //  -- eax    : receiver
+  //  -- ecx    : name
+  //  -- esp[0] : return address
+  // -----------------------------------
+  Label miss;
+
+  // Check that the receiver isn't a smi.
+  __ test(eax, Immediate(kSmiTagMask));
+  __ j(zero, &miss, not_taken);
+
+  // Check the maps of the full prototype chain. Also check that
+  // global property cells up to (but not including) the last object
+  // in the prototype chain are empty.
+  CheckPrototypes(object, eax, last, ebx, edx, name, &miss);
+
+  // If the last object in the prototype chain is a global object,
+  // check that the global property cell is empty.
+  if (last->IsGlobalObject()) {
+    Object* cell = GenerateCheckPropertyCell(masm(),
+                                             GlobalObject::cast(last),
+                                             name,
+                                             edx,
+                                             &miss);
+    if (cell->IsFailure()) return cell;
+  }
+
+  // Return undefined if maps of the full prototype chain are still the
+  // same and no global property with this name contains a value.
+  __ mov(eax, Factory::undefined_value());
+  __ ret(0);
+
+  __ bind(&miss);
+  GenerateLoadMiss(masm(), Code::LOAD_IC);
+
+  // Return the generated code.
+  return GetCode(NONEXISTENT, Heap::empty_string());
+}
 
 
 Object* LoadStubCompiler::CompileLoadField(JSObject* object,

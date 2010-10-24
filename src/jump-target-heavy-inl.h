@@ -25,31 +25,27 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef V8_NUMBER_INFO_INL_H_
-#define V8_NUMBER_INFO_INL_H_
+#ifndef V8_JUMP_TARGET_HEAVY_INL_H_
+#define V8_JUMP_TARGET_HEAVY_INL_H_
 
-#include "number-info.h"
-#include "objects-inl.h"
+#include "virtual-frame-inl.h"
 
 namespace v8 {
 namespace internal {
 
-
-NumberInfo NumberInfo::TypeFromValue(Handle<Object> value) {
-  NumberInfo info;
-  if (value->IsSmi()) {
-    info = NumberInfo::Smi();
-  } else if (value->IsHeapNumber()) {
-    info = NumberInfo::IsInt32Double(HeapNumber::cast(*value)->value())
-        ? NumberInfo::Integer32()
-        : NumberInfo::Double();
-  } else {
-    info = NumberInfo::Unknown();
+void JumpTarget::InitializeEntryElement(int index, FrameElement* target) {
+  FrameElement* element = &entry_frame_->elements_[index];
+  element->clear_copied();
+  if (target->is_register()) {
+    entry_frame_->set_register_location(target->reg(), index);
+  } else if (target->is_copy()) {
+    entry_frame_->elements_[target->index()].set_copied();
   }
-  return info;
+  if (direction_ == BIDIRECTIONAL && !target->is_copy()) {
+    element->set_type_info(TypeInfo::Unknown());
+  }
 }
-
 
 } }  // namespace v8::internal
 
-#endif  // V8_NUMBER_INFO_INL_H_
+#endif  // V8_JUMP_TARGET_HEAVY_INL_H_

@@ -74,14 +74,17 @@ enum ContextLookupFlags {
   V(INSTANTIATE_FUN_INDEX, JSFunction, instantiate_fun) \
   V(CONFIGURE_INSTANCE_FUN_INDEX, JSFunction, configure_instance_fun) \
   V(FUNCTION_MAP_INDEX, Map, function_map) \
+  V(FUNCTION_WITHOUT_PROTOTYPE_MAP_INDEX, Map, function_without_prototype_map) \
   V(FUNCTION_INSTANCE_MAP_INDEX, Map, function_instance_map) \
   V(JS_ARRAY_MAP_INDEX, Map, js_array_map)\
+  V(REGEXP_RESULT_MAP_INDEX, Map, regexp_result_map)\
   V(ARGUMENTS_BOILERPLATE_INDEX, JSObject, arguments_boilerplate) \
   V(MESSAGE_LISTENERS_INDEX, JSObject, message_listeners) \
   V(MAKE_MESSAGE_FUN_INDEX, JSFunction, make_message_fun) \
   V(GET_STACK_TRACE_LINE_INDEX, JSFunction, get_stack_trace_line_fun) \
   V(CONFIGURE_GLOBAL_INDEX, JSFunction, configure_global_fun) \
   V(FUNCTION_CACHE_INDEX, JSObject, function_cache) \
+  V(JSFUNCTION_RESULT_CACHES_INDEX, FixedArray, jsfunction_result_caches) \
   V(RUNTIME_CONTEXT_INDEX, Context, runtime_context) \
   V(CALL_AS_FUNCTION_DELEGATE_INDEX, JSFunction, call_as_function_delegate) \
   V(CALL_AS_CONSTRUCTOR_DELEGATE_INDEX, JSFunction, \
@@ -175,7 +178,9 @@ class Context: public FixedArray {
     SECURITY_TOKEN_INDEX,
     ARGUMENTS_BOILERPLATE_INDEX,
     JS_ARRAY_MAP_INDEX,
+    REGEXP_RESULT_MAP_INDEX,
     FUNCTION_MAP_INDEX,
+    FUNCTION_WITHOUT_PROTOTYPE_MAP_INDEX,
     FUNCTION_INSTANCE_MAP_INDEX,
     INITIAL_OBJECT_PROTOTYPE_INDEX,
     BOOLEAN_FUNCTION_INDEX,
@@ -203,6 +208,7 @@ class Context: public FixedArray {
     GET_STACK_TRACE_LINE_INDEX,
     CONFIGURE_GLOBAL_INDEX,
     FUNCTION_CACHE_INDEX,
+    JSFUNCTION_RESULT_CACHES_INDEX,
     RUNTIME_CONTEXT_INDEX,
     CALL_AS_FUNCTION_DELEGATE_INDEX,
     CALL_AS_CONSTRUCTOR_DELEGATE_INDEX,

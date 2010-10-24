@@ -76,6 +76,7 @@
 //             - MapCache
 //           - Context
 //           - GlobalContext
+//           - JSFunctionResultCache
 //       - String
 //         - SeqString
 //           - SeqAsciiString
@@ -605,6 +606,7 @@ class Object BASE_EMBEDDED {
   inline bool IsHashTable();
   inline bool IsDictionary();
   inline bool IsSymbolTable();
+  inline bool IsJSFunctionResultCache();
   inline bool IsCompilationCacheTable();
   inline bool IsCodeCacheHashTable();
   inline bool IsMapCache();
@@ -1115,6 +1117,8 @@ class HeapNumber: public HeapObject {
   static const uint32_t kSignMask = 0x80000000u;
   static const uint32_t kExponentMask = 0x7ff00000u;
   static const uint32_t kMantissaMask = 0xfffffu;
+  static const int kMantissaBits = 52;
+  static const int KExponentBits = 11;
   static const int kExponentBias = 1023;
   static const int kExponentShift = 20;
   static const int kMantissaBitsInTopWord = 20;
@@ -2307,6 +2311,35 @@ class NumberDictionary: public Dictionary<NumberDictionaryShape, uint32_t> {
 };
 
 
+// JSFunctionResultCache caches results of some JSFunction invocation.
+// It is a fixed array with fixed structure:
+//   [0]: factory function
+//   [1]: finger index
+//   [2]: current cache size
+//   [3]: dummy field.
+// The rest of array are key/value pairs.
+class JSFunctionResultCache: public FixedArray {
+ public:
+  static const int kFactoryIndex = 0;
+  static const int kFingerIndex = kFactoryIndex + 1;
+  static const int kCacheSizeIndex = kFingerIndex + 1;
+  static const int kDummyIndex = kCacheSizeIndex + 1;
+  static const int kEntriesIndex = kDummyIndex + 1;
+
+  static const int kEntrySize = 2;  // key + value
+
+  inline void MakeZeroSize();
+  inline void Clear();
+
+  // Casting
+  static inline JSFunctionResultCache* cast(Object* obj);
+
+#ifdef DEBUG
+  void JSFunctionResultCacheVerify();
+#endif
+};
+
+
 // ByteArray represents fixed sized byte arrays.  Used by the outside world,
 // such as PCRE, and also by the memory allocator and garbage collector to
 // fill in free blocks in the heap.
@@ -2834,6 +2867,12 @@ class Map: public HeapObject {
   inline void set_non_instance_prototype(bool value);
   inline bool has_non_instance_prototype();
 
+  // Tells whether function has special prototype property. If not, prototype
+  // property will not be created when accessed (will return undefined),
+  // and construction from this function will not be allowed.
+  inline void set_function_with_prototype(bool value);
+  inline bool function_with_prototype();
+
   // Tells whether the instance with this map should be ignored by the
   // __proto__ accessor.
   inline void set_is_hidden_prototype() {
@@ -3010,6 +3049,7 @@ class Map: public HeapObject {
 
   // Bit positions for bit field 2
   static const int kIsExtensible = 0;
+  static const int kFunctionWithPrototype = 1;
 
   // Layout of the default cache. It holds alternating name and code objects.
   static const int kCodeCacheEntrySize = 2;
@@ -3346,10 +3386,6 @@ class JSFunction: public JSObject {
   inline Code* code();
   inline void set_code(Code* value);
 
-  // Tells whether this function is a context-independent boilerplate
-  // function.
-  inline bool IsBoilerplate();
-
   // Tells whether this function is builtin.
   inline bool IsBuiltin();
 
@@ -3379,6 +3415,11 @@ class JSFunction: public JSObject {
   inline Object* instance_prototype();
   Object* SetInstancePrototype(Object* value);
   Object* SetPrototype(Object* value);
+
+  // After prototype is removed, it will not be created when accessed, and
+  // [[Construct]] from this function will not be allowed.
+  Object* RemovePrototype();
+  inline bool should_have_prototype();
 
   // Accessor for this function's initial map's [[class]]
   // property. This is primarily used by ECMA native functions.  This
@@ -3525,6 +3566,10 @@ class JSBuiltinsObject: public GlobalObject {
   inline Object* javascript_builtin(Builtins::JavaScript id);
   inline void set_javascript_builtin(Builtins::JavaScript id, Object* value);
 
+  // Accessors for code of the runtime routines written in JavaScript.
+  inline Code* javascript_builtin_code(Builtins::JavaScript id);
+  inline void set_javascript_builtin_code(Builtins::JavaScript id, Code* value);
+
   // Casting.
   static inline JSBuiltinsObject* cast(Object* obj);
 
@@ -3535,11 +3580,23 @@ class JSBuiltinsObject: public GlobalObject {
 #endif
 
   // Layout description.  The size of the builtins object includes
-  // room for one pointer per runtime routine written in javascript.
+  // room for two pointers per runtime routine written in javascript
+  // (function and code object).
   static const int kJSBuiltinsCount = Builtins::id_count;
   static const int kJSBuiltinsOffset = GlobalObject::kHeaderSize;
+  static const int kJSBuiltinsCodeOffset =
+      GlobalObject::kHeaderSize + (kJSBuiltinsCount * kPointerSize);
   static const int kSize =
-      kJSBuiltinsOffset + (kJSBuiltinsCount * kPointerSize);
+      kJSBuiltinsCodeOffset + (kJSBuiltinsCount * kPointerSize);
+
+  static int OffsetOfFunctionWithId(Builtins::JavaScript id) {
+    return kJSBuiltinsOffset + id * kPointerSize;
+  }
+
+  static int OffsetOfCodeWithId(Builtins::JavaScript id) {
+    return kJSBuiltinsCodeOffset + id * kPointerSize;
+  }
+
  private:
   DISALLOW_IMPLICIT_CONSTRUCTORS(JSBuiltinsObject);
 };
@@ -3667,6 +3724,13 @@ class JSRegExp: public JSObject {
       FixedArray::kHeaderSize + kIrregexpUC16CodeIndex * kPointerSize;
   static const int kIrregexpCaptureCountOffset =
       FixedArray::kHeaderSize + kIrregexpCaptureCountIndex * kPointerSize;
+
+  // In-object fields.
+  static const int kSourceFieldIndex = 0;
+  static const int kGlobalFieldIndex = 1;
+  static const int kIgnoreCaseFieldIndex = 2;
+  static const int kMultilineFieldIndex = 3;
+  static const int kLastIndexFieldIndex = 4;
 };
 
 
@@ -3919,6 +3983,13 @@ class String: public HeapObject {
   inline bool IsAsciiRepresentation();
   inline bool IsTwoByteRepresentation();
 
+  // Check whether this string is an external two-byte string that in
+  // fact contains only ascii characters.
+  //
+  // Such strings may appear when the embedder prefers two-byte
+  // representations even for ascii data.
+  inline bool IsExternalTwoByteStringWithAsciiChars();
+
   // Get and set individual two byte chars in the string.
   inline void Set(int index, uint16_t value);
   // Get individual two byte char in the string.  Repeated calls
@@ -4017,7 +4088,7 @@ class String: public HeapObject {
 
   // Layout description.
   static const int kLengthOffset = HeapObject::kHeaderSize;
-  static const int kHashFieldOffset = kLengthOffset + kIntSize;
+  static const int kHashFieldOffset = kLengthOffset + kPointerSize;
   static const int kSize = kHashFieldOffset + kIntSize;
   // Notice: kSize is not pointer-size aligned if pointers are 64-bit.
 
@@ -4615,6 +4686,26 @@ class JSArray: public JSObject {
   void Expand(int minimum_size_of_backing_fixed_array);
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(JSArray);
+};
+
+
+// JSRegExpResult is just a JSArray with a specific initial map.
+// This initial map adds in-object properties for "index" and "input"
+// properties, as assigned by RegExp.prototype.exec, which allows
+// faster creation of RegExp exec results.
+// This class just holds constants used when creating the result.
+// After creation the result must be treated as a JSArray in all regards.
+class JSRegExpResult: public JSArray {
+ public:
+  // Offsets of object fields.
+  static const int kIndexOffset = JSArray::kSize;
+  static const int kInputOffset = kIndexOffset + kPointerSize;
+  static const int kSize = kInputOffset + kPointerSize;
+  // Indices of in-object properties.
+  static const int kIndexIndex = 0;
+  static const int kInputIndex = 1;
+ private:
+  DISALLOW_IMPLICIT_CONSTRUCTORS(JSRegExpResult);
 };
 
 

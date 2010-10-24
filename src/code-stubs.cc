@@ -61,14 +61,10 @@ void CodeStub::GenerateCode(MacroAssembler* masm) {
 void CodeStub::RecordCodeGeneration(Code* code, MacroAssembler* masm) {
   code->set_major_key(MajorKey());
 
-#ifdef ENABLE_OPROFILE_AGENT
-  // Register the generated stub with the OPROFILE agent.
-  OProfileAgent::CreateNativeCodeRegion(GetName(),
-                                        code->instruction_start(),
-                                        code->instruction_size());
-#endif
-
-  LOG(CodeCreateEvent(Logger::STUB_TAG, code, GetName()));
+  OPROFILE(CreateNativeCodeRegion(GetName(),
+                                  code->instruction_start(),
+                                  code->instruction_size()));
+  PROFILE(CodeCreateEvent(Logger::STUB_TAG, code, GetName()));
   Counters::total_stubs_code_size.Increment(code->instruction_size());
 
 #ifdef ENABLE_DISASSEMBLER

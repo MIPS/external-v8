@@ -581,11 +581,12 @@ static inline void MemsetPointer(T** dest, T* value, int counter) {
 #endif
 
 #if defined(__GNUC__) && defined(STOS)
-  asm("cld;"
+  asm volatile(
+      "cld;"
       "rep ; " STOS
-      : /* no output */
-      : "c" (counter), "a" (value), "D" (dest)
-      : /* no clobbered list as all inputs are considered clobbered */);
+      : "+&c" (counter), "+&D" (dest)
+      : "a" (value)
+      : "memory", "cc");
 #else
   for (int i = 0; i < counter; i++) {
     dest[i] = value;
@@ -593,6 +594,27 @@ static inline void MemsetPointer(T** dest, T* value, int counter) {
 #endif
 
 #undef STOS
+}
+
+
+// Copies data from |src| to |dst|.  The data spans MUST not overlap.
+inline void CopyWords(Object** dst, Object** src, int num_words) {
+  ASSERT(Min(dst, src) + num_words <= Max(dst, src));
+  ASSERT(num_words > 0);
+
+  // Use block copying memcpy if the segment we're copying is
+  // enough to justify the extra call/setup overhead.
+  static const int kBlockCopyLimit = 16;
+
+  if (num_words >= kBlockCopyLimit) {
+    memcpy(dst, src, num_words * kPointerSize);
+  } else {
+    int remaining = num_words;
+    do {
+      remaining--;
+      *dst++ = *src++;
+    } while (remaining > 0);
+  }
 }
 
 
@@ -635,7 +657,7 @@ inline Dest BitCast(const Source& source) {
   return dest;
 }
 
-
 } }  // namespace v8::internal
+
 
 #endif  // V8_UTILS_H_

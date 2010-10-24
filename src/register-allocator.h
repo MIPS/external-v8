@@ -29,7 +29,7 @@
 #define V8_REGISTER_ALLOCATOR_H_
 
 #include "macro-assembler.h"
-#include "number-info-inl.h"
+#include "type-info.h"
 
 #if V8_TARGET_ARCH_IA32
 #include "ia32/register-allocator-ia32.h"
@@ -65,13 +65,13 @@ class Result BASE_EMBEDDED {
   Result() { invalidate(); }
 
   // Construct a register Result.
-  explicit Result(Register reg, NumberInfo info = NumberInfo::Unknown());
+  explicit Result(Register reg, TypeInfo info = TypeInfo::Unknown());
 
   // Construct a Result whose value is a compile-time constant.
   explicit Result(Handle<Object> value) {
-    NumberInfo info = NumberInfo::TypeFromValue(value);
+    TypeInfo info = TypeInfo::TypeFromValue(value);
     value_ = TypeField::encode(CONSTANT)
-        | NumberInfoField::encode(info.ToInt())
+        | TypeInfoField::encode(info.ToInt())
         | IsUntaggedInt32Field::encode(false)
         | DataField::encode(ConstantList()->length());
     ConstantList()->Add(value);
@@ -103,8 +103,8 @@ class Result BASE_EMBEDDED {
 
   void invalidate() { value_ = TypeField::encode(INVALID); }
 
-  inline NumberInfo number_info() const;
-  inline void set_number_info(NumberInfo info);
+  inline TypeInfo type_info() const;
+  inline void set_type_info(TypeInfo info);
   inline bool is_number() const;
   inline bool is_smi() const;
   inline bool is_integer32() const;
@@ -155,7 +155,7 @@ class Result BASE_EMBEDDED {
 
   // Declare BitFields with template parameters <type, start, size>.
   class TypeField: public BitField<Type, 0, 2> {};
-  class NumberInfoField : public BitField<int, 2, 6> {};
+  class TypeInfoField : public BitField<int, 2, 6> {};
   class IsUntaggedInt32Field : public BitField<bool, 8, 1> {};
   class DataField: public BitField<uint32_t, 9, 32 - 9> {};
 
@@ -213,7 +213,11 @@ class RegisterFile BASE_EMBEDDED {
   }
 
  private:
-  static const int kNumRegisters = RegisterAllocatorConstants::kNumRegisters;
+  // C++ doesn't like zero length arrays, so we make the array length 1 even if
+  // we don't need it.
+  static const int kNumRegisters =
+      (RegisterAllocatorConstants::kNumRegisters == 0) ?
+      1 : RegisterAllocatorConstants::kNumRegisters;
 
   int ref_counts_[kNumRegisters];
 

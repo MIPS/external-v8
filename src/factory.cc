@@ -43,9 +43,11 @@ Handle<FixedArray> Factory::NewFixedArray(int size, PretenureFlag pretenure) {
 }
 
 
-Handle<FixedArray> Factory::NewFixedArrayWithHoles(int size) {
+Handle<FixedArray> Factory::NewFixedArrayWithHoles(int size,
+                                                   PretenureFlag pretenure) {
   ASSERT(0 <= size);
-  CALL_HEAP_FUNCTION(Heap::AllocateFixedArrayWithHoles(size), FixedArray);
+  CALL_HEAP_FUNCTION(Heap::AllocateFixedArrayWithHoles(size, pretenure),
+                     FixedArray);
 }
 
 
@@ -312,7 +314,6 @@ Handle<JSFunction> Factory::NewFunctionFromSharedFunctionInfo(
                   context->global_context());
   }
   result->set_literals(*literals);
-  ASSERT(!result->IsBoilerplate());
   return result;
 }
 
@@ -512,6 +513,16 @@ Handle<JSFunction> Factory::NewFunctionWithPrototype(Handle<String> name,
 }
 
 
+Handle<JSFunction> Factory::NewFunctionWithoutPrototype(Handle<String> name,
+                                                        Handle<Code> code) {
+  Handle<JSFunction> function = NewFunctionWithoutPrototype(name);
+  function->set_code(*code);
+  ASSERT(!function->has_initial_map());
+  ASSERT(!function->has_prototype());
+  return function;
+}
+
+
 Handle<Code> Factory::NewCode(const CodeDesc& desc,
                               ZoneScopeInfo* sinfo,
                               Code::Flags flags,
@@ -699,6 +710,24 @@ Handle<JSFunction> Factory::NewFunctionHelper(Handle<String> name,
 Handle<JSFunction> Factory::NewFunction(Handle<String> name,
                                         Handle<Object> prototype) {
   Handle<JSFunction> fun = NewFunctionHelper(name, prototype);
+  fun->set_context(Top::context()->global_context());
+  return fun;
+}
+
+
+Handle<JSFunction> Factory::NewFunctionWithoutPrototypeHelper(
+    Handle<String> name) {
+  Handle<SharedFunctionInfo> function_share = NewSharedFunctionInfo(name);
+  CALL_HEAP_FUNCTION(Heap::AllocateFunction(
+                         *Top::function_without_prototype_map(),
+                         *function_share,
+                         *the_hole_value()),
+                     JSFunction);
+}
+
+
+Handle<JSFunction> Factory::NewFunctionWithoutPrototype(Handle<String> name) {
+  Handle<JSFunction> fun = NewFunctionWithoutPrototypeHelper(name);
   fun->set_context(Top::context()->global_context());
   return fun;
 }

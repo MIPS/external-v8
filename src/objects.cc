@@ -1189,8 +1189,7 @@ String* JSObject::class_name() {
 
 String* JSObject::constructor_name() {
   if (IsJSFunction()) {
-    return JSFunction::cast(this)->IsBoilerplate() ?
-      Heap::function_class_symbol() : Heap::closure_symbol();
+    return Heap::closure_symbol();
   }
   if (map()->constructor()->IsJSFunction()) {
     JSFunction* constructor = JSFunction::cast(map()->constructor());
@@ -2519,9 +2518,8 @@ bool JSObject::ReferencesObject(Object* obj) {
       break;
   }
 
-  // For functions check the context. Boilerplate functions do
-  // not have to be traversed since they have no real context.
-  if (IsJSFunction() && !JSFunction::cast(this)->IsBoilerplate()) {
+  // For functions check the context.
+  if (IsJSFunction()) {
     // Get the constructor function for arguments array.
     JSObject* arguments_boilerplate =
         Top::context()->global_context()->arguments_boilerplate();
@@ -4660,13 +4658,38 @@ bool String::IsEqualTo(Vector<const char> str) {
 }
 
 
+template <typename schar>
+static inline uint32_t HashSequentialString(const schar* chars, int length) {
+  StringHasher hasher(length);
+  if (!hasher.has_trivial_hash()) {
+    int i;
+    for (i = 0; hasher.is_array_index() && (i < length); i++) {
+      hasher.AddCharacter(chars[i]);
+    }
+    for (; i < length; i++) {
+      hasher.AddCharacterNoIndex(chars[i]);
+    }
+  }
+  return hasher.GetHashField();
+}
+
+
 uint32_t String::ComputeAndSetHash() {
   // Should only be called if hash code has not yet been computed.
   ASSERT(!(hash_field() & kHashComputedMask));
 
+  const int len = length();
+
   // Compute the hash code.
-  StringInputBuffer buffer(this);
-  uint32_t field = ComputeHashField(&buffer, length());
+  uint32_t field = 0;
+  if (StringShape(this).IsSequentialAscii()) {
+    field = HashSequentialString(SeqAsciiString::cast(this)->GetChars(), len);
+  } else if (StringShape(this).IsSequentialTwoByte()) {
+    field = HashSequentialString(SeqTwoByteString::cast(this)->GetChars(), len);
+  } else {
+    StringInputBuffer buffer(this);
+    field = ComputeHashField(&buffer, len);
+  }
 
   // Store the hash code in the object.
   set_hash_field(field);
@@ -4883,6 +4906,7 @@ Object* JSFunction::SetInstancePrototype(Object* value) {
 
 
 Object* JSFunction::SetPrototype(Object* value) {
+  ASSERT(should_have_prototype());
   Object* construct_prototype = value;
 
   // If the value is not a JSObject, store the value in the map's
@@ -4905,6 +4929,14 @@ Object* JSFunction::SetPrototype(Object* value) {
   }
 
   return SetInstancePrototype(construct_prototype);
+}
+
+
+Object* JSFunction::RemovePrototype() {
+  ASSERT(map() == context()->global_context()->function_map());
+  set_map(context()->global_context()->function_without_prototype_map());
+  set_prototype_or_initial_map(Heap::the_hole_value());
+  return this;
 }
 
 

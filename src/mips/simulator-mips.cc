@@ -144,7 +144,7 @@ void Debugger::Stop(Instruction* instr) {
   sim_->set_pc(sim_->get_pc() + Instruction::kInstructionSize);
   Debug();
 }
-#endif  // def GENERATED_CODE_COVERAGE
+#endif  // GENERATED_CODE_COVERAGE
 
 
 int32_t Debugger::GetRegisterValue(int regnum) {
@@ -1321,7 +1321,7 @@ void Simulator::DecodeTypeRegister(Instruction* instr) {
             uint16_t msb = rd_reg;
             // Interpret sa field as 5-bit lsb of extract.
             uint16_t lsb = sa;
-            uint16_t size = msb - lsb + 1;
+            uint16_t size = msb + 1;
             uint16_t mask = (1 << size) - 1;
             alu_out = (rs_u & (mask << lsb)) >> lsb;
           }
@@ -2115,5 +2115,5 @@ uintptr_t Simulator::PopAddress() {
 
 } }  // namespace assembler::mips
 
-#endif  // !defined(__mips)
+#endif  // __mips
 

@@ -47,14 +47,69 @@ namespace internal {
 
 class VirtualFrame : public ZoneObject {
  public:
+  class RegisterAllocationScope;
   // A utility class to introduce a scope where the virtual frame is
   // expected to remain spilled. The constructor spills the code
-  // generator's current frame, but no attempt is made to require it
-  // to stay spilled. It is intended as documentation while the code
-  // generator is being transformed.
+  // generator's current frame, and keeps it spilled.
   class SpilledScope BASE_EMBEDDED {
    public:
+    explicit SpilledScope(VirtualFrame* frame)
+      : old_is_spilled_(is_spilled_) {
+      if (frame != NULL) {
+        if (!is_spilled_) {
+          frame->SpillAll();
+        } else {
+          frame->AssertIsSpilled();
+        }
+      }
+      is_spilled_ = true;
+    }
+    ~SpilledScope() {
+      is_spilled_ = old_is_spilled_;
+    }
+    static bool is_spilled() { return is_spilled_; }
+
+   private:
+    static bool is_spilled_;
+    int old_is_spilled_;
+
     SpilledScope() {}
+
+    friend class RegisterAllocationScope;
+  };
+
+  class RegisterAllocationScope BASE_EMBEDDED {
+   public:
+    // A utility class to introduce a scope where the virtual frame
+    // is not spilled, ie. where register allocation occurs.  Eventually
+    // when RegisterAllocationScope is ubiquitous it can be removed
+    // along with the (by then unused) SpilledScope class.
+    explicit RegisterAllocationScope(CodeGenerator* cgen)
+      : cgen_(cgen),
+        old_is_spilled_(SpilledScope::is_spilled_) {
+      SpilledScope::is_spilled_ = false;
+      if (old_is_spilled_) {
+        VirtualFrame* frame = cgen->frame();
+        if (frame != NULL) {
+          frame->AssertIsSpilled();
+        }
+      }
+    }
+    ~RegisterAllocationScope() {
+      SpilledScope::is_spilled_ = old_is_spilled_;
+      if (old_is_spilled_) {
+        VirtualFrame* frame = cgen_->frame();
+        if (frame != NULL) {
+          frame->SpillAll();
+        }
+      }
+    }
+
+   private:
+    CodeGenerator* cgen_;
+    bool old_is_spilled_;
+
+    RegisterAllocationScope() {}
   };
 
   // An illegal index into the virtual frame.
@@ -69,39 +124,46 @@ class VirtualFrame : public ZoneObject {
   CodeGenerator* cgen() { return CodeGeneratorScope::Current(); }
   MacroAssembler* masm() { return cgen()->masm(); }
 
-  // Create a duplicate of an existing valid frame element.
-  FrameElement CopyElementAt(int index,
-                             NumberInfo info = NumberInfo::Unknown());
-
   // The number of elements on the virtual frame.
-  int element_count() { return elements_.length(); }
+  int element_count() { return element_count_; }
 
   // The height of the virtual expression stack.
   int height() {
     return element_count() - expression_base_index();
   }
 
-  int register_location(int num) {
-    ASSERT(num >= 0 && num < RegisterAllocator::kNumRegisters);
-    return register_locations_[num];
-  }
-
-  int register_location(Register reg) {
-    return register_locations_[RegisterAllocator::ToNumber(reg)];
-  }
-
-  void set_register_location(Register reg, int index) {
-    register_locations_[RegisterAllocator::ToNumber(reg)] = index;
-  }
-
   bool is_used(int num) {
-    ASSERT(num >= 0 && num < RegisterAllocator::kNumRegisters);
-    return register_locations_[num] != kIllegalIndex;
+    switch (num) {
+      case 0: {  // a0.
+        return kA0InUse[top_of_stack_state_];
+      }
+      case 1: {  // a1.
+        return kA1InUse[top_of_stack_state_];
+      }
+      case 2:
+      case 3:
+      case 4:
+      case 5:
+      case 6: {  // a2 to a3, t0 to t2.
+        ASSERT(num - kFirstAllocatedRegister < kNumberOfAllocatedRegisters);
+        ASSERT(num >= kFirstAllocatedRegister);
+        if ((register_allocation_map_ &
+             (1 << (num - kFirstAllocatedRegister))) == 0) {
+          return false;
+        } else {
+          return true;
+        }
+      }
+      default: {
+        ASSERT(num < kFirstAllocatedRegister ||
+               num >= kFirstAllocatedRegister + kNumberOfAllocatedRegisters);
+        return false;
+      }
+    }
   }
 
   bool is_used(Register reg) {
-    return register_locations_[RegisterAllocator::ToNumber(reg)]
-        != kIllegalIndex;
+    return is_used(RegisterAllocator::ToNumber(reg));
   }
 
   // Add extra in-memory elements to the top of the frame to match an actual
@@ -110,38 +172,34 @@ class VirtualFrame : public ZoneObject {
   void Adjust(int count);
 
   // Forget elements from the top of the frame to match an actual frame (eg,
-  // the frame after a runtime call). No code is emitted.
+  // the frame after a runtime call). No code is emitted except to bring the
+  // frame to a spilled state.
   void Forget(int count) {
-    ASSERT(count >= 0);
-    ASSERT(stack_pointer_ == element_count() - 1);
-    stack_pointer_ -= count;
-    // On mips, all elements are in memory, so there is no extra bookkeeping
-    // (registers, copies, etc.) beyond dropping the elements.
-    elements_.Rewind(stack_pointer_ + 1);
+    SpillAll();
+    element_count_ -= count;
   }
-
-  // Forget count elements from the top of the frame and adjust the stack
-  // pointer downward. This is used, for example, before merging frames at
-  // break, continue, and return targets.
-  void ForgetElements(int count);
 
   // Spill all values from the frame to memory.
   void SpillAll();
 
+  void AssertIsSpilled() {
+    ASSERT(top_of_stack_state_ == NO_TOS_REGISTERS);
+    ASSERT(register_allocation_map_ == 0);
+  }
+
+  void AssertIsNotSpilled() {
+    ASSERT(!SpilledScope::is_spilled());
+  }
+
   // Spill all occurrences of a specific register from the frame.
   void Spill(Register reg) {
-    if (is_used(reg)) SpillElementAt(register_location(reg));
+    UNIMPLEMENTED();
   }
 
   // Spill all occurrences of an arbitrary register if possible. Return the
   // register spilled or no_reg if it was not possible to free any register
-  // (ie, they all have frame-external references).
+  // (ie, they all have frame-external references). Unimplemented.
   Register SpillAnyRegister();
-
-  // Prepare this virtual frame for merging to an expected frame by
-  // performing some state changes that do not require generating
-  // code. It is guaranteed that no code will be generated.
-  void PrepareMergeTo(VirtualFrame* expected);
 
   // Make this virtual frame have a state identical to an expected virtual
   // frame. As a side effect, code may be emitted to make this frame match
@@ -153,10 +211,7 @@ class VirtualFrame : public ZoneObject {
   // registers. Used when the code generator's frame is switched from this
   // one to NULL by an unconditional jump.
   void DetachFromCodeGenerator() {
-    RegisterAllocator* cgen_allocator = cgen()->allocator();
-    for (int i = 0; i < RegisterAllocator::kNumRegisters; i++) {
-      if (is_used(i)) cgen_allocator->Unuse(i);
-    }
+    AssertIsSpilled();
   }
 
   // (Re)attach a frame to its code generator. This informs the register
@@ -164,10 +219,7 @@ class VirtualFrame : public ZoneObject {
   // Used when a code generator's frame is switched from NULL to this one by
   // binding a label.
   void AttachToCodeGenerator() {
-    RegisterAllocator* cgen_allocator = cgen()->allocator();
-    for (int i = 0; i < RegisterAllocator::kNumRegisters; i++) {
-      if (is_used(i)) cgen_allocator->Unuse(i);
-    }
+    AssertIsSpilled();
   }
 
   // Emit code for the physical JS entry and exit frame sequences. After
@@ -181,7 +233,7 @@ class VirtualFrame : public ZoneObject {
   // dropping all non-locals elements in the virtual frame. This
   // avoids generating unnecessary merge code when jumping to the
   // shared return site. Emits code for spills.
-  void PrepareForReturn();
+  inline void PrepareForReturn();
 
   // Number of local variables after when we use a loop for allocating.
   static const int kLocalVarBound = 5;
@@ -190,25 +242,15 @@ class VirtualFrame : public ZoneObject {
   void AllocateStackSlots();
 
   // The current top of the expression stack as an assembly operand.
-  MemOperand Top() { return MemOperand(sp, 0); }
+  MemOperand Top() {
+    AssertIsSpilled();
+    return MemOperand(sp, 0);
+  }
 
   // An element of the expression stack as an assembly operand.
   MemOperand ElementAt(int index) {
+    AssertIsSpilled();
     return MemOperand(sp, index * kPointerSize);
-  }
-
-  // Random-access store to a frame-top relative frame element. The result
-  // becomes owned by the frame and is invalidated.
-  void SetElementAt(int index, Result* value);
-
-  // Set a frame element to a constant. The index is frame-top relative.
-  void SetElementAt(int index, Handle<Object> value) {
-    Result temp(value);
-    SetElementAt(index, &temp);
-  }
-
-  void PushElementAt(int index) {
-    PushFrameSlotAt(element_count() - index - 1);
   }
 
   // A frame-allocated local as an assembly operand.
@@ -218,42 +260,14 @@ class VirtualFrame : public ZoneObject {
     return MemOperand(fp, kLocal0Offset - index * kPointerSize);
   }
 
-  // Push a copy of the value of a local frame slot on top of the frame.
-  void PushLocalAt(int index) {
-    PushFrameSlotAt(local0_index() + index);
-  }
-
-  // Push the value of a local frame slot on top of the frame and invalidate
-  // the local slot. The slot should be written to before trying to read
-  // from it again.
-  void TakeLocalAt(int index) {
-    TakeFrameSlotAt(local0_index() + index);
-  }
-
-  // Store the top value on the virtual frame into a local frame slot. The
-  // value is left in place on top of the frame.
-  void StoreToLocalAt(int index) {
-    StoreToFrameSlotAt(local0_index() + index);
-  }
-
   // Push the address of the receiver slot on the frame.
   void PushReceiverSlotAddress();
 
   // The function frame slot.
   MemOperand Function() { return MemOperand(fp, kFunctionOffset); }
 
-  // Push the function on top of the frame.
-  void PushFunction() { PushFrameSlotAt(function_index()); }
-
   // The context frame slot.
   MemOperand Context() { return MemOperand(fp, kContextOffset); }
-
-  // Save the value of the cp register to the context frame slot.
-  void SaveContextRegister();
-
-  // Restore the cp register from the value of the context frame
-  // slot.
-  void RestoreContextRegister();
 
   // A parameter as an assembly operand.
   MemOperand ParameterAt(int index) {
@@ -261,24 +275,6 @@ class VirtualFrame : public ZoneObject {
     ASSERT(-1 <= index);  // -1 is the receiver.
     ASSERT(index <= parameter_count());
     return MemOperand(fp, (1 + parameter_count() - index) * kPointerSize);
-  }
-
-  // Push a copy of the value of a parameter frame slot on top of the frame.
-  void PushParameterAt(int index) {
-    PushFrameSlotAt(param0_index() + index);
-  }
-
-  // Push the value of a paramter frame slot on top of the frame and
-  // invalidate the parameter slot. The slot should be written to before
-  // trying to read from it again.
-  void TakeParameterAt(int index) {
-    TakeFrameSlotAt(param0_index() + index);
-  }
-
-  // Store the top value on the virtual frame into a parameter frame slot.
-  // The value is left in place on top of the frame.
-  void StoreToParameterAt(int index) {
-    StoreToFrameSlotAt(param0_index() + index);
   }
 
   // The receiver frame slot.
@@ -290,13 +286,14 @@ class VirtualFrame : public ZoneObject {
   // Call stub given the number of arguments it expects on (and
   // removes from) the stack.
   void CallStub(CodeStub* stub, int arg_count) {
-    PrepareForCall(arg_count, arg_count);
-    RawCallStub(stub);
+    if (arg_count != 0) Forget(arg_count);
+    ASSERT(cgen()->HasValidEntryRegisters());
+    masm()->CallStub(stub);
   }
 
-  void CallStub(CodeStub* stub, Result* arg);
-
-  void CallStub(CodeStub* stub, Result* arg0, Result* arg1);
+  // Call JS function from top of the stack with arguments
+  // taken from the stack.
+  void CallJSFunction(int arg_count);
 
   // Call runtime given the number of arguments expected on (and
   // removed from) the stack.
@@ -307,19 +304,26 @@ class VirtualFrame : public ZoneObject {
   void DebugBreak();
 #endif
 
-  // Call runtime with sp aligned to 8 bytes.
-  void CallAlignedRuntime(Runtime::Function* f, int arg_count);
-  void CallAlignedRuntime(Runtime::FunctionId id, int arg_count);
-
   // Invoke builtin given the number of arguments it expects on (and
   // removes from) the stack.
   void InvokeBuiltin(Builtins::JavaScript id,
                      InvokeJSFlags flag,
                      int arg_count);
 
+  // Call load IC. Receiver is on the stack. Result is returned in v0.
+  void CallLoadIC(Handle<String> name, RelocInfo::Mode mode);
+
+  // Call keyed load IC. Key and receiver are on the stack. Result is returned
+  // in v0.
+  void CallKeyedLoadIC();
+
+  // Call keyed store IC. Key and receiver are on the stack and the value is in
+  // a0. Result is returned in v0 (and a0).
+  void CallKeyedStoreIC();
+
   // Call into an IC stub given the number of arguments it removes
-  // from the stack. Register arguments are passed as results and
-  // consumed by the call.
+  // from the stack. Register arguments to the IC stub are implicit,
+  // and depend on the type of IC stub.
   void CallCodeObject(Handle<Code> ic,
                       RelocInfo::Mode rmode,
                       int dropped_args);
@@ -328,20 +332,32 @@ class VirtualFrame : public ZoneObject {
   // emit code to affect the physical frame. Does not clobber any registers
   // excepting possibly the stack pointer.
   void Drop(int count);
-  // Similar to VirtualFrame::Drop but we don't modify the actual stack.
-  // This is because we need to manually restore sp to the correct position.
-  void DropFromVFrameOnly(int count);
 
   // Drop one element.
   void Drop() { Drop(1); }
-  void DropFromVFrameOnly() { DropFromVFrameOnly(1); }
 
-  // Duplicate the top element of the frame.
-  void Dup() { PushFrameSlotAt(element_count() - 1); }
+  // Pop an element from the top of the expression stack. Discards
+  // the result.
+  void Pop();
 
-  // Pop an element from the top of the expression stack. Returns a
-  // Result, which may be a constant or a register.
-  Result Pop();
+  // Pop an element from the top of the expression stack.  The register
+  // will be one normally used for the top of stack register allocation
+  // so you can't hold on to it if you push on the stack.
+  Register PopToRegister(Register but_not_to_this_one = no_reg);
+
+  // Look at the top of the stack.  The register returned is aliased and
+  // must be copied to a scratch register before modification.
+  Register Peek();
+
+  // Duplicate the top of stack.
+  void Dup();
+
+  // Flushes all registers, but it puts a copy of the top-of-stack in a0.
+  void SpillAllButCopyTOSToA0();
+
+  // Flushes all registers, but it puts a copy of the top-of-stack in a1
+  // and the next value on the stack in a0.
+  void SpillAllButCopyTOSToA1A0();
 
   // Pop and save an element from the top of the expression stack and
   // emit a corresponding pop instruction.
@@ -350,40 +366,35 @@ class VirtualFrame : public ZoneObject {
   void EmitMultiPop(RegList regs);
   void EmitMultiPopReversed(RegList regs);
 
+
+  // Takes the top two elements and puts them in a0 (top element) and a1
+  // (second element).
+  void PopToA1A0();
+
+  // Takes the top element and puts it in a1.
+  void PopToA1();
+
+  // Takes the top element and puts it in a0.
+  void PopToA0();
+
   // Push an element on top of the expression stack and emit a
   // corresponding push instruction.
   void EmitPush(Register reg);
+  void EmitPush(Operand operand);
+  void EmitPush(MemOperand operand);
+  void EmitPushRoot(Heap::RootListIndex index);
+
+  // Get a register which is free and which must be immediately used to
+  // push on the top of the stack.
+  Register GetTOSRegister();
+
   // Same but for multiple registers.
   void EmitMultiPush(RegList regs);
   void EmitMultiPushReversed(RegList regs);
 
-  // Push an element on the virtual frame.
-  inline void Push(Register reg, NumberInfo info = NumberInfo::Unknown());
-  inline void Push(Handle<Object> value);
-  inline void Push(Smi* value);
-
-  // Pushing a result invalidates it (its contents become owned by the frame).
-  void Push(Result* result) {
-    if (result->is_register()) {
-      Push(result->reg());
-    } else {
-      ASSERT(result->is_constant());
-      Push(result->handle());
-    }
-    result->Unuse();
-  }
-
-  // Nip removes zero or more elements from immediately below the top
-  // of the frame, leaving the previous top-of-frame value on top of
-  // the frame. Nip(k) is equivalent to x = Pop(), Drop(k), Push(x).
-  inline void Nip(int num_dropped);
-
-  // This pushes 4 arguments slots on the stack and saves asked 'a' registers
-  // 'a' registers are arguments register a0 to a3.
-  void EmitArgumentSlots(RegList reglist);
-
-  inline void SetTypeForLocalAt(int index, NumberInfo info);
-  inline void SetTypeForParamAt(int index, NumberInfo info);
+  static Register scratch0() { return t4; }
+  static Register scratch1() { return t5; }
+  static Register scratch2() { return t6; }
 
  private:
   static const int kLocal0Offset = JavaScriptFrameConstants::kLocal0Offset;
@@ -393,15 +404,40 @@ class VirtualFrame : public ZoneObject {
   static const int kHandlerSize = StackHandlerConstants::kSize / kPointerSize;
   static const int kPreallocatedElements = 5 + 8;  // 8 expression stack slots.
 
-  ZoneList<FrameElement> elements_;
+  // 5 states for the top of stack, which can be in memory or in a0 and a1.
+  enum TopOfStack { NO_TOS_REGISTERS, A0_TOS, A1_TOS, A1_A0_TOS, A0_A1_TOS,
+                    TOS_STATES};
+  static const int kMaxTOSRegisters = 2;
+
+  static const bool kA0InUse[TOS_STATES];
+  static const bool kA1InUse[TOS_STATES];
+  static const int kVirtualElements[TOS_STATES];
+  static const TopOfStack kStateAfterPop[TOS_STATES];
+  static const TopOfStack kStateAfterPush[TOS_STATES];
+  static const Register kTopRegister[TOS_STATES];
+  static const Register kBottomRegister[TOS_STATES];
+
+  // We allocate up to 5 locals in registers.
+  static const int kNumberOfAllocatedRegisters = 5;
+  // r2 to r6 are allocated to locals.
+  static const int kFirstAllocatedRegister = 2;
+
+  static const Register kAllocatedRegisters[kNumberOfAllocatedRegisters];
+
+  static Register AllocatedRegister(int r) {
+    ASSERT(r >= 0 && r < kNumberOfAllocatedRegisters);
+    return kAllocatedRegisters[r];
+  }
+
+  // The number of elements on the stack frame.
+  int element_count_;
+  TopOfStack top_of_stack_state_:3;
+  int register_allocation_map_:kNumberOfAllocatedRegisters;
 
   // The index of the element that is at the processor's stack pointer
-  // (the sp register).
-  int stack_pointer_;
-
-  // The index of the register frame element using each register, or
-  // kIllegalIndex if a register is not on the frame.
-  int register_locations_[RegisterAllocator::kNumRegisters];
+  // (the sp register).  For now since everything is in memory it is given
+  // by the number of elements on the not-very-virtual stack frame.
+  int stack_pointer() { return element_count_ - 1; }
 
   // The number of frame-allocated locals and parameters respectively.
   int parameter_count() { return cgen()->scope()->num_parameters(); }
@@ -439,101 +475,20 @@ class VirtualFrame : public ZoneObject {
     return (frame_pointer() - index) * kPointerSize;
   }
 
-  // Record an occurrence of a register in the virtual frame. This has the
-  // effect of incrementing the register's external reference count and
-  // of updating the index of the register's location in the frame.
-  void Use(Register reg, int index) {
-    ASSERT(!is_used(reg));
-    set_register_location(reg, index);
-    cgen()->allocator()->Use(reg);
-  }
-
-  // Record that a register reference has been dropped from the frame. This
-  // decrements the register's external reference count and invalidates the
-  // index of the register's location in the frame.
-  void Unuse(Register reg) {
-    ASSERT(is_used(reg));
-    set_register_location(reg, kIllegalIndex);
-    cgen()->allocator()->Unuse(reg);
-  }
-
-  // Spill the element at a particular index---write it to memory if
-  // necessary, free any associated register, and forget its value if
-  // constant.
-  void SpillElementAt(int index);
-
-  // Sync the element at a particular index. If it is a register or
-  // constant that disagrees with the value on the stack, write it to memory.
-  // Keep the element type as register or constant, and clear the dirty bit.
-  void SyncElementAt(int index);
-
-  // Sync the range of elements in [begin, end] with memory.
-  void SyncRange(int begin, int end);
-
-  // Sync a single unsynced element that lies beneath or at the stack pointer.
-  void SyncElementBelowStackPointer(int index);
-
-  // Sync a single unsynced element that lies just above the stack pointer.
-  void SyncElementByPushing(int index);
-
-  // Push a copy of a frame slot (typically a local or parameter) on top of
-  // the frame.
-  inline void PushFrameSlotAt(int index);
-
-  // Push a the value of a frame slot (typically a local or parameter) on
-  // top of the frame and invalidate the slot.
-  void TakeFrameSlotAt(int index);
-
-  // Store the value on top of the frame to a frame slot (typically a local
-  // or parameter).
-  void StoreToFrameSlotAt(int index);
-
   // Spill all elements in registers. Spill the top spilled_args elements
   // on the frame. Sync all other frame elements.
   // Then drop dropped_args elements from the virtual frame, to match
   // the effect of an upcoming call that will drop them from the stack.
   void PrepareForCall(int spilled_args, int dropped_args);
 
-  // Move frame elements currently in registers or constants, that
-  // should be in memory in the expected frame, to memory.
-  void MergeMoveRegistersToMemory(VirtualFrame* expected);
-
-  // Make the register-to-register moves necessary to
-  // merge this frame with the expected frame.
-  // Register to memory moves must already have been made,
-  // and memory to register moves must follow this call.
-  // This is because some new memory-to-register moves are
-  // created in order to break cycles of register moves.
-  // Used in the implementation of MergeTo().
-  void MergeMoveRegistersToRegisters(VirtualFrame* expected);
-
-  // Make the memory-to-register and constant-to-register moves
-  // needed to make this frame equal the expected frame.
-  // Called after all register-to-memory and register-to-register
-  // moves have been made. After this function returns, the frames
-  // should be equal.
-  void MergeMoveMemoryToRegisters(VirtualFrame* expected);
-
-  // Invalidates a frame slot (puts an invalid frame element in it).
-  // Copies on the frame are correctly handled, and if this slot was
-  // the backing store of copies, the index of the new backing store
-  // is returned. Otherwise, returns kIllegalIndex.
-  // Register counts are correctly updated.
-  int InvalidateFrameSlotAt(int index);
-
-  // Call a code stub that has already been prepared for calling (via
-  // PrepareForCall).
-  void RawCallStub(CodeStub* stub);
-
-  // Calls a code object which has already been prepared for calling
-  // (via PrepareForCall).
-  void RawCallCodeObject(Handle<Code> code, RelocInfo::Mode rmode);
+  // If all top-of-stack registers are in use then the lowest one is pushed
+  // onto the physical stack and made free.
+  void EnsureOneFreeTOSRegister();
 
   inline bool Equals(VirtualFrame* other);
 
-  // Classes that need raw access to the elements_ array.
-  friend class DeferredCode;
   friend class JumpTarget;
+  friend class DeferredCode;
 };
 
 

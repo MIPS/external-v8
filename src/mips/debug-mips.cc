@@ -132,9 +132,9 @@ static void Generate_DebugBreakCallHelper(MacroAssembler* masm,
 void Debug::GenerateLoadICDebugBreak(MacroAssembler* masm) {
   // Calling convention for IC load (from ic-mips.cc).
   // ----------- S t a t e -------------
-  //  -- a0    : receiver
   //  -- a2    : name
   //  -- ra    : return address
+  //  -- a0    : receiver
   //  -- [sp]  : receiver
   // -----------------------------------
   // Registers a0 and a2 contain objects that need to be pushed on the
@@ -162,7 +162,7 @@ void Debug::GenerateKeyedLoadICDebugBreak(MacroAssembler* masm) {
   //  -- ra     : return address
   //  -- sp[0]  : key
   //  -- sp[4]  : receiver
-  Generate_DebugBreakCallHelper(masm, 0);
+  Generate_DebugBreakCallHelper(masm, a0.bit());
 }
 
 
@@ -215,7 +215,23 @@ void Debug::GenerateStubNoRegistersDebugBreak(MacroAssembler* masm) {
 }
 
 
+void Debug::GeneratePlainReturnLiveEdit(MacroAssembler* masm) {
+  masm->Abort("LiveEdit frame dropping is not supported on mips");
+}
+
+void Debug::GenerateFrameDropperLiveEdit(MacroAssembler* masm) {
+  masm->Abort("LiveEdit frame dropping is not supported on mips");
+}
+
 #undef __
+
+
+void Debug::SetUpFrameDropperFrame(StackFrame* bottom_js_frame,
+                                   Handle<Code> code) {
+  UNREACHABLE();
+}
+const int Debug::kFrameDropperFrameSize = -1;
+
 
 #endif  // ENABLE_DEBUGGER_SUPPORT
 

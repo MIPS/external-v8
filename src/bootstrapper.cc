@@ -228,6 +228,7 @@ class Genesis BASE_EMBEDDED {
   // Used for creating a context from scratch.
   void InstallNativeFunctions();
   bool InstallNatives();
+  void InstallJSFunctionResultCaches();
   // Used both for deserialized and from-scratch contexts to add the extensions
   // provided.
   static bool InstallExtensions(Handle<Context> global_context,
@@ -247,9 +248,13 @@ class Genesis BASE_EMBEDDED {
   void TransferNamedProperties(Handle<JSObject> from, Handle<JSObject> to);
   void TransferIndexedProperties(Handle<JSObject> from, Handle<JSObject> to);
 
+  enum PrototypePropertyMode {
+    DONT_ADD_PROTOTYPE,
+    ADD_READONLY_PROTOTYPE,
+    ADD_WRITEABLE_PROTOTYPE
+  };
   Handle<DescriptorArray> ComputeFunctionInstanceDescriptor(
-      bool make_prototype_read_only,
-      bool make_prototype_enumerable = false);
+      PrototypePropertyMode prototypeMode);
   void MakeFunctionInstancePrototypeWritable();
 
   static bool CompileBuiltin(int index);
@@ -329,7 +334,8 @@ static Handle<JSFunction> InstallFunction(Handle<JSObject> target,
                                           bool is_ecma_native) {
   Handle<String> symbol = Factory::LookupAsciiSymbol(name);
   Handle<Code> call_code = Handle<Code>(Builtins::builtin(call));
-  Handle<JSFunction> function =
+  Handle<JSFunction> function = prototype.is_null() ?
+    Factory::NewFunctionWithoutPrototype(symbol, call_code) :
     Factory::NewFunctionWithPrototype(symbol,
                                       type,
                                       instance_size,
@@ -345,23 +351,23 @@ static Handle<JSFunction> InstallFunction(Handle<JSObject> target,
 
 
 Handle<DescriptorArray> Genesis::ComputeFunctionInstanceDescriptor(
-    bool make_prototype_read_only,
-    bool make_prototype_enumerable) {
+    PrototypePropertyMode prototypeMode) {
   Handle<DescriptorArray> result = Factory::empty_descriptor_array();
 
-  // Add prototype.
-  PropertyAttributes attributes = static_cast<PropertyAttributes>(
-      (make_prototype_enumerable ? 0 : DONT_ENUM)
-      | DONT_DELETE
-      | (make_prototype_read_only ? READ_ONLY : 0));
-  result =
-      Factory::CopyAppendProxyDescriptor(
-          result,
-          Factory::prototype_symbol(),
-          Factory::NewProxy(&Accessors::FunctionPrototype),
-          attributes);
+  if (prototypeMode != DONT_ADD_PROTOTYPE) {
+    PropertyAttributes attributes = static_cast<PropertyAttributes>(
+        DONT_ENUM |
+        DONT_DELETE |
+        (prototypeMode == ADD_READONLY_PROTOTYPE ? READ_ONLY : 0));
+    result =
+        Factory::CopyAppendProxyDescriptor(
+            result,
+            Factory::prototype_symbol(),
+            Factory::NewProxy(&Accessors::FunctionPrototype),
+            attributes);
+  }
 
-  attributes =
+  PropertyAttributes attributes =
       static_cast<PropertyAttributes>(DONT_ENUM | DONT_DELETE | READ_ONLY);
   // Add length.
   result =
@@ -406,14 +412,29 @@ Handle<JSFunction> Genesis::CreateEmptyFunction() {
   // Please note that the prototype property for function instances must be
   // writable.
   Handle<DescriptorArray> function_map_descriptors =
-      ComputeFunctionInstanceDescriptor(false, false);
+      ComputeFunctionInstanceDescriptor(ADD_WRITEABLE_PROTOTYPE);
   fm->set_instance_descriptors(*function_map_descriptors);
+  fm->set_function_with_prototype(true);
+
+  // Functions with this map will not have a 'prototype' property, and
+  // can not be used as constructors.
+  Handle<Map> function_without_prototype_map =
+      Factory::NewMap(JS_FUNCTION_TYPE, JSFunction::kSize);
+  global_context()->set_function_without_prototype_map(
+      *function_without_prototype_map);
+  Handle<DescriptorArray> function_without_prototype_map_descriptors =
+      ComputeFunctionInstanceDescriptor(DONT_ADD_PROTOTYPE);
+  function_without_prototype_map->set_instance_descriptors(
+      *function_without_prototype_map_descriptors);
+  function_without_prototype_map->set_function_with_prototype(false);
 
   // Allocate the function map first and then patch the prototype later
   fm = Factory::NewMap(JS_FUNCTION_TYPE, JSFunction::kSize);
   global_context()->set_function_map(*fm);
-  function_map_descriptors = ComputeFunctionInstanceDescriptor(true);
+  function_map_descriptors =
+      ComputeFunctionInstanceDescriptor(ADD_READONLY_PROTOTYPE);
   fm->set_instance_descriptors(*function_map_descriptors);
+  fm->set_function_with_prototype(true);
 
   Handle<String> object_name = Handle<String>(Heap::Object_symbol());
 
@@ -441,7 +462,7 @@ Handle<JSFunction> Genesis::CreateEmptyFunction() {
   // 262 15.3.4.
   Handle<String> symbol = Factory::LookupAsciiSymbol("Empty");
   Handle<JSFunction> empty_function =
-      Factory::NewFunction(symbol, Factory::null_value());
+      Factory::NewFunctionWithoutPrototype(symbol);
 
   // --- E m p t y ---
   Handle<Code> code =
@@ -456,10 +477,14 @@ Handle<JSFunction> Genesis::CreateEmptyFunction() {
   empty_function->shared()->DontAdaptArguments();
   global_context()->function_map()->set_prototype(*empty_function);
   global_context()->function_instance_map()->set_prototype(*empty_function);
+  global_context()->function_without_prototype_map()->
+      set_prototype(*empty_function);
 
   // Allocate the function map first and then patch the prototype later
-  Handle<Map> empty_fm = Factory::CopyMapDropDescriptors(fm);
-  empty_fm->set_instance_descriptors(*function_map_descriptors);
+  Handle<Map> empty_fm = Factory::CopyMapDropDescriptors(
+      function_without_prototype_map);
+  empty_fm->set_instance_descriptors(
+      *function_without_prototype_map_descriptors);
   empty_fm->set_prototype(global_context()->object_function()->prototype());
   empty_function->set_map(*empty_fm);
   return empty_function;
@@ -723,8 +748,68 @@ void Genesis::InitializeGlobal(Handle<GlobalObject> inner_global,
         InstallFunction(global, "RegExp", JS_REGEXP_TYPE, JSRegExp::kSize,
                         Top::initial_object_prototype(), Builtins::Illegal,
                         true);
-
     global_context()->set_regexp_function(*regexp_fun);
+
+    ASSERT(regexp_fun->has_initial_map());
+    Handle<Map> initial_map(regexp_fun->initial_map());
+
+    ASSERT_EQ(0, initial_map->inobject_properties());
+
+    Handle<DescriptorArray> descriptors = Factory::NewDescriptorArray(5);
+    PropertyAttributes final =
+        static_cast<PropertyAttributes>(DONT_ENUM | DONT_DELETE | READ_ONLY);
+    int enum_index = 0;
+    {
+      // ECMA-262, section 15.10.7.1.
+      FieldDescriptor field(Heap::source_symbol(),
+                            JSRegExp::kSourceFieldIndex,
+                            final,
+                            enum_index++);
+      descriptors->Set(0, &field);
+    }
+    {
+      // ECMA-262, section 15.10.7.2.
+      FieldDescriptor field(Heap::global_symbol(),
+                            JSRegExp::kGlobalFieldIndex,
+                            final,
+                            enum_index++);
+      descriptors->Set(1, &field);
+    }
+    {
+      // ECMA-262, section 15.10.7.3.
+      FieldDescriptor field(Heap::ignore_case_symbol(),
+                            JSRegExp::kIgnoreCaseFieldIndex,
+                            final,
+                            enum_index++);
+      descriptors->Set(2, &field);
+    }
+    {
+      // ECMA-262, section 15.10.7.4.
+      FieldDescriptor field(Heap::multiline_symbol(),
+                            JSRegExp::kMultilineFieldIndex,
+                            final,
+                            enum_index++);
+      descriptors->Set(3, &field);
+    }
+    {
+      // ECMA-262, section 15.10.7.5.
+      PropertyAttributes writable =
+          static_cast<PropertyAttributes>(DONT_ENUM | DONT_DELETE);
+      FieldDescriptor field(Heap::last_index_symbol(),
+                            JSRegExp::kLastIndexFieldIndex,
+                            writable,
+                            enum_index++);
+      descriptors->Set(4, &field);
+    }
+    descriptors->SetNextEnumerationIndex(enum_index);
+    descriptors->Sort();
+
+    initial_map->set_inobject_properties(5);
+    initial_map->set_pre_allocated_property_fields(5);
+    initial_map->set_unused_property_fields(0);
+    initial_map->set_instance_size(
+        initial_map->instance_size() + 5 * kPointerSize);
+    initial_map->set_instance_descriptors(*descriptors);
   }
 
   {  // -- J S O N
@@ -1154,12 +1239,12 @@ bool Genesis::InstallNatives() {
     // Install the call and the apply functions.
     Handle<JSFunction> call =
         InstallFunction(proto, "call", JS_OBJECT_TYPE, JSObject::kHeaderSize,
-                        Factory::NewJSObject(Top::object_function(), TENURED),
+                        Handle<JSObject>::null(),
                         Builtins::FunctionCall,
                         false);
     Handle<JSFunction> apply =
         InstallFunction(proto, "apply", JS_OBJECT_TYPE, JSObject::kHeaderSize,
-                        Factory::NewJSObject(Top::object_function(), TENURED),
+                        Handle<JSObject>::null(),
                         Builtins::FunctionApply,
                         false);
 
@@ -1177,11 +1262,103 @@ bool Genesis::InstallNatives() {
     apply->shared()->set_length(2);
   }
 
+  // Create a constructor for RegExp results (a variant of Array that
+  // predefines the two properties index and match).
+  {
+    // RegExpResult initial map.
+
+    // Find global.Array.prototype to inherit from.
+    Handle<JSFunction> array_constructor(global_context()->array_function());
+    Handle<JSObject> array_prototype(
+        JSObject::cast(array_constructor->instance_prototype()));
+
+    // Add initial map.
+    Handle<Map> initial_map =
+        Factory::NewMap(JS_ARRAY_TYPE, JSRegExpResult::kSize);
+    initial_map->set_constructor(*array_constructor);
+
+    // Set prototype on map.
+    initial_map->set_non_instance_prototype(false);
+    initial_map->set_prototype(*array_prototype);
+
+    // Update map with length accessor from Array and add "index" and "input".
+    Handle<Map> array_map(global_context()->js_array_map());
+    Handle<DescriptorArray> array_descriptors(
+        array_map->instance_descriptors());
+    ASSERT_EQ(1, array_descriptors->number_of_descriptors());
+
+    Handle<DescriptorArray> reresult_descriptors =
+        Factory::NewDescriptorArray(3);
+
+    reresult_descriptors->CopyFrom(0, *array_descriptors, 0);
+
+    int enum_index = 0;
+    {
+      FieldDescriptor index_field(Heap::index_symbol(),
+                                  JSRegExpResult::kIndexIndex,
+                                  NONE,
+                                  enum_index++);
+      reresult_descriptors->Set(1, &index_field);
+    }
+
+    {
+      FieldDescriptor input_field(Heap::input_symbol(),
+                                  JSRegExpResult::kInputIndex,
+                                  NONE,
+                                  enum_index++);
+      reresult_descriptors->Set(2, &input_field);
+    }
+    reresult_descriptors->Sort();
+
+    initial_map->set_inobject_properties(2);
+    initial_map->set_pre_allocated_property_fields(2);
+    initial_map->set_unused_property_fields(0);
+    initial_map->set_instance_descriptors(*reresult_descriptors);
+
+    global_context()->set_regexp_result_map(*initial_map);
+  }
+
 #ifdef DEBUG
   builtins->Verify();
 #endif
 
   return true;
+}
+
+
+// Do not forget to update macros.py with named constant
+// of cache id.
+#define JSFUNCTION_RESULT_CACHE_LIST(F) \
+  F(16, global_context()->regexp_function())
+
+
+static FixedArray* CreateCache(int size, JSFunction* factory) {
+  // Caches are supposed to live for a long time, allocate in old space.
+  int array_size = JSFunctionResultCache::kEntriesIndex + 2 * size;
+  // Cannot use cast as object is not fully initialized yet.
+  JSFunctionResultCache* cache = reinterpret_cast<JSFunctionResultCache*>(
+      *Factory::NewFixedArrayWithHoles(array_size, TENURED));
+  cache->set(JSFunctionResultCache::kFactoryIndex, factory);
+  cache->MakeZeroSize();
+  return cache;
+}
+
+
+void Genesis::InstallJSFunctionResultCaches() {
+  const int kNumberOfCaches = 0 +
+#define F(size, func) + 1
+    JSFUNCTION_RESULT_CACHE_LIST(F)
+#undef F
+  ;
+
+  Handle<FixedArray> caches = Factory::NewFixedArray(kNumberOfCaches, TENURED);
+
+  int index = 0;
+#define F(size, func) caches->set(index++, CreateCache(size, func));
+    JSFUNCTION_RESULT_CACHE_LIST(F)
+#undef F
+
+  global_context()->set_jsfunction_result_caches(*caches);
 }
 
 
@@ -1337,6 +1514,7 @@ bool Genesis::InstallJSBuiltins(Handle<JSBuiltinsObject> builtins) {
     Handle<SharedFunctionInfo> shared
         = Handle<SharedFunctionInfo>(function->shared());
     if (!EnsureCompiled(shared, CLEAR_EXCEPTION)) return false;
+    builtins->set_javascript_builtin_code(id, shared->code());
   }
   return true;
 }
@@ -1499,9 +1677,10 @@ void Genesis::MakeFunctionInstancePrototypeWritable() {
   HandleScope scope;
 
   Handle<DescriptorArray> function_map_descriptors =
-      ComputeFunctionInstanceDescriptor(false);
+      ComputeFunctionInstanceDescriptor(ADD_WRITEABLE_PROTOTYPE);
   Handle<Map> fm = Factory::CopyMapDropDescriptors(Top::function_map());
   fm->set_instance_descriptors(*function_map_descriptors);
+  fm->set_function_with_prototype(true);
   Top::context()->global_context()->set_function_map(*fm);
 }
 
@@ -1548,6 +1727,7 @@ Genesis::Genesis(Handle<Object> global_object,
     HookUpGlobalProxy(inner_global, global_proxy);
     InitializeGlobal(inner_global, empty_function);
     if (!InstallNatives()) return;
+    InstallJSFunctionResultCaches();
 
     MakeFunctionInstancePrototypeWritable();
 

@@ -62,6 +62,7 @@ namespace internal {
   F(ToSlowProperties, 1, 1) \
   F(FinishArrayPrototypeSetup, 1, 1) \
   F(SpecialArrayFunctions, 1, 1) \
+  F(GetGlobalReceiver, 0, 1) \
   \
   F(IsInPrototypeChain, 2, 1) \
   F(SetHiddenPrototype, 2, 1) \
@@ -99,6 +100,7 @@ namespace internal {
   F(URIUnescape, 1, 1) \
   \
   F(NumberToString, 1, 1) \
+  F(NumberToStringSkipCache, 1, 1) \
   F(NumberToInteger, 1, 1) \
   F(NumberToJSUint32, 1, 1) \
   F(NumberToJSInt32, 1, 1) \
@@ -153,6 +155,9 @@ namespace internal {
   /* Regular expressions */ \
   F(RegExpCompile, 3, 1) \
   F(RegExpExec, 4, 1) \
+  F(RegExpExecMultiple, 4, 1) \
+  F(RegExpInitializeObject, 5, 1) \
+  F(RegExpConstructResult, 3, 1) \
   \
   /* Strings */ \
   F(StringCharCodeAt, 2, 1) \
@@ -179,6 +184,7 @@ namespace internal {
   F(FunctionSetPrototype, 2, 1) \
   F(FunctionGetName, 1, 1) \
   F(FunctionSetName, 2, 1) \
+  F(FunctionRemovePrototype, 1, 1) \
   F(FunctionGetSourceCode, 1, 1) \
   F(FunctionGetScript, 1, 1) \
   F(FunctionGetScriptSourcePosition, 1, 1) \
@@ -208,7 +214,6 @@ namespace internal {
   F(DateYMDFromTime, 2, 1) \
   \
   /* Numbers */ \
-  F(NumberIsFinite, 1, 1) \
   \
   /* Globals */ \
   F(CompileString, 2, 1) \
@@ -228,6 +233,7 @@ namespace internal {
   F(GetArrayKeys, 2, 1) \
   F(MoveArrayContents, 2, 1) \
   F(EstimateNumberOfElements, 1, 1) \
+  F(SwapElements, 3, 1) \
   \
   /* Getters and Setters */ \
   F(DefineAccessor, -1 /* 4 or 5 */, 1) \
@@ -284,6 +290,8 @@ namespace internal {
   F(LocalKeys, 1, 1) \
   /* Handle scopes */ \
   F(DeleteHandleScopeExtensions, 0, 1) \
+  /* Cache suport */ \
+  F(GetFromCache, 2, 1) \
   \
   /* Pseudo functions - handled as macros by parser */ \
   F(IS_VAR, 1, 1)
@@ -331,10 +339,13 @@ namespace internal {
   F(LiveEditGatherCompileInfo, 2, 1) \
   F(LiveEditReplaceScript, 3, 1) \
   F(LiveEditReplaceFunctionCode, 2, 1) \
-  F(LiveEditRelinkFunctionToScript, 2, 1) \
+  F(LiveEditFunctionSetScript, 2, 1) \
+  F(LiveEditReplaceRefToNestedFunction, 3, 1) \
   F(LiveEditPatchFunctionPositions, 2, 1) \
-  F(LiveEditCheckStackActivations, 1, 1) \
-  F(GetFunctionCodePositionFromSource, 2, 1)
+  F(LiveEditCheckAndDropActivations, 2, 1) \
+  F(LiveEditCompareStringsLinewise, 2, 1) \
+  F(GetFunctionCodePositionFromSource, 2, 1) \
+  F(ExecuteInDebugContext, 2, 1)
 #else
 #define RUNTIME_FUNCTION_LIST_DEBUGGER_SUPPORT(F)
 #endif

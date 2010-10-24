@@ -37,37 +37,26 @@ namespace internal {
 // Forward declaration.
 class JumpTarget;
 
-
 // Reserved Register Usage Summary.
 //
-// Registers t8, t9, and 'at' are reserved for use by the MacroAssembler.
-// The MacroAssembler may clobber these three, but won't touch other registers
-// except in special cases.
+// Registers t8, t9, and at are reserved for use by the MacroAssembler.
 //
-//     Per the MIPS ABI, register t9 must be used for indirect function call
-//     via 'jalr t9' or 'jr t9' instructions. This is relied upon by gcc when
-//     updating gp register for position-independent-code. Whenever generated
-//     code calls C code, it must be via t9 register.
-// 
-// Registers k0 and k1 are reserved by ABI for use of interrupt handlers,
-// and these registers can get clobbered at any time.
+// The programmer should know that the MacroAssembler may clobber these two,
+// but won't touch other registers except in special cases.
 //
-// All s-registers are callee saved by C code per the ABI.
-//
-// Registers s0, s1, s2 are used by the CEntryStub when calling to C code.
-// They may be used by generated code, but will be clobbered when calling
-// to runtime / external-reference. 
-//
-// Registers s4 through s8/fp are reserved, as described below, and should
-// NOT be used by generated code, other than for the specified purpose.
-// 
-// Register aliases.
-const Register condReg1 = s4;  // Condition evaluation (lhs).
-const Register condReg2 = s5;  // Condition evaluation (rhs).
-const Register roots = s6;     // Roots array pointer.
-const Register cp = s7;        // JavaScript context pointer.
-const Register fp = s8_fp;     // Frame pointer.
+// Per the MIPS ABI, register t9 must be used for indirect function call
+// via 'jalr t9' or 'jr t9' instructions. This is relied upon by gcc when
+// trying to update gp register for position-independent-code. Whenever
+// MIPS generated code calls C code, it must be via t9 register.
 
+// Registers aliases
+// cp is assumed to be a callee saved register.
+const Register roots = s6;  // Roots array pointer.
+const Register cp = s7;     // JavaScript context pointer
+const Register fp = s8_fp;  // Alias fp
+// Register used for condition evaluation.
+const Register condReg1 = s4;
+const Register condReg2 = s5;
 
 enum InvokeJSFlags {
   CALL_JS,
@@ -164,7 +153,14 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   // from the stack, clobbering only the sp register.
   void Drop(int count, Condition cond = cc_always);
 
+  // Swap two registers.  If the scratch register is omitted then a slightly
+  // less efficient form using xor instead of mov is emitted.
+  void Swap(Register reg1, Register reg2, Register scratch = no_reg);
+
   void Call(Label* target);
+  // May do nothing if the registers are identical.
+  void Move(Register dst, Register src);
+
 
   // Jump unconditionally to given label.
   // We NEED a nop in the branch delay slot, as it used by v8, for example in
@@ -455,6 +451,15 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
                      Register map,
                      Register type_reg);
 
+  // Check if the map of an object is equal to a specified map and
+  // branch to label if not. Skip the smi check if not required
+  // (object is known to be a heap object).
+  void CheckMap(Register obj,
+                Register scratch,
+                Handle<Map> map,
+                Label* fail,
+                bool is_heap_object);
+
   inline void BranchOnSmi(Register value, Label* smi_label,
                           Register scratch = at) {
     ASSERT_EQ(0, kSmiTag);
@@ -532,15 +537,15 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
 
   // Arguments 1-4 are placed in registers a0 thru a3 respectively.
   // Arguments 5..n are stored to stack using following constants:
-  //  sw(t0, MemOperand(sp, kCFuncArg_5));
+  //  sw(t0, MemOperand(sp, MacroAssembler::kCFuncArg_5));
   static const int kCFuncArg_5 =
-      (0 + StandardFrameConstants::kCArgsSlotsSize) * kPointerSize;
+      (0 * kPointerSize + StandardFrameConstants::kCArgsSlotsSize);
   static const int kCFuncArg_6 =
-      (1 + StandardFrameConstants::kCArgsSlotsSize) * kPointerSize;
+      (1 * kPointerSize + StandardFrameConstants::kCArgsSlotsSize);
   static const int kCFuncArg_7 =
-      (2 + StandardFrameConstants::kCArgsSlotsSize) * kPointerSize;
+      (2 * kPointerSize + StandardFrameConstants::kCArgsSlotsSize);
   static const int kCFuncArg_8 =
-      (3 + StandardFrameConstants::kCArgsSlotsSize) * kPointerSize;
+      (3 * kPointerSize + StandardFrameConstants::kCArgsSlotsSize);
 
   // Calls a C function and cleans up the space for arguments allocated
   // by PrepareCallCFunction. The called function is not allowed to trigger a
@@ -566,7 +571,6 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
     uint32_t flags;  // see Bootstrapper::FixupFlags decoders/encoders.
     const char* name;
   };
-  List<Unresolved>* unresolved() { return &unresolved_; }
 
   Handle<Object> CodeObject() { return code_object_; }
 
@@ -650,12 +654,6 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
                                            Label* failure);
 
  private:
-  List<Unresolved> unresolved_;
-  bool generating_stub_;
-  bool allow_stub_calls_;
-  // This handle will be patched with the code object on installation.
-  Handle<Object> code_object_;
-
   void Jump(intptr_t target, RelocInfo::Mode rmode,
             bool ProtectBranchDelaySlot = true);
   void Jump(intptr_t target, RelocInfo::Mode rmode, Condition cond = cc_always,
@@ -682,6 +680,18 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   // Activation support.
   void EnterFrame(StackFrame::Type type);
   void LeaveFrame(StackFrame::Type type);
+
+  void InitializeNewString(Register string,
+                           Register length,
+                           Heap::RootListIndex map_index,
+                           Register scratch1,
+                           Register scratch2);
+
+
+  bool generating_stub_;
+  bool allow_stub_calls_;
+  // This handle will be patched with the code object on installation.
+  Handle<Object> code_object_;
 };
 
 

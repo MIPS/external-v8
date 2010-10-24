@@ -48,7 +48,9 @@ class MacroAssembler: public Assembler {
   // ---------------------------------------------------------------------------
   // GC Support
 
-
+  // Set the remebered set bit for an address which points into an
+  // object. RecordWriteHelper only works if the object is not in new
+  // space.
   void RecordWriteHelper(Register object,
                          Register addr,
                          Register scratch);
@@ -462,6 +464,9 @@ class MacroAssembler: public Assembler {
 
   // Print a message to stdout and abort execution.
   void Abort(const char* msg);
+
+  // Check that the stack is aligned.
+  void CheckStackAlignment();
 
   // Verify restrictions about code generated in stubs.
   void set_generating_stub(bool value) { generating_stub_ = value; }

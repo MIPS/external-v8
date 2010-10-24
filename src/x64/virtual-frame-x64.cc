@@ -177,7 +177,7 @@ void VirtualFrame::EmitPop(const Operand& operand) {
 }
 
 
-void VirtualFrame::EmitPush(Register reg, NumberInfo info) {
+void VirtualFrame::EmitPush(Register reg, TypeInfo info) {
   ASSERT(stack_pointer_ == element_count() - 1);
   elements_.Add(FrameElement::MemoryElement(info));
   stack_pointer_++;
@@ -185,7 +185,7 @@ void VirtualFrame::EmitPush(Register reg, NumberInfo info) {
 }
 
 
-void VirtualFrame::EmitPush(const Operand& operand, NumberInfo info) {
+void VirtualFrame::EmitPush(const Operand& operand, TypeInfo info) {
   ASSERT(stack_pointer_ == element_count() - 1);
   elements_.Add(FrameElement::MemoryElement(info));
   stack_pointer_++;
@@ -193,7 +193,7 @@ void VirtualFrame::EmitPush(const Operand& operand, NumberInfo info) {
 }
 
 
-void VirtualFrame::EmitPush(Immediate immediate, NumberInfo info) {
+void VirtualFrame::EmitPush(Immediate immediate, TypeInfo info) {
   ASSERT(stack_pointer_ == element_count() - 1);
   elements_.Add(FrameElement::MemoryElement(info));
   stack_pointer_++;
@@ -203,7 +203,7 @@ void VirtualFrame::EmitPush(Immediate immediate, NumberInfo info) {
 
 void VirtualFrame::EmitPush(Smi* smi_value) {
   ASSERT(stack_pointer_ == element_count() - 1);
-  elements_.Add(FrameElement::MemoryElement(NumberInfo::Smi()));
+  elements_.Add(FrameElement::MemoryElement(TypeInfo::Smi()));
   stack_pointer_++;
   __ Push(smi_value);
 }
@@ -211,18 +211,43 @@ void VirtualFrame::EmitPush(Smi* smi_value) {
 
 void VirtualFrame::EmitPush(Handle<Object> value) {
   ASSERT(stack_pointer_ == element_count() - 1);
-  NumberInfo info = NumberInfo::TypeFromValue(value);
+  TypeInfo info = TypeInfo::TypeFromValue(value);
   elements_.Add(FrameElement::MemoryElement(info));
   stack_pointer_++;
   __ Push(value);
 }
 
 
-void VirtualFrame::EmitPush(Heap::RootListIndex index, NumberInfo info) {
+void VirtualFrame::EmitPush(Heap::RootListIndex index, TypeInfo info) {
   ASSERT(stack_pointer_ == element_count() - 1);
   elements_.Add(FrameElement::MemoryElement(info));
   stack_pointer_++;
   __ PushRoot(index);
+}
+
+
+void VirtualFrame::Push(Expression* expr) {
+  ASSERT(expr->IsTrivial());
+
+  Literal* lit = expr->AsLiteral();
+  if (lit != NULL) {
+    Push(lit->handle());
+    return;
+  }
+
+  VariableProxy* proxy = expr->AsVariableProxy();
+  if (proxy != NULL) {
+    Slot* slot = proxy->var()->slot();
+    if (slot->type() == Slot::LOCAL) {
+      PushLocalAt(slot->index());
+      return;
+    }
+    if (slot->type() == Slot::PARAMETER) {
+      PushParameterAt(slot->index());
+      return;
+    }
+  }
+  UNREACHABLE();
 }
 
 
@@ -292,12 +317,12 @@ int VirtualFrame::InvalidateFrameSlotAt(int index) {
     elements_[new_backing_index] =
         FrameElement::RegisterElement(backing_reg,
                                       FrameElement::SYNCED,
-                                      original.number_info());
+                                      original.type_info());
   } else {
     elements_[new_backing_index] =
         FrameElement::RegisterElement(backing_reg,
                                       FrameElement::NOT_SYNCED,
-                                      original.number_info());
+                                      original.type_info());
   }
   // Update the other copies.
   for (int i = new_backing_index + 1; i < element_count(); i++) {
@@ -329,7 +354,7 @@ void VirtualFrame::TakeFrameSlotAt(int index) {
       FrameElement new_element =
           FrameElement::RegisterElement(fresh.reg(),
                                         FrameElement::NOT_SYNCED,
-                                        original.number_info());
+                                        original.type_info());
       Use(fresh.reg(), element_count());
       elements_.Add(new_element);
       __ movq(fresh.reg(), Operand(rbp, fp_relative(index)));
@@ -475,7 +500,7 @@ void VirtualFrame::MakeMergable() {
     if (element.is_constant() || element.is_copy()) {
       if (element.is_synced()) {
         // Just spill.
-        elements_[i] = FrameElement::MemoryElement(NumberInfo::Unknown());
+        elements_[i] = FrameElement::MemoryElement(TypeInfo::Unknown());
       } else {
         // Allocate to a register.
         FrameElement backing_element;  // Invalid if not a copy.
@@ -487,7 +512,7 @@ void VirtualFrame::MakeMergable() {
         elements_[i] =
             FrameElement::RegisterElement(fresh.reg(),
                                           FrameElement::NOT_SYNCED,
-                                          NumberInfo::Unknown());
+                                          TypeInfo::Unknown());
         Use(fresh.reg(), i);
 
         // Emit a move.
@@ -516,7 +541,7 @@ void VirtualFrame::MakeMergable() {
       // The copy flag is not relied on before the end of this loop,
       // including when registers are spilled.
       elements_[i].clear_copied();
-      elements_[i].set_number_info(NumberInfo::Unknown());
+      elements_[i].set_type_info(TypeInfo::Unknown());
     }
   }
 }
@@ -723,11 +748,11 @@ Result VirtualFrame::Pop() {
   ASSERT(element.is_valid());
 
   // Get number type information of the result.
-  NumberInfo info;
+  TypeInfo info;
   if (!element.is_copy()) {
-    info = element.number_info();
+    info = element.type_info();
   } else {
-    info = elements_[element.index()].number_info();
+    info = elements_[element.index()].type_info();
   }
 
   bool pop_needed = (stack_pointer_ == index);
@@ -737,7 +762,7 @@ Result VirtualFrame::Pop() {
       Result temp = cgen()->allocator()->Allocate();
       ASSERT(temp.is_valid());
       __ pop(temp.reg());
-      temp.set_number_info(info);
+      temp.set_type_info(info);
       return temp;
     }
 
@@ -767,7 +792,7 @@ Result VirtualFrame::Pop() {
     FrameElement new_element =
         FrameElement::RegisterElement(temp.reg(),
                                       FrameElement::SYNCED,
-                                      element.number_info());
+                                      element.type_info());
     // Preserve the copy flag on the element.
     if (element.is_copied()) new_element.set_copied();
     elements_[index] = new_element;
@@ -821,6 +846,25 @@ Result VirtualFrame::CallStub(CodeStub* stub, Result* arg0, Result* arg1) {
   arg0->Unuse();
   arg1->Unuse();
   return RawCallStub(stub);
+}
+
+
+Result VirtualFrame::CallJSFunction(int arg_count) {
+  Result function = Pop();
+
+  // InvokeFunction requires function in rdi.  Move it in there.
+  function.ToRegister(rdi);
+  function.Unuse();
+
+  // +1 for receiver.
+  PrepareForCall(arg_count + 1, arg_count + 1);
+  ASSERT(cgen()->HasValidEntryRegisters());
+  ParameterCount count(arg_count);
+  __ InvokeFunction(rdi, count, CALL_FUNCTION);
+  RestoreContextRegister();
+  Result result = cgen()->allocator()->Allocate(rax);
+  ASSERT(result.is_valid());
+  return result;
 }
 
 
