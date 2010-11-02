@@ -26,7 +26,6 @@ V8_LOCAL_SRC_FILES := \
 	src/diy-fp.cc \
 	src/execution.cc \
 	src/factory.cc \
-	src/fast-codegen.cc \
 	src/fast-dtoa.cc \
 	src/flags.cc \
 	src/flow-graph.cc \
