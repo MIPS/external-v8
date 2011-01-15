@@ -27,6 +27,8 @@
 
 #include "v8.h"
 
+#if defined(V8_TARGET_ARCH_X64)
+
 #include "codegen-inl.h"
 #include "register-allocator-inl.h"
 #include "scopes.h"
@@ -113,25 +115,45 @@ void VirtualFrame::AllocateStackSlots() {
     Handle<Object> undefined = Factory::undefined_value();
     FrameElement initial_value =
         FrameElement::ConstantElement(undefined, FrameElement::SYNCED);
-    if (count == 1) {
-      __ Push(undefined);
-    } else if (count < kLocalVarBound) {
-      // For less locals the unrolled loop is more compact.
-      __ movq(kScratchRegister, undefined, RelocInfo::EMBEDDED_OBJECT);
+    if (count < kLocalVarBound) {
+      // For fewer locals the unrolled loop is more compact.
+
+      // Hope for one of the first eight registers, where the push operation
+      // takes only one byte (kScratchRegister needs the REX.W bit).
+      Result tmp = cgen()->allocator()->Allocate();
+      ASSERT(tmp.is_valid());
+      __ movq(tmp.reg(), undefined, RelocInfo::EMBEDDED_OBJECT);
       for (int i = 0; i < count; i++) {
-        __ push(kScratchRegister);
+        __ push(tmp.reg());
       }
     } else {
       // For more locals a loop in generated code is more compact.
       Label alloc_locals_loop;
       Result cnt = cgen()->allocator()->Allocate();
       ASSERT(cnt.is_valid());
-      __ movq(cnt.reg(), Immediate(count));
       __ movq(kScratchRegister, undefined, RelocInfo::EMBEDDED_OBJECT);
+#ifdef DEBUG
+      Label loop_size;
+      __ bind(&loop_size);
+#endif
+      if (is_uint8(count)) {
+        // Loading imm8 is shorter than loading imm32.
+        // Loading only partial byte register, and using decb below.
+        __ movb(cnt.reg(), Immediate(count));
+      } else {
+        __ movl(cnt.reg(), Immediate(count));
+      }
       __ bind(&alloc_locals_loop);
       __ push(kScratchRegister);
-      __ decl(cnt.reg());
+      if (is_uint8(count)) {
+        __ decb(cnt.reg());
+      } else {
+        __ decl(cnt.reg());
+      }
       __ j(not_zero, &alloc_locals_loop);
+#ifdef DEBUG
+      CHECK(masm()->SizeOfCodeGeneratedSince(&loop_size) < kLocalVarBound);
+#endif
     }
     for (int i = 0; i < count; i++) {
       elements_.Add(initial_value);
@@ -959,44 +981,24 @@ void VirtualFrame::SyncRange(int begin, int end) {
   // Sync elements below the range if they have not been materialized
   // on the stack.
   int start = Min(begin, stack_pointer_ + 1);
+  int end_or_stack_pointer = Min(stack_pointer_, end);
+  // Emit normal push instructions for elements above stack pointer
+  // and use mov instructions if we are below stack pointer.
+  int i = start;
 
-  // If positive we have to adjust the stack pointer.
-  int delta = end - stack_pointer_;
-  if (delta > 0) {
-    stack_pointer_ = end;
-    __ subq(rsp, Immediate(delta * kPointerSize));
-  }
-
-  for (int i = start; i <= end; i++) {
+  while (i <= end_or_stack_pointer) {
     if (!elements_[i].is_synced()) SyncElementBelowStackPointer(i);
+    i++;
   }
-}
-
-
-Result VirtualFrame::InvokeBuiltin(Builtins::JavaScript id,
-                                   InvokeFlag flag,
-                                   int arg_count) {
-  PrepareForCall(arg_count, arg_count);
-  ASSERT(cgen()->HasValidEntryRegisters());
-  __ InvokeBuiltin(id, flag);
-  Result result = cgen()->allocator()->Allocate(rax);
-  ASSERT(result.is_valid());
-  return result;
+  while (i <= end) {
+    SyncElementByPushing(i);
+    i++;
+  }
 }
 
 
 //------------------------------------------------------------------------------
 // Virtual frame stub and IC calling functions.
-
-Result VirtualFrame::RawCallCodeObject(Handle<Code> code,
-                                       RelocInfo::Mode rmode) {
-  ASSERT(cgen()->HasValidEntryRegisters());
-  __ Call(code, rmode);
-  Result result = cgen()->allocator()->Allocate(rax);
-  ASSERT(result.is_valid());
-  return result;
-}
-
 
 Result VirtualFrame::CallRuntime(Runtime::Function* f, int arg_count) {
   PrepareForCall(arg_count, arg_count);
@@ -1029,37 +1031,158 @@ void VirtualFrame::DebugBreak() {
 #endif
 
 
+Result VirtualFrame::InvokeBuiltin(Builtins::JavaScript id,
+                                   InvokeFlag flag,
+                                   int arg_count) {
+  PrepareForCall(arg_count, arg_count);
+  ASSERT(cgen()->HasValidEntryRegisters());
+  __ InvokeBuiltin(id, flag);
+  Result result = cgen()->allocator()->Allocate(rax);
+  ASSERT(result.is_valid());
+  return result;
+}
+
+
+Result VirtualFrame::RawCallCodeObject(Handle<Code> code,
+                                       RelocInfo::Mode rmode) {
+  ASSERT(cgen()->HasValidEntryRegisters());
+  __ Call(code, rmode);
+  Result result = cgen()->allocator()->Allocate(rax);
+  ASSERT(result.is_valid());
+  return result;
+}
+
+
+// This function assumes that the only results that could be in a_reg or b_reg
+// are a and b.  Other results can be live, but must not be in a_reg or b_reg.
+void VirtualFrame::MoveResultsToRegisters(Result* a,
+                                          Result* b,
+                                          Register a_reg,
+                                          Register b_reg) {
+  ASSERT(!a_reg.is(b_reg));
+  // Assert that cgen()->allocator()->count(a_reg) is accounted for by a and b.
+  ASSERT(cgen()->allocator()->count(a_reg) <= 2);
+  ASSERT(cgen()->allocator()->count(a_reg) != 2 || a->reg().is(a_reg));
+  ASSERT(cgen()->allocator()->count(a_reg) != 2 || b->reg().is(a_reg));
+  ASSERT(cgen()->allocator()->count(a_reg) != 1 ||
+         (a->is_register() && a->reg().is(a_reg)) ||
+         (b->is_register() && b->reg().is(a_reg)));
+  // Assert that cgen()->allocator()->count(b_reg) is accounted for by a and b.
+  ASSERT(cgen()->allocator()->count(b_reg) <= 2);
+  ASSERT(cgen()->allocator()->count(b_reg) != 2 || a->reg().is(b_reg));
+  ASSERT(cgen()->allocator()->count(b_reg) != 2 || b->reg().is(b_reg));
+  ASSERT(cgen()->allocator()->count(b_reg) != 1 ||
+         (a->is_register() && a->reg().is(b_reg)) ||
+         (b->is_register() && b->reg().is(b_reg)));
+
+  if (a->is_register() && a->reg().is(a_reg)) {
+    b->ToRegister(b_reg);
+  } else if (!cgen()->allocator()->is_used(a_reg)) {
+    a->ToRegister(a_reg);
+    b->ToRegister(b_reg);
+  } else if (cgen()->allocator()->is_used(b_reg)) {
+    // a must be in b_reg, b in a_reg.
+    __ xchg(a_reg, b_reg);
+    // Results a and b will be invalidated, so it is ok if they are switched.
+  } else {
+    b->ToRegister(b_reg);
+    a->ToRegister(a_reg);
+  }
+  a->Unuse();
+  b->Unuse();
+}
+
+
 Result VirtualFrame::CallLoadIC(RelocInfo::Mode mode) {
-  // Name and receiver are on the top of the frame.  The IC expects
-  // name in rcx and receiver on the stack.  It does not drop the
-  // receiver.
+  // Name and receiver are on the top of the frame.  Both are dropped.
+  // The IC expects name in rcx and receiver in rax.
   Handle<Code> ic(Builtins::builtin(Builtins::LoadIC_Initialize));
   Result name = Pop();
-  PrepareForCall(1, 0);  // One stack arg, not callee-dropped.
-  name.ToRegister(rcx);
-  name.Unuse();
+  Result receiver = Pop();
+  PrepareForCall(0, 0);
+  MoveResultsToRegisters(&name, &receiver, rcx, rax);
+
   return RawCallCodeObject(ic, mode);
 }
 
 
 Result VirtualFrame::CallKeyedLoadIC(RelocInfo::Mode mode) {
-  // Key and receiver are on top of the frame.  The IC expects them on
-  // the stack.  It does not drop them.
+  // Key and receiver are on top of the frame. Put them in rax and rdx.
+  Result key = Pop();
+  Result receiver = Pop();
+  PrepareForCall(0, 0);
+  MoveResultsToRegisters(&key, &receiver, rax, rdx);
+
   Handle<Code> ic(Builtins::builtin(Builtins::KeyedLoadIC_Initialize));
-  PrepareForCall(2, 0);  // Two stack args, neither callee-dropped.
   return RawCallCodeObject(ic, mode);
+}
+
+
+Result VirtualFrame::CallStoreIC(Handle<String> name, bool is_contextual) {
+  // Value and (if not contextual) receiver are on top of the frame.
+  // The IC expects name in rcx, value in rax, and receiver in rdx.
+  Handle<Code> ic(Builtins::builtin(Builtins::StoreIC_Initialize));
+  Result value = Pop();
+  if (is_contextual) {
+    PrepareForCall(0, 0);
+    value.ToRegister(rax);
+    __ movq(rdx, Operand(rsi, Context::SlotOffset(Context::GLOBAL_INDEX)));
+    value.Unuse();
+  } else {
+    Result receiver = Pop();
+    PrepareForCall(0, 0);
+    MoveResultsToRegisters(&value, &receiver, rax, rdx);
+  }
+  __ Move(rcx, name);
+  return RawCallCodeObject(ic, RelocInfo::CODE_TARGET);
 }
 
 
 Result VirtualFrame::CallKeyedStoreIC() {
   // Value, key, and receiver are on the top of the frame.  The IC
-  // expects value in rax and key and receiver on the stack.  It does
-  // not drop the key and receiver.
-  Handle<Code> ic(Builtins::builtin(Builtins::KeyedStoreIC_Initialize));
+  // expects value in rax, key in rcx, and receiver in rdx.
   Result value = Pop();
-  PrepareForCall(2, 0);  // Two stack args, neither callee-dropped.
-  value.ToRegister(rax);
-  value.Unuse();
+  Result key = Pop();
+  Result receiver = Pop();
+  PrepareForCall(0, 0);
+  if (!cgen()->allocator()->is_used(rax) ||
+      (value.is_register() && value.reg().is(rax))) {
+    if (!cgen()->allocator()->is_used(rax)) {
+      value.ToRegister(rax);
+    }
+    MoveResultsToRegisters(&key, &receiver, rcx, rdx);
+    value.Unuse();
+  } else if (!cgen()->allocator()->is_used(rcx) ||
+             (key.is_register() && key.reg().is(rcx))) {
+    if (!cgen()->allocator()->is_used(rcx)) {
+      key.ToRegister(rcx);
+    }
+    MoveResultsToRegisters(&value, &receiver, rax, rdx);
+    key.Unuse();
+  } else if (!cgen()->allocator()->is_used(rdx) ||
+             (receiver.is_register() && receiver.reg().is(rdx))) {
+    if (!cgen()->allocator()->is_used(rdx)) {
+      receiver.ToRegister(rdx);
+    }
+    MoveResultsToRegisters(&key, &value, rcx, rax);
+    receiver.Unuse();
+  } else {
+    // All three registers are used, and no value is in the correct place.
+    // We have one of the two circular permutations of rax, rcx, rdx.
+    ASSERT(value.is_register());
+    if (value.reg().is(rcx)) {
+      __ xchg(rax, rdx);
+      __ xchg(rax, rcx);
+    } else {
+      __ xchg(rax, rcx);
+      __ xchg(rax, rdx);
+    }
+    value.Unuse();
+    key.Unuse();
+    receiver.Unuse();
+  }
+
+  Handle<Code> ic(Builtins::builtin(Builtins::KeyedStoreIC_Initialize));
   return RawCallCodeObject(ic, RelocInfo::CODE_TARGET);
 }
 
@@ -1082,15 +1205,34 @@ Result VirtualFrame::CallCallIC(RelocInfo::Mode mode,
 }
 
 
+Result VirtualFrame::CallKeyedCallIC(RelocInfo::Mode mode,
+                                     int arg_count,
+                                     int loop_nesting) {
+  // Function name, arguments, and receiver are found on top of the frame
+  // and dropped by the call.  The IC expects the name in rcx and the rest
+  // on the stack, and drops them all.
+  InLoopFlag in_loop = loop_nesting > 0 ? IN_LOOP : NOT_IN_LOOP;
+  Handle<Code> ic =
+      cgen()->ComputeKeyedCallInitialize(arg_count, in_loop);
+  Result name = Pop();
+  // Spill args, receiver, and function.  The call will drop args and
+  // receiver.
+  PrepareForCall(arg_count + 1, arg_count + 1);
+  name.ToRegister(rcx);
+  name.Unuse();
+  return RawCallCodeObject(ic, mode);
+}
+
+
 Result VirtualFrame::CallConstructor(int arg_count) {
   // Arguments, receiver, and function are on top of the frame.  The
   // IC expects arg count in rax, function in rdi, and the arguments
   // and receiver on the stack.
   Handle<Code> ic(Builtins::builtin(Builtins::JSConstructCall));
   // Duplicate the function before preparing the frame.
-  PushElementAt(arg_count + 1);
+  PushElementAt(arg_count);
   Result function = Pop();
-  PrepareForCall(arg_count + 1, arg_count + 1);  // Spill args and receiver.
+  PrepareForCall(arg_count + 1, arg_count + 1);  // Spill function and args.
   function.ToRegister(rdi);
 
   // Constructors are called with the number of arguments in register
@@ -1098,56 +1240,11 @@ Result VirtualFrame::CallConstructor(int arg_count) {
   // call trampolines per different arguments counts encountered.
   Result num_args = cgen()->allocator()->Allocate(rax);
   ASSERT(num_args.is_valid());
-  __ movq(num_args.reg(), Immediate(arg_count));
+  __ Set(num_args.reg(), arg_count);
 
   function.Unuse();
   num_args.Unuse();
   return RawCallCodeObject(ic, RelocInfo::CONSTRUCT_CALL);
-}
-
-
-Result VirtualFrame::CallStoreIC() {
-  // Name, value, and receiver are on top of the frame.  The IC
-  // expects name in rcx, value in rax, and receiver in edx.
-  Handle<Code> ic(Builtins::builtin(Builtins::StoreIC_Initialize));
-  Result name = Pop();
-  Result value = Pop();
-  Result receiver = Pop();
-  PrepareForCall(0, 0);
-
-  // Optimized for case in which name is a constant value.
-  if (name.is_register() && (name.reg().is(rdx) || name.reg().is(rax))) {
-    if (!is_used(rcx)) {
-      name.ToRegister(rcx);
-    } else if (!is_used(rbx)) {
-      name.ToRegister(rbx);
-    } else {
-      ASSERT(!is_used(rdi));  // Only three results are live, so rdi is free.
-      name.ToRegister(rdi);
-    }
-  }
-  // Now name is not in edx or eax, so we can fix them, then move name to ecx.
-  if (value.is_register() && value.reg().is(rdx)) {
-    if (receiver.is_register() && receiver.reg().is(rax)) {
-      // Wrong registers.
-      __ xchg(rax, rdx);
-    } else {
-      // Register rax is free for value, which frees rcx for receiver.
-      value.ToRegister(rax);
-      receiver.ToRegister(rdx);
-    }
-  } else {
-    // Register rcx is free for receiver, which guarantees rax is free for
-    // value.
-    receiver.ToRegister(rdx);
-    value.ToRegister(rax);
-  }
-  // Receiver and value are in the right place, so rcx is free for name.
-  name.ToRegister(rcx);
-  name.Unuse();
-  value.Unuse();
-  receiver.Unuse();
-  return RawCallCodeObject(ic, RelocInfo::CODE_TARGET);
 }
 
 
@@ -1163,3 +1260,5 @@ void VirtualFrame::PushTryHandler(HandlerType type) {
 #undef __
 
 } }  // namespace v8::internal
+
+#endif  // V8_TARGET_ARCH_X64

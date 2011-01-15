@@ -44,12 +44,6 @@
 #ifndef V8_PLATFORM_H_
 #define V8_PLATFORM_H_
 
-#ifdef __sun
-// On Solaris, to get isinf, INFINITY, fpclassify and other macros one needs
-// to define this symbol
-#define __C99FEATURES__ 1
-#endif
-
 #define V8_INFINITY INFINITY
 
 // Windows specific stuff.
@@ -88,6 +82,14 @@ int strncasecmp(const char* s1, const char* s2, int n);
 int random();
 
 #endif  // WIN32
+
+
+#ifdef __sun
+# ifndef signbit
+int signbit(double x);
+# endif
+#endif
+
 
 // GCC specific stuff
 #ifdef __GNUC__
@@ -162,6 +164,9 @@ class OS {
 
   // Returns the daylight savings offset for the given time.
   static double DaylightSavingsOffset(double time);
+
+  // Returns last OS error.
+  static int GetLastError();
 
   static FILE* FOpen(const char* path, const char* mode);
 
@@ -278,6 +283,8 @@ class OS {
   // the platform doesn't care. Guaranteed to be a power of two.
   static int ActivationFrameAlignment();
 
+  static void ReleaseStore(volatile AtomicWord* ptr, AtomicWord value);
+
  private:
   static const int msPerSecond = 1000;
 
@@ -359,7 +366,13 @@ class ThreadHandle {
 class Thread: public ThreadHandle {
  public:
   // Opaque data type for thread-local storage keys.
-  enum LocalStorageKey {};
+  // LOCAL_STORAGE_KEY_MIN_VALUE and LOCAL_STORAGE_KEY_MAX_VALUE are specified
+  // to ensure that enumeration type has correct value range (see Issue 830 for
+  // more details).
+  enum LocalStorageKey {
+    LOCAL_STORAGE_KEY_MIN_VALUE = kMinInt,
+    LOCAL_STORAGE_KEY_MAX_VALUE = kMaxInt
+  };
 
   // Create new thread.
   Thread();

@@ -63,6 +63,31 @@ enum InvokeJSFlags {
   JUMP_JS
 };
 
+
+// Flags used for the AllocateInNewSpace functions.
+enum AllocationFlags {
+  // No special flags.
+  NO_ALLOCATION_FLAGS = 0,
+  // Return the pointer to the allocated already tagged as a heap object.
+  TAG_OBJECT = 1 << 0,
+  // The content of the result register already contains the allocation top in
+  // new space.
+  RESULT_CONTAINS_TOP = 1 << 1,
+  // Specify that the requested size of the space to allocate is specified in
+  // words instead of bytes.
+  SIZE_IN_WORDS = 1 << 2
+};
+
+// Flags used for the ObjectToDoubleFPURegister function.
+enum ObjectToDoubleFlags {
+  // No special flags.
+  NO_OBJECT_TO_DOUBLE_FLAGS = 0,
+  // Object is known to be a non smi.
+  OBJECT_NOT_SMI = 1 << 0,
+  // Don't load NaNs or infinities, branch to the non number case instead.
+  AVOID_NANS_AND_INFINITIES = 1 << 1
+};
+
 // MacroAssembler implements a collection of frequently used macros.
 class MacroAssembler: public Assembler {
  public:
@@ -178,30 +203,57 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
                 Heap::RootListIndex index,
                 Condition cond, Register src1, const Operand& src2);
 
+  // Store an object to the root table.
+  void StoreRoot(Register source,
+                 Heap::RootListIndex index);
+  void StoreRoot(Register source,
+                 Heap::RootListIndex index,
+                 Condition cond, Register src1, const Operand& src2);
+
   // Load an external reference.
   void LoadExternalReference(Register reg, ExternalReference ext) {
     li(reg, Operand(ext));
   }
 
-  // Sets the remembered set bit for [address+offset].
-  void RecordWrite(Register object, Register offset, Register scratch);
+
+
+  // Check if object is in new space.
+  // scratch can be object itself, but it will be clobbered.
+  void InNewSpace(Register object,
+                  Register scratch,
+                  Condition cc,  // eq for new space, ne otherwise
+                  Label* branch);
+
+
+  // For the page containing |object| mark the region covering [address]
+  // dirty. The object address must be in the first 8K of an allocated page.
+  void RecordWriteHelper(Register object,
+                         Register address,
+                         Register scratch);
+
+  // For the page containing |object| mark the region covering
+  // [object+offset] dirty. The object address must be in the first 8K
+  // of an allocated page.  The 'scratch' registers are used in the
+  // implementation and all 3 registers are clobbered by the
+  // operation, as well as the 'at' register. RecordWrite updates the
+  // write barrier even when storing smis.
+  void RecordWrite(Register object,
+                   Operand offset,
+                   Register scratch0,
+                   Register scratch1);
+
+  // For the page containing |object| mark the region covering
+  // [address] dirty. The object address must be in the first 8K of an
+  // allocated page.  All 3 registers are clobbered by the operation,
+  // as well as the ip register. RecordWrite updates the write barrier
+  // even when storing smis.
+  void RecordWrite(Register object,
+                   Register address,
+                   Register scratch);
 
 
   // ---------------------------------------------------------------------------
   // Inline caching support
-
-  // Generates code that verifies that the maps of objects in the
-  // prototype chain of object hasn't changed since the code was
-  // generated and branches to the miss label if any map has. If
-  // necessary the function also generates code for security check
-  // in case of global object holders. The scratch and holder
-  // registers are always clobbered, but the object register is only
-  // clobbered if it the same as the holder register. The function
-  // returns a register containing the holder - either object_reg or
-  // holder_reg.
-  Register CheckMaps(JSObject* object, Register object_reg,
-                     JSObject* holder, Register holder_reg,
-                     Register scratch, Label* miss);
 
   // Generate code for checking access rights - used for security checks
   // on access to global objects across environments. The holder register
@@ -217,25 +269,28 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   // Allocate an object in new space. The object_size is specified in words (not
   // bytes). If the new space is exhausted control continues at the gc_required
   // label. The allocated object is returned in result. If the flag
-  // tag_allocated_object is true the result is tagged as as a heap object.
+  // tag_allocated_object is true the result is tagged as as a heap object. All
+  // registers are clobbered also when control continues at the gc_required
+  // label.
   void AllocateInNewSpace(int object_size,
-                                Register result,
-                                Register scratch1,
-                                Register scratch2,
-                                Label* gc_required,
-                                AllocationFlags flags);
+                          Register result,
+                          Register scratch1,
+                          Register scratch2,
+                          Label* gc_required,
+                          AllocationFlags flags);
   void AllocateInNewSpace(Register object_size,
-                                Register result,
-                                Register scratch1,
-                                Register scratch2,
-                                Label* gc_required,
-                                AllocationFlags flags);
+                          Register result,
+                          Register scratch1,
+                          Register scratch2,
+                          Label* gc_required,
+                          AllocationFlags flags);
 
   // Undo allocation in new space. The object passed and objects allocated after
   // it will no longer be allocated. The caller must make sure that no pointers
   // are left to the object(s) no longer allocated as they would be invalid when
   // allocation is undone.
   void UndoAllocationInNewSpace(Register object, Register scratch);
+
 
   void AllocateTwoByteString(Register result,
                              Register length,
@@ -260,12 +315,19 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
                                Register scratch2,
                                Label* gc_required);
 
-  // Allocates a heap number or jumps to the need_gc label if the young space
-  // is full and a scavenge is needed.
+  // Allocates a heap number or jumps to the gc_required label if the young
+  // space is full and a scavenge is needed. All registers are clobbered also
+  // when control continues at the gc_required label.
   void AllocateHeapNumber(Register result,
                           Register scratch1,
                           Register scratch2,
+                          Register heap_number_map,
                           Label* gc_required);
+  void AllocateHeapNumberWithValue(Register result,
+                                   FPURegister value,
+                                   Register scratch1,
+                                   Register scratch2,
+                                   Label* gc_required);
 
   // ---------------------------------------------------------------------------
   // Instruction macros
@@ -304,6 +366,9 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   DEFINE_INSTRUCTION(Slt);
   DEFINE_INSTRUCTION(Sltu);
 
+  // MIPS32 R2 instruction macro.
+  DEFINE_INSTRUCTION(Ror);
+
 #undef DEFINE_INSTRUCTION
 #undef DEFINE_INSTRUCTION2
 
@@ -318,6 +383,9 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   inline void li(Register rd, int32_t j, bool gen2instr = false) {
     li(rd, Operand(j), gen2instr);
   }
+  inline void li(Register dst, Handle<Object> value, bool gen2instr = false) {
+    li(dst, Operand(value), gen2instr);
+  }
 
   // Exception-generating instructions and debugging support
   void stop(const char* msg);
@@ -328,11 +396,42 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   // saved in higher memory addresses
   void MultiPush(RegList regs);
   void MultiPushReversed(RegList regs);
+
   void Push(Register src) {
     Addu(sp, sp, Operand(-kPointerSize));
     sw(src, MemOperand(sp, 0));
   }
+
+  // Push two registers.  Pushes leftmost register first (to highest address).
+  void Push(Register src1, Register src2, Condition cond = al) {
+    ASSERT(cond == al);  // Do not support conditional versions yet.
+    Addu(sp, sp, Operand(2 * -kPointerSize));
+    sw(src1, MemOperand(sp, 1 * kPointerSize));
+    sw(src2, MemOperand(sp, 0 * kPointerSize));
+  }
+
+  // Push three registers.  Pushes leftmost register first (to highest address).
+  void Push(Register src1, Register src2, Register src3, Condition cond = al) {
+    ASSERT(cond == al);  // Do not support conditional versions yet.
+    Addu(sp, sp, Operand(3 * -kPointerSize));
+    sw(src1, MemOperand(sp, 2 * kPointerSize));
+    sw(src2, MemOperand(sp, 1 * kPointerSize));
+    sw(src3, MemOperand(sp, 0 * kPointerSize));
+  }
+
+  // Push four registers.  Pushes leftmost register first (to highest address).
+  void Push(Register src1, Register src2,
+            Register src3, Register src4, Condition cond = al) {
+    ASSERT(cond == al);  // Do not support conditional versions yet.
+    Addu(sp, sp, Operand(4 * -kPointerSize));
+    sw(src1, MemOperand(sp, 3 * kPointerSize));
+    sw(src2, MemOperand(sp, 2 * kPointerSize));
+    sw(src3, MemOperand(sp, 1 * kPointerSize));
+    sw(src4, MemOperand(sp, 0 * kPointerSize));
+  }
+
   inline void push(Register src) { Push(src); }
+  inline void pop(Register src) { Pop(src); }
 
   void Push(Register src, Condition cond, Register tst1, Register tst2) {
     // Since we don't have conditionnal execution we use a Branch.
@@ -340,6 +439,7 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
     Addu(sp, sp, Operand(-kPointerSize));
     sw(src, MemOperand(sp, 0));
   }
+
 
   // Pops multiple values from the stack and load them in the
   // registers specified in regs. Pop order is the opposite as in MultiPush.
@@ -353,6 +453,17 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
     Addu(sp, sp, Operand(count * kPointerSize));
   }
 
+  // MIPS32 R2 instruction macro.
+  void Ins(Register rt, Register rs, uint16_t pos, uint16_t size);
+  void Ext(Register rt, Register rs, uint16_t pos, uint16_t size);
+
+  // Convert unsigned word to double.
+  void Cvt_d_uw(FPURegister fd, FPURegister fs);
+  void Cvt_d_uw(FPURegister fd, Register rs);
+
+  // Convert double to unsigned word.
+  void Trunc_uw_d(FPURegister fd, FPURegister fs);
+  void Trunc_uw_d(FPURegister fd, Register rs);
 
   // -------------------------------------------------------------------------
   // Activation frames
@@ -433,6 +544,8 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   // Must preserve the result register.
   void PopTryHandler();
 
+  // Copies a fixed number of fields of heap objects from src to dst.
+  void CopyFields(Register dst, Register src, RegList temps, int field_count);
 
   // -------------------------------------------------------------------------
   // Support functions.
@@ -451,12 +564,19 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
                      Register map,
                      Register type_reg);
 
-  // Check if the map of an object is equal to a specified map and
-  // branch to label if not. Skip the smi check if not required
-  // (object is known to be a heap object).
+  // Check if the map of an object is equal to a specified map (either
+  // given directly or as an index into the root list) and branch to
+  // label if not. Skip the smi check if not required (object is known
+  // to be a heap object)
   void CheckMap(Register obj,
                 Register scratch,
                 Handle<Map> map,
+                Label* fail,
+                bool is_heap_object);
+
+  void CheckMap(Register obj,
+                Register scratch,
+                Heap::RootListIndex index,
                 Label* fail,
                 bool is_heap_object);
 
@@ -486,6 +606,24 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   // occurred.
   void IllegalOperation(int num_arguments);
 
+  // Load the value of a number object into a FPU double register. If the
+  // object is not a number a jump to the label not_number is performed
+  // and the FPU double register is unchanged.
+  void ObjectToDoubleFPURegister(
+      Register object,
+      FPURegister value,
+      Register scratch1,
+      Register scratch2,
+      Register heap_number_map,
+      Label* not_number,
+      ObjectToDoubleFlags flags = NO_OBJECT_TO_DOUBLE_FLAGS);
+
+  // Load the value of a smi object into a FPU double register. The register
+  // scratch1 can be the same register as smi in which case smi will hold the
+  // untagged value afterwards.
+  void SmiToDoubleFPURegister(Register smi,
+                              FPURegister value,
+                              Register scratch1);
 
   // -------------------------------------------------------------------------
   // Runtime calls
@@ -566,6 +704,9 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   // setup the function in a1.
   void GetBuiltinEntry(Register target, Builtins::JavaScript id);
 
+  // Store the function for the given builtin in the target register.
+  void GetBuiltinFunction(Register target, Builtins::JavaScript id);
+
   struct Unresolved {
     int pc;
     uint32_t flags;  // see Bootstrapper::FixupFlags decoders/encoders.
@@ -598,6 +739,8 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   // Calls Abort(msg) if the condition cc is not satisfied.
   // Use --debug_code to enable.
   void Assert(Condition cc, const char* msg, Register rs, Operand rt);
+  void AssertRegisterIsRoot(Register reg, Heap::RootListIndex index);
+  void AssertFastElements(Register elements);
 
   // Like Assert(), but always enabled.
   void Check(Condition cc, const char* msg, Register rs, Operand rt);
@@ -618,6 +761,9 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   void JumpIfNotBothSmi(Register reg1, Register reg2, Label* on_not_both_smi);
   // Jump if either of the registers contain a smi.
   void JumpIfEitherSmi(Register reg1, Register reg2, Label* on_either_smi);
+
+  // Abort execution if argument is a smi. Used in debug code.
+  void AbortIfSmi(Register object);
 
   // -------------------------------------------------------------------------
   // String utilities

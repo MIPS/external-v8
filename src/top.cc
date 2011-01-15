@@ -44,6 +44,11 @@ Mutex* Top::break_access_ = OS::CreateMutex();
 
 NoAllocationStringAllocator* preallocated_message_space = NULL;
 
+bool capture_stack_trace_for_uncaught_exceptions = false;
+int stack_trace_for_uncaught_exceptions_frame_limit = 0;
+StackTrace::StackTraceOptions stack_trace_for_uncaught_exceptions_options =
+    StackTrace::kOverview;
+
 Address top_addresses[] = {
 #define C(name) reinterpret_cast<Address>(Top::name()),
     TOP_ADDRESS_LIST(C)
@@ -102,16 +107,15 @@ void Top::IterateThread(ThreadVisitor* v, char* t) {
 void Top::Iterate(ObjectVisitor* v, ThreadLocalTop* thread) {
   v->VisitPointer(&(thread->pending_exception_));
   v->VisitPointer(&(thread->pending_message_obj_));
-  v->VisitPointer(
-      BitCast<Object**, Script**>(&(thread->pending_message_script_)));
-  v->VisitPointer(BitCast<Object**, Context**>(&(thread->context_)));
+  v->VisitPointer(BitCast<Object**>(&(thread->pending_message_script_)));
+  v->VisitPointer(BitCast<Object**>(&(thread->context_)));
   v->VisitPointer(&(thread->scheduled_exception_));
 
   for (v8::TryCatch* block = thread->TryCatchHandler();
        block != NULL;
        block = TRY_CATCH_FROM_ADDRESS(block->next_)) {
-    v->VisitPointer(BitCast<Object**, void**>(&(block->exception_)));
-    v->VisitPointer(BitCast<Object**, void**>(&(block->message_)));
+    v->VisitPointer(BitCast<Object**>(&(block->exception_)));
+    v->VisitPointer(BitCast<Object**>(&(block->message_)));
   }
 
   // Iterate over pointers on native execution stack.
@@ -337,7 +341,7 @@ static int stack_trace_nesting_level = 0;
 static StringStream* incomplete_message = NULL;
 
 
-Handle<String> Top::StackTrace() {
+Handle<String> Top::StackTraceString() {
   if (stack_trace_nesting_level == 0) {
     stack_trace_nesting_level++;
     HeapStringAllocator allocator;
@@ -362,6 +366,87 @@ Handle<String> Top::StackTrace() {
     // Unreachable
     return Factory::empty_symbol();
   }
+}
+
+
+Handle<JSArray> Top::CaptureCurrentStackTrace(
+    int frame_limit, StackTrace::StackTraceOptions options) {
+  // Ensure no negative values.
+  int limit = Max(frame_limit, 0);
+  Handle<JSArray> stack_trace = Factory::NewJSArray(frame_limit);
+
+  Handle<String> column_key =  Factory::LookupAsciiSymbol("column");
+  Handle<String> line_key =  Factory::LookupAsciiSymbol("lineNumber");
+  Handle<String> script_key =  Factory::LookupAsciiSymbol("scriptName");
+  Handle<String> function_key =  Factory::LookupAsciiSymbol("functionName");
+  Handle<String> eval_key =  Factory::LookupAsciiSymbol("isEval");
+  Handle<String> constructor_key =  Factory::LookupAsciiSymbol("isConstructor");
+
+  StackTraceFrameIterator it;
+  int frames_seen = 0;
+  while (!it.done() && (frames_seen < limit)) {
+    // Create a JSObject to hold the information for the StackFrame.
+    Handle<JSObject> stackFrame = Factory::NewJSObject(object_function());
+
+    JavaScriptFrame* frame = it.frame();
+    JSFunction* fun(JSFunction::cast(frame->function()));
+    Script* script = Script::cast(fun->shared()->script());
+
+    if (options & StackTrace::kLineNumber) {
+      int script_line_offset = script->line_offset()->value();
+      int position = frame->code()->SourcePosition(frame->pc());
+      int line_number = GetScriptLineNumber(Handle<Script>(script), position);
+      // line_number is already shifted by the script_line_offset.
+      int relative_line_number = line_number - script_line_offset;
+      if (options & StackTrace::kColumnOffset && relative_line_number >= 0) {
+        Handle<FixedArray> line_ends(FixedArray::cast(script->line_ends()));
+        int start = (relative_line_number == 0) ? 0 :
+            Smi::cast(line_ends->get(relative_line_number - 1))->value() + 1;
+        int column_offset = position - start;
+        if (relative_line_number == 0) {
+          // For the case where the code is on the same line as the script tag.
+          column_offset += script->column_offset()->value();
+        }
+        SetProperty(stackFrame, column_key,
+                    Handle<Smi>(Smi::FromInt(column_offset + 1)), NONE);
+      }
+      SetProperty(stackFrame, line_key,
+                  Handle<Smi>(Smi::FromInt(line_number + 1)), NONE);
+    }
+
+    if (options & StackTrace::kScriptName) {
+      Handle<Object> script_name(script->name());
+      SetProperty(stackFrame, script_key, script_name, NONE);
+    }
+
+    if (options & StackTrace::kFunctionName) {
+      Handle<Object> fun_name(fun->shared()->name());
+      if (fun_name->ToBoolean()->IsFalse()) {
+        fun_name = Handle<Object>(fun->shared()->inferred_name());
+      }
+      SetProperty(stackFrame, function_key, fun_name, NONE);
+    }
+
+    if (options & StackTrace::kIsEval) {
+      int type = Smi::cast(script->compilation_type())->value();
+      Handle<Object> is_eval = (type == Script::COMPILATION_TYPE_EVAL) ?
+          Factory::true_value() : Factory::false_value();
+      SetProperty(stackFrame, eval_key, is_eval, NONE);
+    }
+
+    if (options & StackTrace::kIsConstructor) {
+      Handle<Object> is_constructor = (frame->IsConstructor()) ?
+          Factory::true_value() : Factory::false_value();
+      SetProperty(stackFrame, constructor_key, is_constructor, NONE);
+    }
+
+    FixedArray::cast(stack_trace->elements())->set(frames_seen, *stackFrame);
+    frames_seen++;
+    it.Advance();
+  }
+
+  stack_trace->set_length(Smi::FromInt(frames_seen));
+  return stack_trace;
 }
 
 
@@ -435,7 +520,6 @@ void Top::PrintStack(StringStream* accumulator) {
 
 
 void Top::SetFailedAccessCheckCallback(v8::FailedAccessCheckCallback callback) {
-  ASSERT(thread_local_.failed_access_check_callback_ == NULL);
   thread_local_.failed_access_check_callback_ = callback;
 }
 
@@ -445,8 +529,6 @@ void Top::ReportFailedAccessCheck(JSObject* receiver, v8::AccessType type) {
 
   ASSERT(receiver->IsAccessCheckNeeded());
   ASSERT(Top::context());
-  // The callers of this method are not expecting a GC.
-  AssertNoAllocation no_gc;
 
   // Get the data object from access check info.
   JSFunction* constructor = JSFunction::cast(receiver->map()->constructor());
@@ -599,10 +681,7 @@ Failure* Top::StackOverflow() {
   // TODO(1240995): To avoid having to call JavaScript code to compute
   // the message for stack overflow exceptions which is very likely to
   // double fault with another stack overflow exception, we use a
-  // precomputed message. This is somewhat problematic in that it
-  // doesn't use ReportUncaughtException to determine the location
-  // from where the exception occurred. It should probably be
-  // reworked.
+  // precomputed message.
   DoThrow(*exception, NULL, kStackOverflowMessage);
   return Failure::Exception();
 }
@@ -696,25 +775,6 @@ void Top::ComputeLocation(MessageLocation* target) {
 }
 
 
-void Top::ReportUncaughtException(Handle<Object> exception,
-                                  MessageLocation* location,
-                                  Handle<String> stack_trace) {
-  Handle<Object> message;
-  if (!Bootstrapper::IsActive()) {
-    // It's not safe to try to make message objects while the bootstrapper
-    // is active since the infrastructure may not have been properly
-    // initialized.
-    message =
-      MessageHandler::MakeMessageObject("uncaught_exception",
-                                        location,
-                                        HandleVector<Object>(&exception, 1),
-                                        stack_trace);
-  }
-  // Report the uncaught exception.
-  MessageHandler::ReportMessage(location, message);
-}
-
-
 bool Top::ShouldReturnException(bool* is_caught_externally,
                                 bool catchable_by_javascript) {
   // Find the top-most try-catch handler.
@@ -786,9 +846,16 @@ void Top::DoThrow(Object* exception,
       // traces while the bootstrapper is active since the infrastructure
       // may not have been properly initialized.
       Handle<String> stack_trace;
-      if (FLAG_trace_exception) stack_trace = StackTrace();
+      if (FLAG_trace_exception) stack_trace = StackTraceString();
+      Handle<JSArray> stack_trace_object;
+      if (report_exception && capture_stack_trace_for_uncaught_exceptions) {
+          stack_trace_object = Top::CaptureCurrentStackTrace(
+              stack_trace_for_uncaught_exceptions_frame_limit,
+              stack_trace_for_uncaught_exceptions_options);
+      }
       message_obj = MessageHandler::MakeMessageObject("uncaught_exception",
-          location, HandleVector<Object>(&exception_handle, 1), stack_trace);
+          location, HandleVector<Object>(&exception_handle, 1), stack_trace,
+          stack_trace_object);
     }
   }
 
@@ -912,6 +979,16 @@ bool Top::OptionalRescheduleException(bool is_bottom_call) {
   thread_local_.scheduled_exception_ = pending_exception();
   clear_pending_exception();
   return true;
+}
+
+
+void Top::SetCaptureStackTraceForUncaughtExceptions(
+      bool capture,
+      int frame_limit,
+      StackTrace::StackTraceOptions options) {
+  capture_stack_trace_for_uncaught_exceptions = capture;
+  stack_trace_for_uncaught_exceptions_frame_limit = frame_limit;
+  stack_trace_for_uncaught_exceptions_options = options;
 }
 
 

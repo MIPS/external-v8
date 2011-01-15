@@ -27,6 +27,8 @@
 
 #include "v8.h"
 
+#if defined(V8_TARGET_ARCH_ARM)
+
 #include "codegen-inl.h"
 #include "debug.h"
 
@@ -55,7 +57,7 @@ void BreakLocationIterator::SetDebugBreakAtReturn() {
   // #endif
   //   <debug break return code entry point address>
   //   bktp 0
-  CodePatcher patcher(rinfo()->pc(), 4);
+  CodePatcher patcher(rinfo()->pc(), Assembler::kJSReturnSequenceInstructions);
 #ifdef USE_BLX
   patcher.masm()->ldr(v8::internal::ip, MemOperand(v8::internal::pc, 0));
   patcher.masm()->blx(v8::internal::ip);
@@ -71,14 +73,56 @@ void BreakLocationIterator::SetDebugBreakAtReturn() {
 // Restore the JS frame exit code.
 void BreakLocationIterator::ClearDebugBreakAtReturn() {
   rinfo()->PatchCode(original_rinfo()->pc(),
-                     Assembler::kJSReturnSequenceLength);
+                     Assembler::kJSReturnSequenceInstructions);
 }
 
 
-// A debug break in the exit code is identified by a call.
+// A debug break in the frame exit code is identified by the JS frame exit code
+// having been patched with a call instruction.
 bool Debug::IsDebugBreakAtReturn(RelocInfo* rinfo) {
   ASSERT(RelocInfo::IsJSReturn(rinfo->rmode()));
   return rinfo->IsPatchedReturnSequence();
+}
+
+
+bool BreakLocationIterator::IsDebugBreakAtSlot() {
+  ASSERT(IsDebugBreakSlot());
+  // Check whether the debug break slot instructions have been patched.
+  return rinfo()->IsPatchedDebugBreakSlotSequence();
+}
+
+
+void BreakLocationIterator::SetDebugBreakAtSlot() {
+  ASSERT(IsDebugBreakSlot());
+  // Patch the code changing the debug break slot code from
+  //   mov r2, r2
+  //   mov r2, r2
+  //   mov r2, r2
+  // to a call to the debug break slot code.
+  // #if USE_BLX
+  //   ldr ip, [pc, #0]
+  //   blx ip
+  // #else
+  //   mov lr, pc
+  //   ldr pc, [pc, #-4]
+  // #endif
+  //   <debug break slot code entry point address>
+  CodePatcher patcher(rinfo()->pc(), Assembler::kDebugBreakSlotInstructions);
+#ifdef USE_BLX
+  patcher.masm()->ldr(v8::internal::ip, MemOperand(v8::internal::pc, 0));
+  patcher.masm()->blx(v8::internal::ip);
+#else
+  patcher.masm()->mov(v8::internal::lr, v8::internal::pc);
+  patcher.masm()->ldr(v8::internal::pc, MemOperand(v8::internal::pc, -4));
+#endif
+  patcher.Emit(Debug::debug_break_return()->entry());
+}
+
+
+void BreakLocationIterator::ClearDebugBreakAtSlot() {
+  ASSERT(IsDebugBreakSlot());
+  rinfo()->PatchCode(original_rinfo()->pc(),
+                     Assembler::kDebugBreakSlotInstructions);
 }
 
 
@@ -170,26 +214,20 @@ void Debug::GenerateKeyedLoadICDebugBreak(MacroAssembler* masm) {
 
 void Debug::GenerateKeyedStoreICDebugBreak(MacroAssembler* masm) {
   // ---------- S t a t e --------------
+  //  -- r0     : value
+  //  -- r1     : key
+  //  -- r2     : receiver
   //  -- lr     : return address
-  //  -- sp[0]  : key
-  //  -- sp[4]  : receiver
-  Generate_DebugBreakCallHelper(masm, 0);
+  Generate_DebugBreakCallHelper(masm, r0.bit() | r1.bit() | r2.bit());
 }
 
 
 void Debug::GenerateCallICDebugBreak(MacroAssembler* masm) {
   // Calling convention for IC call (from ic-arm.cc)
   // ----------- S t a t e -------------
-  //  -- r0: number of arguments
-  //  -- r1: receiver
-  //  -- lr: return address
+  //  -- r2: name
   // -----------------------------------
-  // Register r1 contains an object that needs to be pushed on the expression
-  // stack of the fake JS frame. r0 is the actual number of arguments not
-  // encoded as a smi, therefore it cannot be on the expression stack of the
-  // fake JS frame as it can easily be an invalid pointer (e.g. 1). r0 will be
-  // pushed on the stack of the C frame and restored from there.
-  Generate_DebugBreakCallHelper(masm, r1.bit());
+  Generate_DebugBreakCallHelper(masm, r2.bit());
 }
 
 
@@ -217,23 +255,45 @@ void Debug::GenerateStubNoRegistersDebugBreak(MacroAssembler* masm) {
 }
 
 
+void Debug::GenerateSlot(MacroAssembler* masm) {
+  // Generate enough nop's to make space for a call instruction. Avoid emitting
+  // the constant pool in the debug break slot code.
+  Assembler::BlockConstPoolScope block_const_pool(masm);
+  Label check_codesize;
+  __ bind(&check_codesize);
+  __ RecordDebugBreakSlot();
+  for (int i = 0; i < Assembler::kDebugBreakSlotInstructions; i++) {
+    __ nop(2);
+  }
+  ASSERT_EQ(Assembler::kDebugBreakSlotInstructions,
+            masm->InstructionsGeneratedSince(&check_codesize));
+}
+
+
+void Debug::GenerateSlotDebugBreak(MacroAssembler* masm) {
+  // In the places where a debug break slot is inserted no registers can contain
+  // object pointers.
+  Generate_DebugBreakCallHelper(masm, 0);
+}
+
+
 void Debug::GeneratePlainReturnLiveEdit(MacroAssembler* masm) {
   masm->Abort("LiveEdit frame dropping is not supported on arm");
 }
+
 
 void Debug::GenerateFrameDropperLiveEdit(MacroAssembler* masm) {
   masm->Abort("LiveEdit frame dropping is not supported on arm");
 }
 
+const bool Debug::kFrameDropperSupported = false;
+
 #undef __
 
 
-void Debug::SetUpFrameDropperFrame(StackFrame* bottom_js_frame,
-                                   Handle<Code> code) {
-  UNREACHABLE();
-}
-const int Debug::kFrameDropperFrameSize = -1;
 
 #endif  // ENABLE_DEBUGGER_SUPPORT
 
 } }  // namespace v8::internal
+
+#endif  // V8_TARGET_ARCH_ARM

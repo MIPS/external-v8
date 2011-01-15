@@ -27,6 +27,8 @@
 
 #include "v8.h"
 
+#if defined(V8_TARGET_ARCH_MIPS)
+
 #include "codegen-inl.h"
 #include "compiler.h"
 #include "debug.h"
@@ -38,12 +40,12 @@ namespace internal {
 
 #define __ ACCESS_MASM(masm_)
 
-void FullCodeGenerator::Generate(CompilationInfo* info, Mode mode) {
+void FullCodeGenerator::Generate(CompilationInfo* info) {
   UNIMPLEMENTED_MIPS();
 }
 
 
-void FullCodeGenerator::EmitReturnSequence(int position) {
+void FullCodeGenerator::EmitReturnSequence() {
   UNIMPLEMENTED_MIPS();
 }
 
@@ -81,7 +83,9 @@ void FullCodeGenerator::Apply(Expression::Context context,
 }
 
 
-void FullCodeGenerator::DoTest(Expression::Context context) {
+void FullCodeGenerator::DoTest(Label* if_true,
+                               Label* if_false,
+                               Label* fall_through) {
   UNIMPLEMENTED_MIPS();
 }
 
@@ -115,7 +119,17 @@ void FullCodeGenerator::DeclareGlobals(Handle<FixedArray> pairs) {
 }
 
 
-void FullCodeGenerator::VisitFunctionLiteral(FunctionLiteral* expr) {
+void FullCodeGenerator::VisitSwitchStatement(SwitchStatement* stmt) {
+  UNIMPLEMENTED_MIPS();
+}
+
+
+void FullCodeGenerator::VisitForInStatement(ForInStatement* stmt) {
+  UNIMPLEMENTED_MIPS();
+}
+
+
+void FullCodeGenerator::EmitNewClosure(Handle<SharedFunctionInfo> info) {
   UNIMPLEMENTED_MIPS();
 }
 
@@ -168,6 +182,7 @@ void FullCodeGenerator::EmitBinaryOp(Token::Value op,
 
 
 void FullCodeGenerator::EmitVariableAssignment(Variable* var,
+                                               Token::Value op,
                                                Expression::Context context) {
   UNIMPLEMENTED_MIPS();
 }
@@ -224,15 +239,13 @@ void FullCodeGenerator::VisitCountOperation(CountOperation* expr) {
 }
 
 
-void FullCodeGenerator::VisitBinaryOperation(BinaryOperation* expr) {
-  UNIMPLEMENTED_MIPS();
-}
-
-
 void FullCodeGenerator::VisitCompareOperation(CompareOperation* expr) {
   UNIMPLEMENTED_MIPS();
 }
 
+void FullCodeGenerator::VisitCompareToNull(CompareToNull* expr) {
+  UNIMPLEMENTED_MIPS();
+}
 
 void FullCodeGenerator::VisitThisFunction(ThisFunction* expr) {
   UNIMPLEMENTED_MIPS();
@@ -267,7 +280,51 @@ void FullCodeGenerator::ExitFinallyBlock() {
   UNIMPLEMENTED_MIPS();
 }
 
+// ----------------------------------------------------------------------------
+// This is a quick way to define some functions that are
+// currently unimplemented.
+#define MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(Name) \
+  void FullCodeGenerator::Name(ZoneList<v8::internal::Expression*>*) \
+  { UNIMPLEMENTED_MIPS(); }
+
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitIsSmi)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitIsNonNegativeSmi)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitIsObject)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitIsSpecObject)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitIsUndetectableObject)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitIsFunction)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitIsArray)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitIsRegExp)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitIsConstructCall)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitObjectEquals)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitArguments)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitArgumentsLength)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitClassOf)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitLog)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitRandomHeapNumber)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitSubString)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitRegExpExec)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitValueOf)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitSetValueOf)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitNumberToString)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitStringCharFromCode)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitStringCharCodeAt)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitStringCharAt)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitStringAdd)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitStringCompare)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitMathPow)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitMathSin)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitMathCos)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitMathSqrt)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitCallFunction)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitRegExpConstructResult)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitSwapElements)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitGetFromCache)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitIsRegExpEquivalent)
+MIPS_UNIMPLEMENTED_FULL_CODEGEN_FUNC(EmitIsStringWrapperSafeForDefaultValueOf)
 
 #undef __
 
 } }  // namespace v8::internal
+
+#endif  // V8_TARGET_ARCH_MIPS

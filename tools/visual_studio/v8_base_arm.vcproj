@@ -205,6 +205,10 @@
 				>
 			</File>
 			<File
+				RelativePath="..\..\src\ast-inl.h"
+				>
+			</File>
+			<File
 				RelativePath="..\..\src\ast.cc"
 				>
 			</File>
@@ -270,6 +274,14 @@
 			</File>
 			<File
 				RelativePath="..\..\src\code-stubs.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\arm\code-stubs-arm.cc"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\arm\code-stubs-arm.h"
 				>
 			</File>
 			<File
@@ -428,24 +440,20 @@
 				RelativePath="..\..\src\factory.h"
 				>
 			</File>
-                        <File
-                                RelativePath="..\..\src\arm\fast-codegen-arm.cc"
-                                >
-                        </File>
-                        <File
-                                RelativePath="..\..\src\fast-codegen.cc"
-                                >
-                        </File>
-                        <File
-                                RelativePath="..\..\src\fast-codegen.h"
-                                >
-                        </File>
 			<File
 				RelativePath="..\..\src\flags.cc"
 				>
 			</File>
 			<File
 				RelativePath="..\..\src\flags.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\flow-graph.cc"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\flow-graph.h"
 				>
 			</File>
 			<File
@@ -581,11 +589,27 @@
 				>
 			</File>
 			<File
+				RelativePath="..\..\src\jump-target-inl.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\jump-target-light-inl.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\jump-target-light.h"
+				>
+			</File>
+			<File
 				RelativePath="..\..\src\jump-target.cc"
 				>
 			</File>
 			<File
 				RelativePath="..\..\src\arm\jump-target-arm.cc"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\jump-target-light.cc"
 				>
 			</File>
 			<File
@@ -669,14 +693,6 @@
 				>
 			</File>
 			<File
-				RelativePath="..\..\src\number-info-inl.h"
-				>
-			</File>
-			<File
-				RelativePath="..\..\src\number-info.h"
-				>
-			</File>
-			<File
 				RelativePath="..\..\src\objects-debug.cc"
 				>
 				<FileConfiguration
@@ -692,6 +708,13 @@
 				RelativePath="..\..\src\objects-inl.h"
 				>
 			</File>
+			<File
+				RelativePath="..\..\src\objects-visiting.cc"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\objects-visiting.h"
+				>
 			<File
 				RelativePath="..\..\src\objects.cc"
 				>
@@ -925,6 +948,22 @@
 				>
 			</File>
 			<File
+				RelativePath="..\..\src\type-info.cc"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\type-info.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\unbound-queue-inl.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\unbound-queue.h"
+				>
+			</File>
+			<File
 				RelativePath="..\..\src\unicode-inl.h"
 				>
 			</File>
@@ -985,7 +1024,15 @@
 				>
 			</File>
 			<File
+				RelativePath="..\..\src\virtual-frame-light-inl.h"
+				>
+			</File>
+			<File
 				RelativePath="..\..\src\virtual-frame.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\arm\virtual-frame-arm-inl.h"
 				>
 			</File>
 			<File
@@ -998,6 +1045,22 @@
 			</File>
 			<File
 				RelativePath="..\..\src\arm\virtual-frame-arm.cc"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\virtual-frame-light.cc"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\vm-state.cc"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\vm-state-inl.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\vm-state.h"
 				>
 			</File>
 			<File
@@ -1038,6 +1101,10 @@
 			>
 			<File
 				RelativePath="..\..\include\v8-debug.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\include\v8-profiler.h"
 				>
 			</File>
 			<File

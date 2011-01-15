@@ -1,4 +1,4 @@
-// Copyright 2009 the V8 project authors. All rights reserved.
+// Copyright 2010 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -31,30 +31,33 @@
 #include "v8.h"
 
 #include "ast.h"
+#include "compiler.h"
 
 namespace v8 {
 namespace internal {
 
-class FullCodeGenSyntaxChecker: public AstVisitor {
+// AST node visitor which can tell whether a given statement will be breakable
+// when the code is compiled by the full compiler in the debugger. This means
+// that there will be an IC (load/store/call) in the code generated for the
+// debugger to piggybag on.
+class BreakableStatementChecker: public AstVisitor {
  public:
-  FullCodeGenSyntaxChecker() : has_supported_syntax_(true) {}
+  BreakableStatementChecker() : is_breakable_(false) {}
 
-  void Check(FunctionLiteral* fun);
+  void Check(Statement* stmt);
+  void Check(Expression* stmt);
 
-  bool has_supported_syntax() { return has_supported_syntax_; }
+  bool is_breakable() { return is_breakable_; }
 
  private:
-  void VisitDeclarations(ZoneList<Declaration*>* decls);
-  void VisitStatements(ZoneList<Statement*>* stmts);
-
   // AST node visit functions.
 #define DECLARE_VISIT(type) virtual void Visit##type(type* node);
   AST_NODE_LIST(DECLARE_VISIT)
 #undef DECLARE_VISIT
 
-  bool has_supported_syntax_;
+  bool is_breakable_;
 
-  DISALLOW_COPY_AND_ASSIGN(FullCodeGenSyntaxChecker);
+  DISALLOW_COPY_AND_ASSIGN(BreakableStatementChecker);
 };
 
 
@@ -63,11 +66,6 @@ class FullCodeGenSyntaxChecker: public AstVisitor {
 
 class FullCodeGenerator: public AstVisitor {
  public:
-  enum Mode {
-    PRIMARY,
-    SECONDARY
-  };
-
   explicit FullCodeGenerator(MacroAssembler* masm)
       : masm_(masm),
         info_(NULL),
@@ -75,12 +73,13 @@ class FullCodeGenerator: public AstVisitor {
         loop_depth_(0),
         location_(kStack),
         true_label_(NULL),
-        false_label_(NULL) {
+        false_label_(NULL),
+        fall_through_(NULL) {
   }
 
   static Handle<Code> MakeCode(CompilationInfo* info);
 
-  void Generate(CompilationInfo* info, Mode mode);
+  void Generate(CompilationInfo* info);
 
  private:
   class Breakable;
@@ -229,8 +228,6 @@ class FullCodeGenerator: public AstVisitor {
       return stack_depth + kForInStackElementCount;
     }
    private:
-    // TODO(lrn): Check that this value is correct when implementing
-    // for-in.
     static const int kForInStackElementCount = 5;
     DISALLOW_COPY_AND_ASSIGN(ForIn);
   };
@@ -258,16 +255,34 @@ class FullCodeGenerator: public AstVisitor {
   // context.
   void DropAndApply(int count, Expression::Context context, Register reg);
 
+  // Set up branch labels for a test expression.
+  void PrepareTest(Label* materialize_true,
+                   Label* materialize_false,
+                   Label** if_true,
+                   Label** if_false,
+                   Label** fall_through);
+
   // Emit code to convert pure control flow to a pair of labels into the
   // result expected according to an expression context.
   void Apply(Expression::Context context,
              Label* materialize_true,
              Label* materialize_false);
 
+  // Emit code to convert constant control flow (true or false) into
+  // the result expected according to an expression context.
+  void Apply(Expression::Context context, bool flag);
+
   // Helper function to convert a pure value into a test context.  The value
   // is expected on the stack or the accumulator, depending on the platform.
   // See the platform-specific implementation for details.
-  void DoTest(Expression::Context context);
+  void DoTest(Label* if_true, Label* if_false, Label* fall_through);
+
+  // Helper function to split control flow and avoid a branch to the
+  // fall-through label if it is set up.
+  void Split(Condition cc,
+             Label* if_true,
+             Label* if_false,
+             Label* fall_through);
 
   void Move(Slot* dst, Register source, Register scratch1, Register scratch2);
   void Move(Register dst, Slot* source);
@@ -294,69 +309,67 @@ class FullCodeGenerator: public AstVisitor {
     location_ = saved_location;
   }
 
-  void VisitForControl(Expression* expr, Label* if_true, Label* if_false) {
+  void VisitForControl(Expression* expr,
+                       Label* if_true,
+                       Label* if_false,
+                       Label* fall_through) {
     Expression::Context saved_context = context_;
     Label* saved_true = true_label_;
     Label* saved_false = false_label_;
+    Label* saved_fall_through = fall_through_;
     context_ = Expression::kTest;
     true_label_ = if_true;
     false_label_ = if_false;
+    fall_through_ = fall_through;
     Visit(expr);
     context_ = saved_context;
     true_label_ = saved_true;
     false_label_ = saved_false;
-  }
-
-  void VisitForValueControl(Expression* expr,
-                            Location where,
-                            Label* if_true,
-                            Label* if_false) {
-    Expression::Context saved_context = context_;
-    Location saved_location = location_;
-    Label* saved_true = true_label_;
-    Label* saved_false = false_label_;
-    context_ = Expression::kValueTest;
-    location_ = where;
-    true_label_ = if_true;
-    false_label_ = if_false;
-    Visit(expr);
-    context_ = saved_context;
-    location_ = saved_location;
-    true_label_ = saved_true;
-    false_label_ = saved_false;
-  }
-
-  void VisitForControlValue(Expression* expr,
-                            Location where,
-                            Label* if_true,
-                            Label* if_false) {
-    Expression::Context saved_context = context_;
-    Location saved_location = location_;
-    Label* saved_true = true_label_;
-    Label* saved_false = false_label_;
-    context_ = Expression::kTestValue;
-    location_ = where;
-    true_label_ = if_true;
-    false_label_ = if_false;
-    Visit(expr);
-    context_ = saved_context;
-    location_ = saved_location;
-    true_label_ = saved_true;
-    false_label_ = saved_false;
+    fall_through_ = saved_fall_through;
   }
 
   void VisitDeclarations(ZoneList<Declaration*>* declarations);
   void DeclareGlobals(Handle<FixedArray> pairs);
 
+  // Try to perform a comparison as a fast inlined literal compare if
+  // the operands allow it.  Returns true if the compare operations
+  // has been matched and all code generated; false otherwise.
+  bool TryLiteralCompare(Token::Value op,
+                         Expression* left,
+                         Expression* right,
+                         Label* if_true,
+                         Label* if_false,
+                         Label* fall_through);
+
+  // Platform-specific code for a variable, constant, or function
+  // declaration.  Functions have an initial value.
+  void EmitDeclaration(Variable* variable,
+                       Variable::Mode mode,
+                       FunctionLiteral* function);
+
   // Platform-specific return sequence
-  void EmitReturnSequence(int position);
+  void EmitReturnSequence();
 
   // Platform-specific code sequences for calls
   void EmitCallWithStub(Call* expr);
   void EmitCallWithIC(Call* expr, Handle<Object> name, RelocInfo::Mode mode);
+  void EmitKeyedCallWithIC(Call* expr, Expression* key, RelocInfo::Mode mode);
+
+
+  // Platform-specific code for inline runtime calls.
+  void EmitInlineRuntimeCall(CallRuntime* expr);
+
+#define EMIT_INLINE_RUNTIME_CALL(name, x, y) \
+  void Emit##name(ZoneList<Expression*>* arguments);
+  INLINE_RUNTIME_FUNCTION_LIST(EMIT_INLINE_RUNTIME_CALL)
+#undef EMIT_INLINE_RUNTIME_CALL
 
   // Platform-specific code for loading variables.
   void EmitVariableLoad(Variable* expr, Expression::Context context);
+
+  // Platform-specific support for allocating a new closure based on
+  // the given function info.
+  void EmitNewClosure(Handle<SharedFunctionInfo> info);
 
   // Platform-specific support for compiling assignments.
 
@@ -372,9 +385,15 @@ class FullCodeGenerator: public AstVisitor {
   // of the stack and the right one in the accumulator.
   void EmitBinaryOp(Token::Value op, Expression::Context context);
 
+  // Assign to the given expression as if via '='. The right-hand-side value
+  // is expected in the accumulator.
+  void EmitAssignment(Expression* expr);
+
   // Complete a variable assignment.  The right-hand-side value is expected
   // in the accumulator.
-  void EmitVariableAssignment(Variable* var, Expression::Context context);
+  void EmitVariableAssignment(Variable* var,
+                              Token::Value op,
+                              Expression::Context context);
 
   // Complete a named property assignment.  The receiver is expected on top
   // of the stack and the right-hand-side value in the accumulator.
@@ -388,6 +407,7 @@ class FullCodeGenerator: public AstVisitor {
   void SetFunctionPosition(FunctionLiteral* fun);
   void SetReturnPosition(FunctionLiteral* fun);
   void SetStatementPosition(Statement* stmt);
+  void SetExpressionPosition(Expression* expr, int pos);
   void SetStatementPosition(int pos);
   void SetSourcePosition(int pos);
 
@@ -428,6 +448,14 @@ class FullCodeGenerator: public AstVisitor {
   // Handles the shortcutted logical binary operations in VisitBinaryOperation.
   void EmitLogicalOperation(BinaryOperation* expr);
 
+  void VisitForTypeofValue(Expression* expr, Location where);
+
+  void VisitLogicalForValue(Expression* expr,
+                            Token::Value op,
+                            Location where,
+                            Label* done);
+
+
   MacroAssembler* masm_;
   CompilationInfo* info_;
 
@@ -439,6 +467,7 @@ class FullCodeGenerator: public AstVisitor {
   Location location_;
   Label* true_label_;
   Label* false_label_;
+  Label* fall_through_;
 
   friend class NestedStatement;
 

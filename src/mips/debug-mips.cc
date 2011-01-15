@@ -29,6 +29,8 @@
 
 #include "v8.h"
 
+#if defined(V8_TARGET_ARCH_MIPS)
+
 #include "codegen-inl.h"
 #include "debug.h"
 
@@ -51,17 +53,19 @@ void BreakLocationIterator::SetDebugBreakAtReturn() {
   // addiu sp, sp, N
   // jr ra
   // nop (in branch delay slot)
-  //
-  CodePatcher patcher(rinfo()->pc(), Assembler::kJSReturnSequenceLength);
+
+  // Make sure this constant matches the number if instrucntions we emit.
+  ASSERT(Assembler::kJSReturnSequenceInstructions == 7);
+  CodePatcher patcher(rinfo()->pc(), Assembler::kJSReturnSequenceInstructions);
   // li and Call pseudo-instructions emit two instructions each.
   patcher.masm()->li(v8::internal::t9,
-                     Operand(reinterpret_cast<int32_t>(Debug::debug_break_return()->entry())));
+      Operand(reinterpret_cast<int32_t>(Debug::debug_break_return()->entry())));
   patcher.masm()->Call(v8::internal::t9);
   patcher.masm()->nop();
   patcher.masm()->nop();
   patcher.masm()->nop();
 
-  // TODO(mips): Open issue about using breakpoint instrucntion instead of nop's.
+  // TODO(mips): Open issue about using breakpoint instruction instead of nops.
   // patcher.masm()->bkpt(0);
 }
 
@@ -69,14 +73,46 @@ void BreakLocationIterator::SetDebugBreakAtReturn() {
 // Restore the JS frame exit code.
 void BreakLocationIterator::ClearDebugBreakAtReturn() {
   rinfo()->PatchCode(original_rinfo()->pc(),
-                     Assembler::kJSReturnSequenceLength);
+                     Assembler::kJSReturnSequenceInstructions);
 }
 
 
-// A debug break in the exit code is identified by a call.
+// A debug break in the exit code is identified by the JS frame exit code
+// having been patched with li/call psuedo-instrunction (liu/ori/jalr)
 bool Debug::IsDebugBreakAtReturn(RelocInfo* rinfo) {
   ASSERT(RelocInfo::IsJSReturn(rinfo->rmode()));
   return rinfo->IsPatchedReturnSequence();
+}
+
+
+bool BreakLocationIterator::IsDebugBreakAtSlot() {
+  ASSERT(IsDebugBreakSlot());
+  // Check whether the debug break slot instructions have been patched.
+  return rinfo()->IsPatchedDebugBreakSlotSequence();
+}
+
+
+void BreakLocationIterator::SetDebugBreakAtSlot() {
+  ASSERT(IsDebugBreakSlot());
+  // Patch the code changing the debug break slot code from
+  //   nop(2) - nop(2) is sll(zero_reg, zero_reg, 2)
+  //   nop(2)
+  //   nop(2)
+  //   nop(2)
+  // to a call to the debug break slot code.
+  //   li t9, address   (lui t9 / ori t9 instruction pair)
+  //   call t9          (jalr t9 / nop instruction pair)
+  CodePatcher patcher(rinfo()->pc(), Assembler::kDebugBreakSlotInstructions);
+  patcher.masm()->li(v8::internal::t9,
+      Operand(reinterpret_cast<int32_t>(Debug::debug_break_return()->entry())));
+  patcher.masm()->Call(v8::internal::t9);
+}
+
+
+void BreakLocationIterator::ClearDebugBreakAtSlot() {
+  ASSERT(IsDebugBreakSlot());
+  rinfo()->PatchCode(original_rinfo()->pc(),
+                     Assembler::kDebugBreakSlotInstructions);
 }
 
 
@@ -168,26 +204,20 @@ void Debug::GenerateKeyedLoadICDebugBreak(MacroAssembler* masm) {
 
 void Debug::GenerateKeyedStoreICDebugBreak(MacroAssembler* masm) {
   // ---------- S t a t e --------------
+  //  -- a0     : value
+  //  -- a1     : key
+  //  -- a2     : receiver
   //  -- ra     : return address
-  //  -- sp[0]  : key
-  //  -- sp[4]  : receiver
-  Generate_DebugBreakCallHelper(masm, 0);
+  Generate_DebugBreakCallHelper(masm, a0.bit() | a1.bit() | a2.bit());
 }
 
 
 void Debug::GenerateCallICDebugBreak(MacroAssembler* masm) {
   // Calling convention for IC call (from ic-mips.cc)
   // ----------- S t a t e -------------
-  //  -- a0: number of arguments
-  //  -- a1: receiver
-  //  -- ra: return address
+  //  -- a2: name
   // -----------------------------------
-  // Register a1 contains an object that needs to be pushed on the expression
-  // stack of the fake JS frame. a0 is the actual number of arguments not
-  // encoded as a smi, therefore it cannot be on the expression stack of the
-  // fake JS frame as it can easily be an invalid pointer (e.g. 1). a0 will be
-  // pushed on the stack of the C frame and restored from there.
-  Generate_DebugBreakCallHelper(masm, a1.bit());
+  Generate_DebugBreakCallHelper(masm, a2.bit());
 }
 
 
@@ -215,6 +245,28 @@ void Debug::GenerateStubNoRegistersDebugBreak(MacroAssembler* masm) {
 }
 
 
+void Debug::GenerateSlot(MacroAssembler* masm) {
+  // Generate enough nop's to make space for a call instruction. Avoid emitting
+  // the trampoline pool in the debug break slot code.
+  Assembler::BlockTrampolinePoolScope block_trampoline_pool(masm);
+  Label check_codesize;
+  __ bind(&check_codesize);
+  __ RecordDebugBreakSlot();
+  for (int i = 0; i < Assembler::kDebugBreakSlotInstructions; i++) {
+    __ nop(2);
+  }
+  ASSERT_EQ(Assembler::kDebugBreakSlotInstructions,
+            masm->InstructionsGeneratedSince(&check_codesize));
+}
+
+
+void Debug::GenerateSlotDebugBreak(MacroAssembler* masm) {
+  // In the places where a debug break slot is inserted no registers can contain
+  // object pointers.
+  Generate_DebugBreakCallHelper(masm, 0);
+}
+
+
 void Debug::GeneratePlainReturnLiveEdit(MacroAssembler* masm) {
   masm->Abort("LiveEdit frame dropping is not supported on mips");
 }
@@ -223,17 +275,14 @@ void Debug::GenerateFrameDropperLiveEdit(MacroAssembler* masm) {
   masm->Abort("LiveEdit frame dropping is not supported on mips");
 }
 
+
+const bool Debug::kFrameDropperSupported = false;
+
 #undef __
-
-
-void Debug::SetUpFrameDropperFrame(StackFrame* bottom_js_frame,
-                                   Handle<Code> code) {
-  UNREACHABLE();
-}
-const int Debug::kFrameDropperFrameSize = -1;
 
 
 #endif  // ENABLE_DEBUGGER_SUPPORT
 
 } }  // namespace v8::internal
 
+#endif  // V8_TARGET_ARCH_MIPS

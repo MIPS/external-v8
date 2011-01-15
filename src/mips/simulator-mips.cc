@@ -26,8 +26,11 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <stdlib.h>
+#include <math.h>
 #include <cstdarg>
 #include "v8.h"
+
+#if defined(V8_TARGET_ARCH_MIPS)
 
 #include "disasm.h"
 #include "assembler.h"
@@ -39,6 +42,12 @@
 namespace v8i = v8::internal;
 
 #if !defined(__mips)
+
+#ifdef _MIPS_ARCH_MIPS32R2
+  #define mips32r2 1
+#else
+  #define mips32r2 0
+#endif
 
 // Only build the simulator if not compiling for real MIPS hardware.
 namespace assembler {
@@ -190,7 +199,7 @@ double Debugger::GetFPURegisterValueDouble(int regnum) {
 bool Debugger::GetValue(const char* desc, int32_t* value) {
   int regnum = Registers::Number(desc);
   int fpuregnum;
-  if (v8i::CpuFeatures::IsSupported(v8i::FPU)){
+  if (v8i::CpuFeatures::IsSupported(v8i::FPU)) {
     v8i::CpuFeatures::Scope scope(v8i::FPU);
     fpuregnum = FPURegisters::Number(desc);
   } else {
@@ -294,7 +303,7 @@ void Debugger::PrintAllRegsIncludingFPU() {
 
   PrintAllRegs();
 
-  if (v8i::CpuFeatures::IsSupported(v8i::FPU)){
+  if (v8i::CpuFeatures::IsSupported(v8i::FPU)) {
     v8i::CpuFeatures::Scope scope(v8i::FPU);
     PrintF("\n\n");
     // f0, f1, f2, ... f31
@@ -393,7 +402,7 @@ void Debugger::Debug() {
           } else {
             int regnum = Registers::Number(arg1);
             int fpuregnum;
-            if (v8i::CpuFeatures::IsSupported(v8i::FPU)){
+            if (v8i::CpuFeatures::IsSupported(v8i::FPU)) {
               v8i::CpuFeatures::Scope scope(v8i::FPU);
               fpuregnum = FPURegisters::Number(arg1);
             } else {
@@ -403,7 +412,7 @@ void Debugger::Debug() {
               value = GetRegisterValue(regnum);
               PrintF("%s: 0x%08x %d \n", arg1, value, value);
             } else if (fpuregnum != kInvalidFPURegister) {
-              if(fpuregnum%2 == 1){
+              if (fpuregnum % 2 == 1) {
                 value = GetFPURegisterValueInt(fpuregnum);
                 fvalue = GetFPURegisterValueFloat(fpuregnum);
                 PrintF("%s: 0x%08x %11.4e\n", arg1, value, fvalue);
@@ -412,7 +421,11 @@ void Debugger::Debug() {
                 double dfvalue;
                 lvalue = GetFPURegisterValueLong(fpuregnum);
                 dfvalue = GetFPURegisterValueDouble(fpuregnum);
-                PrintF("%3s,%3s: 0x%016llx %16.4e\n", FPURegisters::Name(fpuregnum), FPURegisters::Name(fpuregnum+1), lvalue, dfvalue);
+                PrintF("%3s,%3s: 0x%016llx %16.4e\n",
+                       FPURegisters::Name(fpuregnum),
+                       FPURegisters::Name(fpuregnum+1),
+                       lvalue,
+                       dfvalue);
               }
             } else {
               PrintF("%s unrecognized\n", arg1);
@@ -424,7 +437,7 @@ void Debugger::Debug() {
               int32_t value;
               float fvalue;
               int fpuregnum;
-              if (v8i::CpuFeatures::IsSupported(v8i::FPU)){
+              if (v8i::CpuFeatures::IsSupported(v8i::FPU)) {
                 v8i::CpuFeatures::Scope scope(v8i::FPU);
                 fpuregnum = FPURegisters::Number(arg1);
               } else {
@@ -636,6 +649,92 @@ void Debugger::Debug() {
 #undef XSTR
 }
 
+static bool ICacheMatch(void* one, void* two) {
+  ASSERT((reinterpret_cast<intptr_t>(one) & CachePage::kPageMask) == 0);
+  ASSERT((reinterpret_cast<intptr_t>(two) & CachePage::kPageMask) == 0);
+  return one == two;
+}
+
+
+static uint32_t ICacheHash(void* key) {
+  return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(key)) >> 2;
+}
+
+
+static bool AllOnOnePage(uintptr_t start, int size) {
+  intptr_t start_page = (start & ~CachePage::kPageMask);
+  intptr_t end_page = ((start + size) & ~CachePage::kPageMask);
+  return start_page == end_page;
+}
+
+
+void Simulator::FlushICache(void* start_addr, size_t size) {
+  intptr_t start = reinterpret_cast<intptr_t>(start_addr);
+  int intra_line = (start & CachePage::kLineMask);
+  start -= intra_line;
+  size += intra_line;
+  size = ((size - 1) | CachePage::kLineMask) + 1;
+  int offset = (start & CachePage::kPageMask);
+  while (!AllOnOnePage(start, size - 1)) {
+    int bytes_to_flush = CachePage::kPageSize - offset;
+    FlushOnePage(start, bytes_to_flush);
+    start += bytes_to_flush;
+    size -= bytes_to_flush;
+    ASSERT_EQ(0, start & CachePage::kPageMask);
+    offset = 0;
+  }
+  if (size != 0) {
+    FlushOnePage(start, size);
+  }
+}
+
+
+CachePage* Simulator::GetCachePage(void* page) {
+  v8::internal::HashMap::Entry* entry = i_cache_->Lookup(page,
+                                                         ICacheHash(page),
+                                                         true);
+  if (entry->value == NULL) {
+    CachePage* new_page = new CachePage();
+    entry->value = new_page;
+  }
+  return reinterpret_cast<CachePage*>(entry->value);
+}
+
+
+// Flush from start up to and not including start + size.
+void Simulator::FlushOnePage(intptr_t start, int size) {
+  ASSERT(size <= CachePage::kPageSize);
+  ASSERT(AllOnOnePage(start, size - 1));
+  ASSERT((start & CachePage::kLineMask) == 0);
+  ASSERT((size & CachePage::kLineMask) == 0);
+  void* page = reinterpret_cast<void*>(start & (~CachePage::kPageMask));
+  int offset = (start & CachePage::kPageMask);
+  CachePage* cache_page = GetCachePage(page);
+  char* valid_bytemap = cache_page->ValidityByte(offset);
+  memset(valid_bytemap, CachePage::LINE_INVALID, size >> CachePage::kLineShift);
+}
+
+
+void Simulator::CheckICache(Instruction* instr) {
+  intptr_t address = reinterpret_cast<intptr_t>(instr);
+  void* page = reinterpret_cast<void*>(address & (~CachePage::kPageMask));
+  void* line = reinterpret_cast<void*>(address & (~CachePage::kLineMask));
+  int offset = (address & CachePage::kPageMask);
+  CachePage* cache_page = GetCachePage(page);
+  char* cache_valid_byte = cache_page->ValidityByte(offset);
+  bool cache_hit = (*cache_valid_byte == CachePage::LINE_VALID);
+  char* cached_line = cache_page->CachedData(offset & ~CachePage::kLineMask);
+  if (cache_hit) {
+    // Check that the data in memory matches the contents of the I-cache.
+    CHECK(memcmp(reinterpret_cast<void*>(instr),
+                 cache_page->CachedData(offset),
+                 Instruction::kInstructionSize) == 0);
+  } else {
+    // Cache miss.  Load memory into the cache.
+    memcpy(cached_line, line, CachePage::kLineLength);
+    *cache_valid_byte = CachePage::LINE_VALID;
+  }
+}
 
 // Create one simulator per thread and keep it in thread local storage.
 static v8::internal::Thread::LocalStorageKey simulator_key;
@@ -651,8 +750,12 @@ void Simulator::Initialize() {
   ::v8::internal::ExternalReference::set_redirector(&RedirectExternalReference);
 }
 
+v8::internal::HashMap* Simulator::i_cache_ = NULL;
 
 Simulator::Simulator() {
+  if (i_cache_ == NULL) {
+    i_cache_ = new v8::internal::HashMap(&ICacheMatch);
+  }
   Initialize();
   // Setup simulator support first. Some of this information is needed to
   // setup the architecture state.
@@ -700,6 +803,9 @@ class Redirection {
         swi_instruction_(rtCallRedirInstr),
         fp_return_(fp_return),
         next_(list_) {
+    Simulator::current()->
+        FlushICache(reinterpret_cast<void*>(&swi_instruction_),
+                      Instruction::kInstructionSize);
     list_ = this;
   }
 
@@ -777,12 +883,12 @@ void Simulator::set_fpu_register(int fpureg, int32_t value) {
 
 void Simulator::set_fpu_register_float(int fpureg, float value) {
   ASSERT((fpureg >= 0) && (fpureg < kNumFPURegisters));
-  *v8i::BitCast<float*, int32_t*>(&FPUregisters_[fpureg]) = value;
+  *v8i::BitCast<float*>(&FPUregisters_[fpureg]) = value;
 }
 
 void Simulator::set_fpu_register_double(int fpureg, double value) {
   ASSERT((fpureg >= 0) && (fpureg < kNumFPURegisters) && ((fpureg % 2) == 0));
-  *v8i::BitCast<double*, int32_t*>(&FPUregisters_[fpureg]) = value;
+  *v8i::BitCast<double*>(&FPUregisters_[fpureg]) = value;
 }
 
 
@@ -803,20 +909,19 @@ int32_t Simulator::get_fpu_register(int fpureg) const {
 
 int64_t Simulator::get_fpu_register_long(int fpureg) const {
   ASSERT((fpureg >= 0) && (fpureg < kNumFPURegisters) && ((fpureg % 2) == 0));
-  return *v8i::BitCast<int64_t*, int32_t*>(
+  return *v8i::BitCast<int64_t*>(
       const_cast<int32_t*>(&FPUregisters_[fpureg]));
 }
 
 float Simulator::get_fpu_register_float(int fpureg) const {
   ASSERT((fpureg >= 0) && (fpureg < kNumFPURegisters));
-  return *v8i::BitCast<float*, int32_t*>(
+  return *v8i::BitCast<float*>(
       const_cast<int32_t*>(&FPUregisters_[fpureg]));
 }
 
 double Simulator::get_fpu_register_double(int fpureg) const {
   ASSERT((fpureg >= 0) && (fpureg < kNumFPURegisters) && ((fpureg % 2) == 0));
-  return *v8i::BitCast<double*, int32_t*>(
-      const_cast<int32_t*>(&FPUregisters_[fpureg]));
+  return *v8i::BitCast<double*>(const_cast<int32_t*>(&FPUregisters_[fpureg]));
 }
 
 // Helper functions for setting and testing the FPU condition code bits.
@@ -856,7 +961,7 @@ int32_t Simulator::get_pc() const {
 // get the correct MIPS-like behaviour on unaligned accesses.
 
 int Simulator::ReadW(int32_t addr, Instruction* instr) {
-  if (addr >= 0 && addr < 0x400) {
+  if (addr >=0 && addr < 0x400) {
     // this has to be a NULL-dereference
     Debugger dbg(this);
     dbg.Debug();
@@ -866,7 +971,8 @@ int Simulator::ReadW(int32_t addr, Instruction* instr) {
     return *ptr;
   }
   PrintF("Unaligned read at 0x%08x, pc=%p\n", addr, instr);
-  OS::Abort();
+  Debugger dbg(this);
+  dbg.Debug();
   return 0;
 }
 
@@ -883,7 +989,8 @@ void Simulator::WriteW(int32_t addr, int value, Instruction* instr) {
     return;
   }
   PrintF("Unaligned write at 0x%08x, pc=%p\n", addr, instr);
-  OS::Abort();
+  Debugger dbg(this);
+  dbg.Debug();
 }
 
 
@@ -1024,7 +1131,6 @@ void Simulator::SoftwareInterrupt(Instruction* instr) {
     int32_t arg1 = get_register(a1);
     int32_t arg2 = get_register(a2);
     int32_t arg3 = get_register(a3);
-    int32_t result_l, result_h;
     // This is dodgy but it works because the C entry stubs are never moved.
     // See comment in codegen-arm.cc and bug 1242173.
     int32_t saved_ra = get_register(ra);
@@ -1058,19 +1164,18 @@ void Simulator::SoftwareInterrupt(Instruction* instr) {
       SimulatorRuntimeFPCall target =
           reinterpret_cast<SimulatorRuntimeFPCall>(external);
       double result = target(arg0, arg1, arg2, arg3);
-      uint64_t u64;
-      u64 = *v8i::BitCast<uint64_t*, double*>(const_cast<double*>(&result));
-      result_h = static_cast<uint32_t>(u64 >> 32);
-      result_l = static_cast<uint32_t>(u64 & 0xffffffff);
+      // fp result -> registers v0 and v1.
+      int32_t gpreg_pair[2];
+      memcpy(&gpreg_pair[0], &result, 2 * sizeof(int32_t));
+      set_register(v0, gpreg_pair[0]);
+      set_register(v1, gpreg_pair[1]);
     } else {
       int64_t result = target(arg0, arg1, arg2, arg3);
-      result_l = static_cast<int32_t>(result);
-      result_h = static_cast<int32_t>(result >> 32);
+      set_register(v0, static_cast<int32_t>(result));
+      set_register(v1, static_cast<int32_t>(result >> 32));
     }
-    set_register(v0, result_l);
-    set_register(v1, result_h);
     if (::v8::internal::FLAG_trace_sim) {
-      PrintF("Returned %08x : %08x\n", result_h, result_l);
+      PrintF("Returned %08x : %08x\n", get_register(v1), get_register(v0));
     }
     set_register(ra, saved_ra);
     set_pc(get_register(ra));
@@ -1175,9 +1280,13 @@ void Simulator::DecodeTypeRegister(Instruction* instr) {
             alu_out = rt_u >> sa;
           } else {
             // Logical right-rotate of a word by a fixed number of bits. This
-            // is special case od SRL instruction, added in MIPS32 Release 2.
+            // is special case of SRL instruction, added in MIPS32 Release 2.
             // RS field is equal to 00001
-            alu_out = (rt_u >> sa) | (rt_u << (32 - sa));
+            if (mips32r2) {
+              alu_out = (rt_u >> sa) | (rt_u << (32 - sa));
+            } else {
+              Format(instr, "SRL");
+            }
           }
           break;
         case SRA:
@@ -1195,7 +1304,11 @@ void Simulator::DecodeTypeRegister(Instruction* instr) {
             // Logical right-rotate of a word by a variable number of bits.
             // This is special case od SRLV instruction, added in MIPS32
             // Release 2. SA field is equal to 00001
-            alu_out = (rt_u >> rs_u) | (rt_u << (32 - rs_u));
+            if (mips32r2) {
+              alu_out = (rt_u >> rs_u) | (rt_u << (32 - rs_u));
+            } else {
+              Format(instr, "SRLV");
+            }
           }
           break;
         case SRAV:
@@ -1286,6 +1399,7 @@ void Simulator::DecodeTypeRegister(Instruction* instr) {
           break;
         case MOVN:
         case MOVZ:
+        case MOVCI:
           // No action taken on decode.
           break;
         default:
@@ -1307,23 +1421,31 @@ void Simulator::DecodeTypeRegister(Instruction* instr) {
     case SPECIAL3:
       switch (instr->FunctionFieldRaw()) {
         case INS: {   // mips32r2 instruction.
-            // Interpret Rd field as 5-bit msb of insert.
-            uint16_t msb = rd_reg;
-            // Interpret sa field as 5-bit lsb of insert.
-            uint16_t lsb = sa;
-            uint16_t size = msb - lsb + 1;
-            uint16_t mask = (1 << size) - 1;
-            alu_out = (rt_u & ~(mask << lsb)) | ((rs_u & mask) << lsb);
+            if (mips32r2) {
+              // Interpret Rd field as 5-bit msb of insert.
+              uint16_t msb = rd_reg;
+              // Interpret sa field as 5-bit lsb of insert.
+              uint16_t lsb = sa;
+              uint16_t size = msb - lsb + 1;
+              uint16_t mask = (1 << size) - 1;
+              alu_out = (rt_u & ~(mask << lsb)) | ((rs_u & mask) << lsb);
+            } else {
+              Format(instr, "INS");
+            }
           }
           break;
         case EXT: {   // mips32r2 instruction.
-            // Interpret Rd field as 5-bit msb of extract.
-            uint16_t msb = rd_reg;
-            // Interpret sa field as 5-bit lsb of extract.
-            uint16_t lsb = sa;
-            uint16_t size = msb + 1;
-            uint16_t mask = (1 << size) - 1;
-            alu_out = (rs_u & (mask << lsb)) >> lsb;
+            if (mips32r2) {
+              // Interpret Rd field as 5-bit msb of extract.
+              uint16_t msb = rd_reg;
+              // Interpret sa field as 5-bit lsb of extract.
+              uint16_t lsb = sa;
+              uint16_t size = msb + 1;
+              uint16_t mask = (1 << size) - 1;
+              alu_out = (rs_u & (mask << lsb)) >> lsb;
+            } else {
+              Format(instr, "EXT");
+            }
           }
           break;
         default:
@@ -1403,6 +1525,9 @@ void Simulator::DecodeTypeRegister(Instruction* instr) {
             case NEG_D:
               set_fpu_register_double(fd_reg, -fs);
               break;
+            case SQRT_D:
+              set_fpu_register_double(fd_reg, sqrt(fs));
+              break;
             case C_UN_D:
               set_fpu_ccr_bit(cc, isnan(fs) || isnan(ft));
               break;
@@ -1435,15 +1560,25 @@ void Simulator::DecodeTypeRegister(Instruction* instr) {
               set_fpu_register_float(fd_reg, static_cast<float>(fs));
               break;
             case CVT_L_D:  // Truncate double to 64-bit long-word.
-              // Does not follow rounding modes, just truncates.
-              i64 = static_cast<int64_t>(fs);
-              set_fpu_register(fd_reg, i64 & 0xffffffff);
-              set_fpu_register(fd_reg + 1, i64 >> 32);
+              if (mips32r2) {
+                // Does not follow rounding modes, just truncates.
+                i64 = static_cast<int64_t>(fs);
+                set_fpu_register(fd_reg, i64 & 0xffffffff);
+                set_fpu_register(fd_reg + 1, i64 >> 32);
+              } else {
+                // Not allowed on MIPS32 Release 1
+                UNIMPLEMENTED_MIPS();
+              }
               break;
             case TRUNC_L_D:
-              i64 = static_cast<int64_t>(fs);
-              set_fpu_register(fd_reg, i64 & 0xffffffff);
-              set_fpu_register(fd_reg + 1, i64 >> 32);
+              if (mips32r2) {
+                i64 = static_cast<int64_t>(fs);
+                set_fpu_register(fd_reg, i64 & 0xffffffff);
+                set_fpu_register(fd_reg + 1, i64 >> 32);
+              } else {
+                // Not allowed on MIPS32 Release 1
+                UNIMPLEMENTED_MIPS();
+              }
               break;
             case C_F_D:
               UNIMPLEMENTED_MIPS();
@@ -1468,12 +1603,18 @@ void Simulator::DecodeTypeRegister(Instruction* instr) {
           break;
         case L:
           switch (instr->FunctionFieldRaw()) {
-            case CVT_D_L:
-              // Watch the signs here, we want 2 32-bit vals to make a sign-64.
+          case CVT_D_L:
+            if (mips32r2) {
+              // Watch the signs here, we want 2 32-bit vals
+              // to make a sign-64.
               i64 = (uint32_t) get_fpu_register(fs_reg);
               i64 |= ((int64_t) get_fpu_register(fs_reg + 1) << 32);
               set_fpu_register_double(fd_reg, static_cast<double>(i64));
-              break;
+            } else {
+              // Not allowed on MIPS32 Release 1
+              UNIMPLEMENTED_MIPS();
+            }
+            break;
             case CVT_S_L:
               UNIMPLEMENTED_MIPS();
               break;
@@ -1540,6 +1681,15 @@ void Simulator::DecodeTypeRegister(Instruction* instr) {
         case MOVN:
           if (rt) set_register(rd_reg, rs);
           break;
+        case MOVCI: {
+          uint32_t cc = instr->FCccField();
+          if (instr->Bit(16)) {  // Read Tf bit
+            if (test_fpu_ccr_bit(cc)) set_register(rd_reg, rs);
+          } else {
+            if (!test_fpu_ccr_bit(cc)) set_register(rd_reg, rs);
+          }
+          break;
+        }
         case MOVZ:
           if (!rt) set_register(rd_reg, rs);
           break;
@@ -1929,6 +2079,9 @@ void Simulator::DecodeTypeJump(Instruction* instr) {
 
 // Executes the current instruction.
 void Simulator::InstructionDecode(Instruction* instr) {
+  if (v8::internal::FLAG_check_icache) {
+    CheckICache(instr);
+  }
   pc_modified_ = false;
   if (::v8::internal::FLAG_trace_sim) {
     disasm::NameConverter converter;
@@ -2117,3 +2270,4 @@ uintptr_t Simulator::PopAddress() {
 
 #endif  // __mips
 
+#endif  // V8_TARGET_ARCH_MIPS

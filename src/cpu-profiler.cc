@@ -31,6 +31,7 @@
 
 #ifdef ENABLE_LOGGING_AND_PROFILING
 
+#include "frames-inl.h"
 #include "log-inl.h"
 
 #include "../include/v8-profiler.h"
@@ -45,12 +46,12 @@ static const int kTickSamplesBufferChunksCount = 16;
 
 ProfilerEventsProcessor::ProfilerEventsProcessor(ProfileGenerator* generator)
     : generator_(generator),
-      running_(false),
-      events_buffer_(kEventsBufferSize),
+      running_(true),
       ticks_buffer_(sizeof(TickSampleEventRecord),
                     kTickSamplesBufferChunkSize,
                     kTickSamplesBufferChunksCount),
-      enqueue_order_(0) { }
+      enqueue_order_(0) {
+}
 
 
 void ProfilerEventsProcessor::CallbackCreateEvent(Logger::LogEventsAndTags tag,
@@ -141,13 +142,15 @@ void ProfilerEventsProcessor::CodeDeleteEvent(Address from) {
 
 
 void ProfilerEventsProcessor::FunctionCreateEvent(Address alias,
-                                                  Address start) {
+                                                  Address start,
+                                                  int security_token_id) {
   CodeEventsContainer evt_rec;
   CodeAliasEventRecord* rec = &evt_rec.CodeAliasEventRecord_;
   rec->type = CodeEventRecord::CODE_ALIAS;
   rec->order = ++enqueue_order_;
-  rec->alias = alias;
-  rec->start = start;
+  rec->start = alias;
+  rec->entry = generator_->NewCodeEntry(security_token_id);
+  rec->code_start = start;
   events_buffer_.Enqueue(evt_rec);
 }
 
@@ -180,6 +183,24 @@ void ProfilerEventsProcessor::RegExpCodeCreateEvent(
 }
 
 
+void ProfilerEventsProcessor::AddCurrentStack() {
+  TickSampleEventRecord record;
+  TickSample* sample = &record.sample;
+  sample->state = VMState::current_state();
+  sample->pc = reinterpret_cast<Address>(sample);  // Not NULL.
+  sample->frames_count = 0;
+  for (StackTraceFrameIterator it;
+       !it.done() && sample->frames_count < TickSample::kMaxFramesCount;
+       it.Advance()) {
+    JavaScriptFrame* frame = it.frame();
+    sample->stack[sample->frames_count++] =
+        reinterpret_cast<Address>(frame->function());
+  }
+  record.order = enqueue_order_;
+  ticks_from_vm_buffer_.Enqueue(record);
+}
+
+
 bool ProfilerEventsProcessor::ProcessCodeEvent(unsigned* dequeue_order) {
   if (!events_buffer_.IsEmpty()) {
     CodeEventsContainer record;
@@ -204,9 +225,16 @@ bool ProfilerEventsProcessor::ProcessCodeEvent(unsigned* dequeue_order) {
 
 bool ProfilerEventsProcessor::ProcessTicks(unsigned dequeue_order) {
   while (true) {
+    if (!ticks_from_vm_buffer_.IsEmpty()
+        && ticks_from_vm_buffer_.Peek()->order == dequeue_order) {
+      TickSampleEventRecord record;
+      ticks_from_vm_buffer_.Dequeue(&record);
+      generator_->RecordTickSample(record.sample);
+    }
+
     const TickSampleEventRecord* rec =
         TickSampleEventRecord::cast(ticks_buffer_.StartDequeue());
-    if (rec == NULL) return false;
+    if (rec == NULL) return !ticks_from_vm_buffer_.IsEmpty();
     if (rec->order == dequeue_order) {
       generator_->RecordTickSample(rec->sample);
       ticks_buffer_.FinishDequeue();
@@ -219,7 +247,6 @@ bool ProfilerEventsProcessor::ProcessTicks(unsigned dequeue_order) {
 
 void ProfilerEventsProcessor::Run() {
   unsigned dequeue_order = 0;
-  running_ = true;
 
   while (running_) {
     // Process ticks until we have any.
@@ -257,26 +284,31 @@ CpuProfile* CpuProfiler::StopProfiling(const char* title) {
 }
 
 
-CpuProfile* CpuProfiler::StopProfiling(String* title) {
-  return is_profiling() ? singleton_->StopCollectingProfile(title) : NULL;
+CpuProfile* CpuProfiler::StopProfiling(Object* security_token, String* title) {
+  return is_profiling() ?
+      singleton_->StopCollectingProfile(security_token, title) : NULL;
 }
 
 
 int CpuProfiler::GetProfilesCount() {
   ASSERT(singleton_ != NULL);
-  return singleton_->profiles_->profiles()->length();
+  // The count of profiles doesn't depend on a security token.
+  return singleton_->profiles_->Profiles(
+      TokenEnumerator::kNoSecurityToken)->length();
 }
 
 
-CpuProfile* CpuProfiler::GetProfile(int index) {
+CpuProfile* CpuProfiler::GetProfile(Object* security_token, int index) {
   ASSERT(singleton_ != NULL);
-  return singleton_->profiles_->profiles()->at(index);
+  const int token = singleton_->token_enumerator_->GetTokenId(security_token);
+  return singleton_->profiles_->Profiles(token)->at(index);
 }
 
 
-CpuProfile* CpuProfiler::FindProfile(unsigned uid) {
+CpuProfile* CpuProfiler::FindProfile(Object* security_token, unsigned uid) {
   ASSERT(singleton_ != NULL);
-  return singleton_->profiles_->GetProfile(uid);
+  const int token = singleton_->token_enumerator_->GetTokenId(security_token);
+  return singleton_->profiles_->GetProfile(token, uid);
 }
 
 
@@ -348,8 +380,15 @@ void CpuProfiler::CodeDeleteEvent(Address from) {
 
 
 void CpuProfiler::FunctionCreateEvent(JSFunction* function) {
+  int security_token_id = TokenEnumerator::kNoSecurityToken;
+  if (function->unchecked_context()->IsContext()) {
+    security_token_id = singleton_->token_enumerator_->GetTokenId(
+        function->context()->global_context()->security_token());
+  }
   singleton_->processor_->FunctionCreateEvent(
-      function->address(), function->code()->address());
+      function->address(),
+      function->code()->address(),
+      security_token_id);
 }
 
 
@@ -388,12 +427,14 @@ void CpuProfiler::SetterCallbackEvent(String* name, Address entry_point) {
 CpuProfiler::CpuProfiler()
     : profiles_(new CpuProfilesCollection()),
       next_profile_uid_(1),
+      token_enumerator_(new TokenEnumerator()),
       generator_(NULL),
       processor_(NULL) {
 }
 
 
 CpuProfiler::~CpuProfiler() {
+  delete token_enumerator_;
   delete profiles_;
 }
 
@@ -402,13 +443,12 @@ void CpuProfiler::StartCollectingProfile(const char* title) {
   if (profiles_->StartProfiling(title, next_profile_uid_++)) {
     StartProcessorIfNotStarted();
   }
+  processor_->AddCurrentStack();
 }
 
 
 void CpuProfiler::StartCollectingProfile(String* title) {
-  if (profiles_->StartProfiling(title, next_profile_uid_++)) {
-    StartProcessorIfNotStarted();
-  }
+  StartCollectingProfile(profiles_->GetName(title));
 }
 
 
@@ -420,10 +460,6 @@ void CpuProfiler::StartProcessorIfNotStarted() {
     generator_ = new ProfileGenerator(profiles_);
     processor_ = new ProfilerEventsProcessor(generator_);
     processor_->Start();
-    // Enable stack sampling.
-    // It is important to have it started prior to logging, see issue 683:
-    // http://code.google.com/p/v8/issues/detail?id=683
-    reinterpret_cast<Sampler*>(Logger::ticker_)->Start();
     // Enumerate stuff we already have in the heap.
     if (Heap::HasBeenSetup()) {
       Logger::LogCodeObjects();
@@ -431,14 +467,19 @@ void CpuProfiler::StartProcessorIfNotStarted() {
       Logger::LogFunctionObjects();
       Logger::LogAccessorCallbacks();
     }
+    // Enable stack sampling.
+    reinterpret_cast<Sampler*>(Logger::ticker_)->Start();
   }
 }
 
 
 CpuProfile* CpuProfiler::StopCollectingProfile(const char* title) {
   const double actual_sampling_rate = generator_->actual_sampling_rate();
-  StopProcessorIfLastProfile();
-  CpuProfile* result = profiles_->StopProfiling(title, actual_sampling_rate);
+  StopProcessorIfLastProfile(title);
+  CpuProfile* result =
+      profiles_->StopProfiling(TokenEnumerator::kNoSecurityToken,
+                               title,
+                               actual_sampling_rate);
   if (result != NULL) {
     result->Print();
   }
@@ -446,15 +487,18 @@ CpuProfile* CpuProfiler::StopCollectingProfile(const char* title) {
 }
 
 
-CpuProfile* CpuProfiler::StopCollectingProfile(String* title) {
+CpuProfile* CpuProfiler::StopCollectingProfile(Object* security_token,
+                                               String* title) {
   const double actual_sampling_rate = generator_->actual_sampling_rate();
-  StopProcessorIfLastProfile();
-  return profiles_->StopProfiling(title, actual_sampling_rate);
+  const char* profile_title = profiles_->GetName(title);
+  StopProcessorIfLastProfile(profile_title);
+  int token = token_enumerator_->GetTokenId(security_token);
+  return profiles_->StopProfiling(token, profile_title, actual_sampling_rate);
 }
 
 
-void CpuProfiler::StopProcessorIfLastProfile() {
-  if (profiles_->is_last_profile()) {
+void CpuProfiler::StopProcessorIfLastProfile(const char* title) {
+  if (profiles_->IsLastProfile(title)) {
     reinterpret_cast<Sampler*>(Logger::ticker_)->Stop();
     processor_->Stop();
     processor_->Join();

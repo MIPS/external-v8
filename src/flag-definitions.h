@@ -100,10 +100,10 @@ private:
 DEFINE_bool(debug_code, false,
             "generate extra code (comments, assertions) for debugging")
 DEFINE_bool(emit_branch_hints, false, "emit branch hints")
-DEFINE_bool(push_pop_elimination, true,
-            "eliminate redundant push/pops in assembly code")
-DEFINE_bool(print_push_pop_elimination, false,
-            "print elimination of redundant push/pops in assembly code")
+DEFINE_bool(peephole_optimization, true,
+            "perform peephole optimizations in assembly code")
+DEFINE_bool(print_peephole_optimization, false,
+            "print peephole optimizations in assembly code")
 DEFINE_bool(enable_sse2, true,
             "enable use of SSE2 instructions if available")
 DEFINE_bool(enable_sse3, true,
@@ -125,6 +125,8 @@ DEFINE_bool(enable_fpu, true,
 DEFINE_string(expose_natives_as, NULL, "expose natives in global object")
 DEFINE_string(expose_debug_as, NULL, "expose debug in global object")
 DEFINE_bool(expose_gc, false, "expose gc extension")
+DEFINE_bool(expose_externalize_string, false,
+            "expose externalize string extension")
 DEFINE_int(stack_trace_limit, 10, "number of stack frames to capture")
 DEFINE_bool(disable_native_files, false, "disable builtin natives files")
 
@@ -148,11 +150,8 @@ DEFINE_bool(strict, false, "strict error checking")
 DEFINE_int(min_preparse_length, 1024,
            "minimum length for automatic enable preparsing")
 DEFINE_bool(full_compiler, false, "enable dedicated backend for run-once code")
-DEFINE_bool(fast_compiler, false, "enable speculative optimizing backend")
 DEFINE_bool(always_full_compiler, false,
             "try to use the dedicated run-once backend for all code")
-DEFINE_bool(always_fast_compiler, false,
-            "try to use the speculative optimizing backend for all code")
 DEFINE_bool(trace_bailout, false,
             "print reasons for falling back to using the classic V8 backend")
 DEFINE_bool(safe_int32_compiler, true,
@@ -184,10 +183,17 @@ DEFINE_bool(gc_global, false, "always perform global GCs")
 DEFINE_int(gc_interval, -1, "garbage collect after <n> allocations")
 DEFINE_bool(trace_gc, false,
             "print one trace line following each garbage collection")
+DEFINE_bool(trace_gc_nvp, false,
+            "print one detailed trace line in name=value format "
+            "after each garbage collection")
+DEFINE_bool(print_cumulative_gc_stat, false,
+            "print cumulative GC statistics in name=value format on exit")
 DEFINE_bool(trace_gc_verbose, false,
             "print more details following each garbage collection")
 DEFINE_bool(collect_maps, true,
             "garbage collect maps from which no objects can be reached")
+DEFINE_bool(flush_code, true,
+            "flush code that we expect not to use again before full gc")
 
 // v8.cc
 DEFINE_bool(use_idle_notification, true,
@@ -234,7 +240,7 @@ DEFINE_bool(optimize_ast, true, "optimize the ast")
 
 // simulator-arm.cc and simulator-mips.cc
 DEFINE_bool(trace_sim, false, "Trace simulator execution")
-DEFINE_bool(check_icache, false, "Check icache flushes in ARM simulator")
+DEFINE_bool(check_icache, false, "Check icache flushes in ARM and MIPS simulator")
 DEFINE_int(stop_sim_at, 0, "Simulator stop after x number of instructions")
 DEFINE_int(sim_stack_alignment, 8,
            "Stack alingment in bytes in simulator (4 or 8, 8 is default)")
@@ -274,7 +280,7 @@ DEFINE_string(testing_serialization_file, "/tmp/serdes",
 
 DEFINE_bool(help, false, "Print usage message, including flags, on console")
 DEFINE_bool(dump_counters, false, "Dump counters on exit")
-DEFINE_bool(debugger, true, "Enable JavaScript debugger")
+DEFINE_bool(debugger, false, "Enable JavaScript debugger")
 DEFINE_bool(remote_debugger, false, "Connect JavaScript debugger to the "
                                     "debugger agent in another process")
 DEFINE_bool(debugger_agent, false, "Enable debugger agent")
@@ -330,7 +336,6 @@ DEFINE_bool(code_stats, false, "report code statistics after GC")
 DEFINE_bool(verify_heap, false, "verify heap pointers before and after GC")
 DEFINE_bool(print_handles, false, "report handles after GC")
 DEFINE_bool(print_global_handles, false, "report global handles after GC")
-DEFINE_bool(print_rset, false, "print remembered sets before GC")
 
 // ic.cc
 DEFINE_bool(trace_ic, false, "trace inline cache state transitions")

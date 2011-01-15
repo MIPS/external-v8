@@ -69,6 +69,7 @@ enum BuiltinExtraArguments {
   V(JSConstructStubApi,         BUILTIN, UNINITIALIZED)                   \
   V(JSEntryTrampoline,          BUILTIN, UNINITIALIZED)                   \
   V(JSConstructEntryTrampoline, BUILTIN, UNINITIALIZED)                   \
+  V(LazyCompile,                BUILTIN, UNINITIALIZED)                   \
                                                                           \
   V(LoadIC_Miss,                BUILTIN, UNINITIALIZED)                   \
   V(KeyedLoadIC_Miss,           BUILTIN, UNINITIALIZED)                   \
@@ -98,6 +99,7 @@ enum BuiltinExtraArguments {
                                                                           \
   V(StoreIC_Initialize,         STORE_IC, UNINITIALIZED)                  \
   V(StoreIC_ArrayLength,        STORE_IC, MONOMORPHIC)                    \
+  V(StoreIC_Normal,             STORE_IC, MONOMORPHIC)                    \
   V(StoreIC_Megamorphic,        STORE_IC, MEGAMORPHIC)                    \
                                                                           \
   V(KeyedStoreIC_Initialize,    KEYED_STORE_IC, UNINITIALIZED)            \
@@ -127,6 +129,7 @@ enum BuiltinExtraArguments {
   V(KeyedLoadIC_DebugBreak,     KEYED_LOAD_IC, DEBUG_BREAK)    \
   V(StoreIC_DebugBreak,         STORE_IC, DEBUG_BREAK)         \
   V(KeyedStoreIC_DebugBreak,    KEYED_STORE_IC, DEBUG_BREAK)   \
+  V(Slot_DebugBreak,            BUILTIN, DEBUG_BREAK)          \
   V(PlainReturn_LiveEdit,       BUILTIN, DEBUG_BREAK)          \
   V(FrameDropper_LiveEdit,      BUILTIN, DEBUG_BREAK)
 #else
@@ -247,6 +250,7 @@ class Builtins : public AllStatic {
   static void Generate_JSConstructStubApi(MacroAssembler* masm);
   static void Generate_JSEntryTrampoline(MacroAssembler* masm);
   static void Generate_JSConstructEntryTrampoline(MacroAssembler* masm);
+  static void Generate_LazyCompile(MacroAssembler* masm);
   static void Generate_ArgumentsAdaptorTrampoline(MacroAssembler* masm);
 
   static void Generate_FunctionCall(MacroAssembler* masm);

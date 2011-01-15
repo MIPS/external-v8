@@ -36,7 +36,9 @@
 #include "global-handles.h"
 #include "macro-assembler.h"
 #include "natives.h"
+#include "objects-visiting.h"
 #include "snapshot.h"
+#include "stub-cache.h"
 
 namespace v8 {
 namespace internal {
@@ -55,7 +57,7 @@ class SourceCodeCache BASE_EMBEDDED {
   }
 
   void Iterate(ObjectVisitor* v) {
-    v->VisitPointer(BitCast<Object**, FixedArray**>(&cache_));
+    v->VisitPointer(BitCast<Object**>(&cache_));
   }
 
 
@@ -228,6 +230,7 @@ class Genesis BASE_EMBEDDED {
   // Used for creating a context from scratch.
   void InstallNativeFunctions();
   bool InstallNatives();
+  void InstallCustomCallGenerators();
   void InstallJSFunctionResultCaches();
   // Used both for deserialized and from-scratch contexts to add the extensions
   // provided.
@@ -468,6 +471,7 @@ Handle<JSFunction> Genesis::CreateEmptyFunction() {
   Handle<Code> code =
       Handle<Code>(Builtins::builtin(Builtins::EmptyFunction));
   empty_function->set_code(*code);
+  empty_function->shared()->set_code(*code);
   Handle<String> source = Factory::NewStringFromAscii(CStrVector("() {}"));
   Handle<Script> script = Factory::NewScript(source);
   script->set_type(Smi::FromInt(Script::TYPE_NATIVE));
@@ -810,6 +814,7 @@ void Genesis::InitializeGlobal(Handle<GlobalObject> inner_global,
     initial_map->set_instance_size(
         initial_map->instance_size() + 5 * kPointerSize);
     initial_map->set_instance_descriptors(*descriptors);
+    initial_map->set_visitor_id(StaticVisitorBase::GetVisitorId(*initial_map));
   }
 
   {  // -- J S O N
@@ -1229,6 +1234,16 @@ bool Genesis::InstallNatives() {
 
   InstallNativeFunctions();
 
+  // Store the map for the string prototype after the natives has been compiled
+  // and the String function has been setup.
+  Handle<JSFunction> string_function(global_context()->string_function());
+  ASSERT(JSObject::cast(
+      string_function->initial_map()->prototype())->HasFastProperties());
+  global_context()->set_string_function_prototype_map(
+      HeapObject::cast(string_function->initial_map()->prototype())->map());
+
+  InstallCustomCallGenerators();
+
   // Install Function.prototype.call and apply.
   { Handle<String> key = Factory::function_class_symbol();
     Handle<JSFunction> function =
@@ -1323,6 +1338,29 @@ bool Genesis::InstallNatives() {
 #endif
 
   return true;
+}
+
+
+static void InstallCustomCallGenerator(Handle<JSFunction> holder_function,
+                                       const char* function_name,
+                                       int id) {
+  Handle<JSObject> proto(JSObject::cast(holder_function->instance_prototype()));
+  Handle<String> name = Factory::LookupAsciiSymbol(function_name);
+  Handle<JSFunction> function(JSFunction::cast(proto->GetProperty(*name)));
+  function->shared()->set_function_data(Smi::FromInt(id));
+}
+
+
+void Genesis::InstallCustomCallGenerators() {
+  HandleScope scope;
+#define INSTALL_CALL_GENERATOR(holder_fun, fun_name, name)                \
+  {                                                                       \
+    Handle<JSFunction> holder(global_context()->holder_fun##_function()); \
+    const int id = CallStubCompiler::k##name##CallGenerator;              \
+    InstallCustomCallGenerator(holder, #fun_name, id);                    \
+  }
+  CUSTOM_CALL_IC_GENERATORS(INSTALL_CALL_GENERATOR)
+#undef INSTALL_CALL_GENERATOR
 }
 
 
@@ -1435,6 +1473,7 @@ bool Genesis::InstallExtensions(Handle<Context> global_context,
   }
 
   if (FLAG_expose_gc) InstallExtension("v8/gc");
+  if (FLAG_expose_externalize_string) InstallExtension("v8/externalize");
 
   if (extensions == NULL) return true;
   // Install required extensions
@@ -1514,6 +1553,8 @@ bool Genesis::InstallJSBuiltins(Handle<JSBuiltinsObject> builtins) {
     Handle<SharedFunctionInfo> shared
         = Handle<SharedFunctionInfo>(function->shared());
     if (!EnsureCompiled(shared, CLEAR_EXCEPTION)) return false;
+    // Set the code object on the function object.
+    function->set_code(function->shared()->code());
     builtins->set_javascript_builtin_code(id, shared->code());
   }
   return true;
@@ -1726,8 +1767,8 @@ Genesis::Genesis(Handle<Object> global_object,
         CreateNewGlobals(global_template, global_object, &inner_global);
     HookUpGlobalProxy(inner_global, global_proxy);
     InitializeGlobal(inner_global, empty_function);
-    if (!InstallNatives()) return;
     InstallJSFunctionResultCaches();
+    if (!InstallNatives()) return;
 
     MakeFunctionInstancePrototypeWritable();
 

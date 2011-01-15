@@ -77,7 +77,6 @@ TEST(MIPS0) {
   CodeDesc desc;
   assm.GetCode(&desc);
   Object* code = Heap::CreateCode(desc,
-                                  NULL,
                                   Code::ComputeFlags(Code::STUB),
                                   Handle<Object>(Heap::undefined_value()));
   CHECK(code->IsCode());
@@ -118,7 +117,6 @@ TEST(MIPS1) {
   CodeDesc desc;
   assm.GetCode(&desc);
   Object* code = Heap::CreateCode(desc,
-                                  NULL,
                                   Code::ComputeFlags(Code::STUB),
                                   Handle<Object>(Heap::undefined_value()));
   CHECK(code->IsCode());
@@ -237,10 +235,10 @@ TEST(MIPS2) {
   __ addu(v0, v0, v1);  // 51
   __ Branch(&error, ne, v0, Operand(51));
   __ movn(a0, t3, t0);  // move a0<-t3 (t0 is NOT 0)
-  __ ins(a0, t1, 12, 8);  // 0x7ff34fff
+  __ Ins(a0, t1, 12, 8);  // 0x7ff34fff
   __ Branch(&error, ne, a0, Operand(0x7ff34fff));
   __ movz(a0, t6, t7);    // a0 not updated (t7 is NOT 0)
-  __ ext(a1, a0, 8, 12);  // 0x34f
+  __ Ext(a1, a0, 8, 12);  // 0x34f
   __ Branch(&error, ne, a1, Operand(0x34f));
   __ movz(a0, t6, v1);    // a0<-t6, v0 is 0, from 8 instr back
   __ Branch(&error, ne, a0, Operand(t6));
@@ -261,7 +259,6 @@ TEST(MIPS2) {
   CodeDesc desc;
   assm.GetCode(&desc);
   Object* code = Heap::CreateCode(desc,
-                                  NULL,
                                   Code::ComputeFlags(Code::STUB),
                                   Handle<Object>(Heap::undefined_value()));
   CHECK(code->IsCode());
@@ -287,6 +284,7 @@ TEST(MIPS3) {
     double d;
     double e;
     double f;
+    double g;
   } T;
   T t;
 
@@ -316,13 +314,16 @@ TEST(MIPS3) {
   __ div_d(f12, f10, f4);
   __ sdc1(f12, MemOperand(a0, OFFSET_OF(T, f)) );   // f = e / a = 120.44
 
+  __ sqrt_d(f14, f12);
+  __ sdc1(f14, MemOperand(a0, OFFSET_OF(T, g)) );
+  // g = sqrt(f) = 10.97451593465515908537
+
   __ jr(ra);
   __ nop();
 
   CodeDesc desc;
   assm.GetCode(&desc);
   Object* code = Heap::CreateCode(desc,
-                                  NULL,
                                   Code::ComputeFlags(Code::STUB),
                                   Handle<Object>(Heap::undefined_value()));
   CHECK(code->IsCode());
@@ -344,6 +345,7 @@ TEST(MIPS3) {
   CHECK_EQ(1.50550e14, t.d);
   CHECK_EQ(1.8066e16, t.e);
   CHECK_EQ(120.44, t.f);
+  CHECK_EQ(10.97451593465515908537, t.g);
 }
 
 
@@ -386,7 +388,6 @@ TEST(MIPS4) {
   CodeDesc desc;
   assm.GetCode(&desc);
   Object* code = Heap::CreateCode(desc,
-                                  NULL,
                                   Code::ComputeFlags(Code::STUB),
                                   Handle<Object>(Heap::undefined_value()));
   CHECK(code->IsCode());
@@ -454,7 +455,6 @@ TEST(MIPS5) {
   CodeDesc desc;
   assm.GetCode(&desc);
   Object* code = Heap::CreateCode(desc,
-                                  NULL,
                                   Code::ComputeFlags(Code::STUB),
                                   Handle<Object>(Heap::undefined_value()));
   CHECK(code->IsCode());
@@ -530,7 +530,6 @@ TEST(MIPS6) {
   CodeDesc desc;
   assm.GetCode(&desc);
   Object* code = Heap::CreateCode(desc,
-                                  NULL,
                                   Code::ComputeFlags(Code::STUB),
                                   Handle<Object>(Heap::undefined_value()));
   CHECK(code->IsCode());
@@ -604,7 +603,6 @@ TEST(MIPS7) {
   CodeDesc desc;
   assm.GetCode(&desc);
   Object* code = Heap::CreateCode(desc,
-                                  NULL,
                                   Code::ComputeFlags(Code::STUB),
                                   Handle<Object>(Heap::undefined_value()));
   CHECK(code->IsCode());
@@ -655,14 +653,14 @@ TEST(MIPS8) {
   // basic word load
   __ lw(t0, MemOperand(a0, OFFSET_OF(T, input)) );
 
-  // ROTR instruction
-  __ rotr(t1, t0, 0x0004);
-  __ rotr(t2, t0, 0x0008);
-  __ rotr(t3, t0, 0x000c);
-  __ rotr(t4, t0, 0x0010);
-  __ rotr(t5, t0, 0x0014);
-  __ rotr(t6, t0, 0x0018);
-  __ rotr(t7, t0, 0x001c);
+  // ROTR instruction (called through the Ror macro).
+  __ Ror(t1, t0, 0x0004);
+  __ Ror(t2, t0, 0x0008);
+  __ Ror(t3, t0, 0x000c);
+  __ Ror(t4, t0, 0x0010);
+  __ Ror(t5, t0, 0x0014);
+  __ Ror(t6, t0, 0x0018);
+  __ Ror(t7, t0, 0x001c);
 
   // basic word store
   __ sw(t1, MemOperand(a0, OFFSET_OF(T, result_rotr_4)) );
@@ -673,21 +671,21 @@ TEST(MIPS8) {
   __ sw(t6, MemOperand(a0, OFFSET_OF(T, result_rotr_24)) );
   __ sw(t7, MemOperand(a0, OFFSET_OF(T, result_rotr_28)) );
 
-  // ROTRV instruction
+  // ROTRV instruction (called through the Ror macro).
   __ li(t7, 0x0004);
-  __ rotrv(t1, t0, t7);
+  __ Ror(t1, t0, t7);
   __ li(t7, 0x0008);
-  __ rotrv(t2, t0, t7);
+  __ Ror(t2, t0, t7);
   __ li(t7, 0x000C);
-  __ rotrv(t3, t0, t7);
+  __ Ror(t3, t0, t7);
   __ li(t7, 0x0010);
-  __ rotrv(t4, t0, t7);
+  __ Ror(t4, t0, t7);
   __ li(t7, 0x0014);
-  __ rotrv(t5, t0, t7);
+  __ Ror(t5, t0, t7);
   __ li(t7, 0x0018);
-  __ rotrv(t6, t0, t7);
+  __ Ror(t6, t0, t7);
   __ li(t7, 0x001C);
-  __ rotrv(t7, t0, t7);
+  __ Ror(t7, t0, t7);
 
   // basic word store
   __ sw(t1, MemOperand(a0, OFFSET_OF(T, result_rotrv_4)) );
@@ -704,7 +702,6 @@ TEST(MIPS8) {
   CodeDesc desc;
   assm.GetCode(&desc);
   Object* code = Heap::CreateCode(desc,
-                                  NULL,
                                   Code::ComputeFlags(Code::STUB),
                                   Handle<Object>(Heap::undefined_value()));
   CHECK(code->IsCode());
@@ -753,7 +750,6 @@ TEST(MIPS9) {
   CodeDesc desc;
   assm.GetCode(&desc);
   Object* code = Heap::CreateCode(desc,
-                                  NULL,
                                   Code::ComputeFlags(Code::STUB),
                                   Handle<Object>(Heap::undefined_value()));
   CHECK(code->IsCode());
@@ -813,7 +809,6 @@ TEST(MIPS10) {
   CodeDesc desc;
   assm.GetCode(&desc);
   Object* code = Heap::CreateCode(desc,
-                                  NULL,
                                   Code::ComputeFlags(Code::STUB),
                                   Handle<Object>(Heap::undefined_value()));
   CHECK(code->IsCode());
@@ -831,7 +826,8 @@ TEST(MIPS10) {
   CHECK_EQ(0xFFC00000, t.dbl_mant);
   CHECK_EQ(0, t.long_hi);
   CHECK_EQ(0x7fffffff, t.long_lo);
-  CHECK_EQ(1.095233372415e12, t.b); // 0xFF00FF00FF -> 1.095233372415e12.
+  // 0xFF00FF00FF -> 1.095233372415e12.
+  CHECK_EQ(1.095233372415e12, t.b);
 }
 
 TEST(MIPS11) {
@@ -945,7 +941,6 @@ TEST(MIPS11) {
   CodeDesc desc;
   assm.GetCode(&desc);
   Object* code = Heap::CreateCode(desc,
-                                  NULL,
                                   Code::ComputeFlags(Code::STUB),
                                   Handle<Object>(Heap::undefined_value()));
   CHECK(code->IsCode());
@@ -979,4 +974,157 @@ TEST(MIPS11) {
   CHECK_EQ(0xccdd3344, t.swr_2);
   CHECK_EQ(0xdd223344, t.swr_3);
 }
+
+TEST(MIPS12) {
+  InitializeVM();
+  v8::HandleScope scope;
+
+  typedef struct {
+      int32_t  x;
+      int32_t  y;
+      int32_t  y1;
+      int32_t  y2;
+      int32_t  y3;
+      int32_t  y4;
+  } T;
+
+  T t;
+
+
+  MacroAssembler assm(NULL, 0);
+
+  __ mov(t6, fp);  // save frame pointer.
+  __ mov(fp, a0);  // access struct T by fp.
+  __ lw(t0, MemOperand(a0, OFFSET_OF(T, y)) );
+  __ lw(t3, MemOperand(a0, OFFSET_OF(T, y4)) );
+
+  __ addu(t1, t0, t3);
+  __ subu(t4, t0, t3);
+  __ nop();
+  __ Push(t0);  // These instructions disappear after opt.
+  __ Pop();
+  __ addu(t0, t0, t0);
+  __ nop();
+  __ Pop();     // These instructions disappear after opt.
+  __ Push(t3);  //
+  __ nop();
+  __ Push(t3);  // These instructions disappear after opt.
+  __ Pop(t3);   //
+  __ nop();
+  __ Push(t3);
+  __ Pop(t4);
+  __ nop();
+  __ sw(t0, MemOperand(fp, OFFSET_OF(T, y)) );
+  __ lw(t0, MemOperand(fp, OFFSET_OF(T, y)) );
+  __ nop();
+  __ sw(t0, MemOperand(fp, OFFSET_OF(T, y)) );
+  __ lw(t1, MemOperand(fp, OFFSET_OF(T, y)) );
+  __ nop();
+  __ Push(t1);
+  __ lw(t1, MemOperand(fp, OFFSET_OF(T, y)) );
+  __ Pop(t1);
+  __ nop();
+  __ Push(t1);
+  __ lw(t2, MemOperand(fp, OFFSET_OF(T, y)) );
+  __ Pop(t1);
+  __ nop();
+  __ Push(t1);
+  __ lw(t2, MemOperand(fp, OFFSET_OF(T, y)) );
+  __ Pop(t2);
+  __ nop();
+  __ Push(t2);
+  __ lw(t2, MemOperand(fp, OFFSET_OF(T, y)) );
+  __ Pop(t1);
+  __ nop();
+  __ Push(t1);
+  __ lw(t2, MemOperand(fp, OFFSET_OF(T, y)) );
+  __ Pop(t3);
+  __ nop();
+
+  __ mov(fp, t6);
+  __ jr(ra);
+  __ nop();
+
+  CodeDesc desc;
+  assm.GetCode(&desc);
+  Object* code = Heap::CreateCode(desc,
+                                  Code::ComputeFlags(Code::STUB),
+                                  Handle<Object>(Heap::undefined_value()));
+  CHECK(code->IsCode());
+#ifdef DEBUG
+  Code::cast(code)->Print();
+#endif
+  F3 f = FUNCTION_CAST<F3>(Code::cast(code)->entry());
+  t.x = 1;
+  t.y = 2;
+  t.y1 = 3;
+  t.y2 = 4;
+  t.y3 = 0XBABA;
+  t.y4 = 0xDEDA;
+
+  Object* dummy = CALL_GENERATED_CODE(f, &t, 0, 0, 0, 0);
+  USE(dummy);
+
+  CHECK_EQ(3, t.y1);
+}
+
+TEST(MIPS13) {
+  // Test Cvt_d_uw and Trunc_uw_d macros.
+  InitializeVM();
+  v8::HandleScope scope;
+
+  typedef struct {
+    double cvt_big_out;
+    double cvt_small_out;
+    uint32_t trunc_big_out;
+    uint32_t trunc_small_out;
+    uint32_t cvt_big_in;
+    uint32_t cvt_small_in;
+  } T;
+  T t;
+
+  MacroAssembler assm(NULL, 0);
+
+  __ sw(t0, MemOperand(a0, OFFSET_OF(T, cvt_small_in)));
+  __ Cvt_d_uw(f10, t0);
+  __ sdc1(f10, MemOperand(a0, OFFSET_OF(T, cvt_small_out)));
+
+  __ Trunc_uw_d(f10, f10);
+  __ swc1(f10, MemOperand(a0, OFFSET_OF(T, trunc_small_out)));
+
+  __ sw(t0, MemOperand(a0, OFFSET_OF(T, cvt_big_in)));
+  __ Cvt_d_uw(f8, t0);
+  __ sdc1(f8, MemOperand(a0, OFFSET_OF(T, cvt_big_out)));
+
+  __ Trunc_uw_d(f8, f8);
+  __ swc1(f8, MemOperand(a0, OFFSET_OF(T, trunc_big_out)));
+
+  __ jr(ra);
+  __ nop();
+
+  CodeDesc desc;
+  assm.GetCode(&desc);
+  Object* code = Heap::CreateCode(desc,
+                                  Code::ComputeFlags(Code::STUB),
+                                  Handle<Object>(Heap::undefined_value()));
+  CHECK(code->IsCode());
+#ifdef DEBUG
+  Code::cast(code)->Print();
+#endif
+  F3 f = FUNCTION_CAST<F3>(Code::cast(code)->entry());
+
+  t.cvt_big_in = 0xFFFFFFFF;
+  t.cvt_small_in  = 333;
+
+  Object* dummy = CALL_GENERATED_CODE(f, &t, 0, 0, 0, 0);
+  USE(dummy);
+
+  CHECK_EQ(t.cvt_big_out, static_cast<double>(t.cvt_big_in));
+  CHECK_EQ(t.cvt_small_out, static_cast<double>(t.cvt_small_in));
+
+  CHECK_EQ(static_cast<int>(t.trunc_big_out), static_cast<int>(t.cvt_big_in));
+  CHECK_EQ(static_cast<int>(t.trunc_small_out),
+           static_cast<int>(t.cvt_small_in));
+}
+
 #undef __

@@ -66,10 +66,19 @@
 # define CAN_USE_THUMB_INSTRUCTIONS 1
 #endif
 
-// Simulator should support ARM5 instructions.
+// Simulator should support ARM5 instructions and unaligned access by default.
 #if !defined(__arm__)
 # define CAN_USE_ARMV5_INSTRUCTIONS 1
 # define CAN_USE_THUMB_INSTRUCTIONS 1
+
+# ifndef CAN_USE_UNALIGNED_ACCESSES
+#  define CAN_USE_UNALIGNED_ACCESSES 1
+# endif
+
+#endif
+
+#if CAN_USE_UNALIGNED_ACCESSES
+#define V8_TARGET_CAN_READ_UNALIGNED 1
 #endif
 
 // Using blx may yield better code, so use it when required or when available
@@ -275,6 +284,9 @@ class Instr {
     // with immediate
   inline int RotateField() const { return Bits(11, 8); }
   inline int Immed8Field() const { return Bits(7, 0); }
+  inline int Immed4Field() const { return Bits(19, 16); }
+  inline int ImmedMovwMovtField() const {
+      return Immed4Field() << 12 | Offset12Field(); }
 
   // Fields used in Load/Store instructions
   inline int PUField() const { return Bits(24, 23); }
@@ -320,6 +332,9 @@ class Instr {
   inline bool HasSign() const { return SignField() == 1; }
   inline bool HasH()    const { return HField() == 1; }
   inline bool HasLink() const { return LinkField() == 1; }
+
+  // Decoding the double immediate in the vmov instruction.
+  double DoubleImmedVmov() const;
 
   // Instructions are read of out a code stream. The only way to get a
   // reference to an instruction is to convert a pointer. There is no way

@@ -20,15 +20,16 @@ V8_LOCAL_SRC_FILES := \
 	src/cpu-profiler.cc \
 	src/data-flow.cc \
 	src/dateparser.cc \
-	src/debug.cc \
 	src/debug-agent.cc \
+	src/debug.cc \
 	src/disassembler.cc \
 	src/diy-fp.cc \
+	src/dtoa.cc \
 	src/execution.cc \
 	src/factory.cc \
-	src/fast-dtoa.cc \
 	src/flags.cc \
-	src/flow-graph.cc \
+	src/fast-dtoa.cc \
+	src/fixed-dtoa.cc \
 	src/frame-element.cc \
 	src/frames.cc \
 	src/full-codegen.cc \
@@ -48,6 +49,7 @@ V8_LOCAL_SRC_FILES := \
 	src/mark-compact.cc \
 	src/messages.cc \
 	src/objects.cc \
+	src/objects-visiting.cc \
 	src/oprofile-agent.cc \
 	src/parser.cc \
 	src/profile-generator.cc \
@@ -68,6 +70,7 @@ V8_LOCAL_SRC_FILES := \
 	src/stub-cache.cc \
 	src/token.cc \
 	src/top.cc \
+	src/type-info.cc \
 	src/unicode.cc \
 	src/utils.cc \
 	src/v8-counters.cc \
@@ -76,22 +79,22 @@ V8_LOCAL_SRC_FILES := \
 	src/variables.cc \
 	src/version.cc \
 	src/virtual-frame.cc \
+	src/vm-state.cc \
 	src/zone.cc
 
 ifeq ($(TARGET_ARCH),arm)
   V8_LOCAL_SRC_FILES += \
-                src/fast-codegen.cc \
-                src/jump-target-light.cc \
-                src/virtual-frame-light.cc \
+		src/jump-target-light.cc \
+		src/virtual-frame-light.cc \
 		src/arm/assembler-arm.cc \
 		src/arm/builtins-arm.cc \
+		src/arm/code-stubs-arm.cc \
 		src/arm/codegen-arm.cc \
 		src/arm/constants-arm.cc \
 		src/arm/cpu-arm.cc \
 		src/arm/debug-arm.cc \
 		src/arm/disasm-arm.cc \
 		src/arm/frames-arm.cc \
-		src/arm/fast-codegen-arm.cc \
 		src/arm/full-codegen-arm.cc \
 		src/arm/ic-arm.cc \
 		src/arm/jump-target-arm.cc \
@@ -104,18 +107,17 @@ endif
 
 ifeq ($(TARGET_ARCH),mips)
   V8_LOCAL_SRC_FILES += \
-		src/fast-codegen.cc \
 		src/jump-target-light.cc \
 		src/virtual-frame-light.cc \
 		src/mips/assembler-mips.cc \
 		src/mips/builtins-mips.cc \
+		src/mips/code-stubs-mips.cc \
 		src/mips/codegen-mips.cc \
 		src/mips/constants-mips.cc \
 		src/mips/cpu-mips.cc \
 		src/mips/debug-mips.cc \
 		src/mips/disasm-mips.cc \
 		src/mips/frames-mips.cc \
-		src/mips/fast-codegen-mips.cc \
 		src/mips/full-codegen-mips.cc \
 		src/mips/ic-mips.cc \
 		src/mips/jump-target-mips.cc \
@@ -128,12 +130,17 @@ endif
 
 ifeq ($(TARGET_ARCH),x86)
   V8_LOCAL_SRC_FILES += \
+		src/jump-target-heavy.cc \
+		src/virtual-frame-heavy.cc \
 		src/ia32/assembler-ia32.cc \
 		src/ia32/builtins-ia32.cc \
+		src/ia32/code-stubs-ia32.cc \
 		src/ia32/codegen-ia32.cc \
 		src/ia32/cpu-ia32.cc \
+		src/ia32/debug-ia32.cc \
 		src/ia32/disasm-ia32.cc \
 		src/ia32/frames-ia32.cc \
+		src/ia32/full-codegen-ia32.cc \
 		src/ia32/ic-ia32.cc \
 		src/ia32/jump-target-ia32.cc \
 		src/ia32/macro-assembler-ia32.cc \

@@ -109,7 +109,7 @@ class V8EXPORT CpuProfileNode {
   /** Retrieves a child node by index. */
   const CpuProfileNode* GetChild(int index) const;
 
-  static const int kNoLineNumberInfo = 0;
+  static const int kNoLineNumberInfo = Message::kNoLineNumberInfo;
 };
 
 
@@ -140,22 +140,37 @@ class V8EXPORT CpuProfile {
 class V8EXPORT CpuProfiler {
  public:
   /**
+   * A note on security tokens usage. As scripts from different
+   * origins can run inside a single V8 instance, it is possible to
+   * have functions from different security contexts intermixed in a
+   * single CPU profile. To avoid exposing function names belonging to
+   * other contexts, filtering by security token is performed while
+   * obtaining profiling results.
+   */
+
+  /**
    * Returns the number of profiles collected (doesn't include
    * profiles that are being collected at the moment of call.)
    */
   static int GetProfilesCount();
 
   /** Returns a profile by index. */
-  static const CpuProfile* GetProfile(int index);
+  static const CpuProfile* GetProfile(
+      int index,
+      Handle<Value> security_token = Handle<Value>());
 
   /** Returns a profile by uid. */
-  static const CpuProfile* FindProfile(unsigned uid);
+  static const CpuProfile* FindProfile(
+      unsigned uid,
+      Handle<Value> security_token = Handle<Value>());
 
   /**
    * Starts collecting CPU profile. Title may be an empty string. It
    * is allowed to have several profiles being collected at
    * once. Attempts to start collecting several profiles with the same
-   * title are silently ignored.
+   * title are silently ignored. While collecting a profile, functions
+   * from all security contexts are included in it. The token-based
+   * filtering is only performed when querying for a profile.
    */
   static void StartProfiling(Handle<String> title);
 
@@ -163,7 +178,195 @@ class V8EXPORT CpuProfiler {
    * Stops collecting CPU profile with a given title and returns it.
    * If the title given is empty, finishes the last profile started.
    */
-  static const CpuProfile* StopProfiling(Handle<String> title);
+  static const CpuProfile* StopProfiling(
+      Handle<String> title,
+      Handle<Value> security_token = Handle<Value>());
+};
+
+
+class HeapGraphNode;
+
+
+/**
+ * HeapSnapshotEdge represents a directed connection between heap
+ * graph nodes: from retaners to retained nodes.
+ */
+class V8EXPORT HeapGraphEdge {
+ public:
+  enum Type {
+    kContextVariable = 0,  // A variable from a function context.
+    kElement = 1,          // An element of an array.
+    kProperty = 2,         // A named object property.
+    kInternal = 3          // A link that can't be accessed from JS,
+                           // thus, its name isn't a real property name.
+  };
+
+  /** Returns edge type (see HeapGraphEdge::Type). */
+  Type GetType() const;
+
+  /**
+   * Returns edge name. This can be a variable name, an element index, or
+   * a property name.
+   */
+  Handle<Value> GetName() const;
+
+  /** Returns origin node. */
+  const HeapGraphNode* GetFromNode() const;
+
+  /** Returns destination node. */
+  const HeapGraphNode* GetToNode() const;
+};
+
+
+class V8EXPORT HeapGraphPath {
+ public:
+  /** Returns the number of edges in the path. */
+  int GetEdgesCount() const;
+
+  /** Returns an edge from the path. */
+  const HeapGraphEdge* GetEdge(int index) const;
+
+  /** Returns origin node. */
+  const HeapGraphNode* GetFromNode() const;
+
+  /** Returns destination node. */
+  const HeapGraphNode* GetToNode() const;
+};
+
+
+/**
+ * HeapGraphNode represents a node in a heap graph.
+ */
+class V8EXPORT HeapGraphNode {
+ public:
+  enum Type {
+    kInternal = 0,   // Internal node, a virtual one, for housekeeping.
+    kArray = 1,      // An array of elements.
+    kString = 2,     // A string.
+    kObject = 3,     // A JS object (except for arrays and strings).
+    kCode = 4,       // Compiled code.
+    kClosure = 5     // Function closure.
+  };
+
+  /** Returns node type (see HeapGraphNode::Type). */
+  Type GetType() const;
+
+  /**
+   * Returns node name. Depending on node's type this can be the name
+   * of the constructor (for objects), the name of the function (for
+   * closures), string value, or an empty string (for compiled code).
+   */
+  Handle<String> GetName() const;
+
+  /**
+   * Returns node id. For the same heap object, the id remains the same
+   * across all snapshots. Not applicable to aggregated heap snapshots
+   * as they only contain aggregated instances.
+   */
+  uint64_t GetId() const;
+
+  /**
+   * Returns the number of instances. Only applicable to aggregated
+   * heap snapshots.
+   */
+  int GetInstancesCount() const;
+
+  /** Returns node's own size, in bytes. */
+  int GetSelfSize() const;
+
+  /** Returns node's network (self + reachable nodes) size, in bytes. */
+  int GetReachableSize() const;
+
+  /**
+   * Returns node's retained size, in bytes. That is, self + sizes of
+   * the objects that are reachable only from this object. In other
+   * words, the size of memory that will be reclaimed having this node
+   * collected.
+   */
+  int GetRetainedSize() const;
+
+  /** Returns child nodes count of the node. */
+  int GetChildrenCount() const;
+
+  /** Retrieves a child by index. */
+  const HeapGraphEdge* GetChild(int index) const;
+
+  /** Returns retainer nodes count of the node. */
+  int GetRetainersCount() const;
+
+  /** Returns a retainer by index. */
+  const HeapGraphEdge* GetRetainer(int index) const;
+
+  /** Returns the number of simple retaining paths from the root to the node. */
+  int GetRetainingPathsCount() const;
+
+  /** Returns a retaining path by index. */
+  const HeapGraphPath* GetRetainingPath(int index) const;
+};
+
+
+class V8EXPORT HeapSnapshotsDiff {
+ public:
+  /** Returns the root node for added nodes. */
+  const HeapGraphNode* GetAdditionsRoot() const;
+
+  /** Returns the root node for deleted nodes. */
+  const HeapGraphNode* GetDeletionsRoot() const;
+};
+
+
+/**
+ * HeapSnapshots record the state of the JS heap at some moment.
+ */
+class V8EXPORT HeapSnapshot {
+ public:
+  enum Type {
+    kFull = 0,       // Heap snapshot with all instances and references.
+    kAggregated = 1  // Snapshot doesn't contain individual heap entries,
+                     //instead they are grouped by constructor name.
+  };
+
+  /** Returns heap snapshot type. */
+  Type GetType() const;
+
+  /** Returns heap snapshot UID (assigned by the profiler.) */
+  unsigned GetUid() const;
+
+  /** Returns heap snapshot title. */
+  Handle<String> GetTitle() const;
+
+  /** Returns the root node of the heap graph. */
+  const HeapGraphNode* GetRoot() const;
+
+  /**
+   * Returns a diff between this snapshot and another one. Only snapshots
+   * of the same type can be compared.
+   */
+  const HeapSnapshotsDiff* CompareWith(const HeapSnapshot* snapshot) const;
+};
+
+
+/**
+ * Interface for controlling heap profiling.
+ */
+class V8EXPORT HeapProfiler {
+ public:
+  /** Returns the number of snapshots taken. */
+  static int GetSnapshotsCount();
+
+  /** Returns a snapshot by index. */
+  static const HeapSnapshot* GetSnapshot(int index);
+
+  /** Returns a profile by uid. */
+  static const HeapSnapshot* FindSnapshot(unsigned uid);
+
+  /**
+   * Takes a heap snapshot and returns it. Title may be an empty string.
+   * See HeapSnapshot::Type for types description.
+   */
+  static const HeapSnapshot* TakeSnapshot(
+      Handle<String> title,
+      HeapSnapshot::Type type = HeapSnapshot::kFull);
 };
 
 

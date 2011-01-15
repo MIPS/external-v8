@@ -426,8 +426,6 @@ const char* RelocInfo::RelocModeName(RelocInfo::Mode rmode) {
       return "no reloc";
     case RelocInfo::EMBEDDED_OBJECT:
       return "embedded object";
-    case RelocInfo::EMBEDDED_STRING:
-      return "embedded string";
     case RelocInfo::CONSTRUCT_CALL:
       return "code target (js construct call)";
     case RelocInfo::CODE_TARGET_CONTEXT:
@@ -453,6 +451,11 @@ const char* RelocInfo::RelocModeName(RelocInfo::Mode rmode) {
       return "external reference";
     case RelocInfo::INTERNAL_REFERENCE:
       return "internal reference";
+    case RelocInfo::DEBUG_BREAK_SLOT:
+#ifndef ENABLE_DEBUGGER_SUPPORT
+      UNREACHABLE();
+#endif
+      return "debug break slot";
     case RelocInfo::NUMBER_OF_MODES:
       UNREACHABLE();
       return "number_of_modes";
@@ -510,7 +513,6 @@ void RelocInfo::Verify() {
       ASSERT(code->address() == HeapObject::cast(found)->address());
       break;
     }
-    case RelocInfo::EMBEDDED_STRING:
     case RUNTIME_ENTRY:
     case JS_RETURN:
     case COMMENT:
@@ -518,6 +520,7 @@ void RelocInfo::Verify() {
     case STATEMENT_POSITION:
     case EXTERNAL_REFERENCE:
     case INTERNAL_REFERENCE:
+    case DEBUG_BREAK_SLOT:
     case NONE:
       break;
     case NUMBER_OF_MODES:
@@ -669,16 +672,6 @@ ExternalReference ExternalReference::handle_scope_limit_address() {
 
 ExternalReference ExternalReference::scheduled_exception_address() {
   return ExternalReference(Top::scheduled_exception_address());
-}
-
-
-ExternalReference ExternalReference::compile_array_pop_call() {
-  return ExternalReference(FUNCTION_ADDR(CompileArrayPopCall));
-}
-
-
-ExternalReference ExternalReference::compile_array_push_call() {
-  return ExternalReference(FUNCTION_ADDR(CompileArrayPushCall));
 }
 
 

@@ -170,7 +170,7 @@ void StackTracer::Trace(TickSample* sample) {
   SafeStackTraceFrameIterator it(sample->fp, sample->sp,
                                  sample->sp, js_entry_sp);
   while (!it.done() && i < TickSample::kMaxFramesCount) {
-    sample->stack[i++] = it.frame()->pc();
+    sample->stack[i++] = reinterpret_cast<Address>(it.frame()->function());
     it.Advance();
   }
   sample->frames_count = i;
@@ -309,10 +309,10 @@ void Profiler::Disengage() {
 
 void Profiler::Run() {
   TickSample sample;
-  bool overflow = Logger::profiler_->Remove(&sample);
+  bool overflow = Remove(&sample);
   while (running_) {
     LOG(TickEvent(&sample, overflow));
-    overflow = Logger::profiler_->Remove(&sample);
+    overflow = Remove(&sample);
   }
 }
 
@@ -1150,7 +1150,7 @@ void Logger::TickEvent(TickSample* sample, bool overflow) {
 
 int Logger::GetActiveProfilerModules() {
   int result = PROFILER_MODULE_NONE;
-  if (!profiler_->paused()) {
+  if (profiler_ != NULL && !profiler_->paused()) {
     result |= PROFILER_MODULE_CPU;
   }
   if (FLAG_log_gc) {
@@ -1162,7 +1162,7 @@ int Logger::GetActiveProfilerModules() {
 
 void Logger::PauseProfiler(int flags, int tag) {
   if (!Log::IsEnabled()) return;
-  if (flags & PROFILER_MODULE_CPU) {
+  if (profiler_ != NULL && (flags & PROFILER_MODULE_CPU)) {
     // It is OK to have negative nesting.
     if (--cpu_profiler_nesting_ == 0) {
       profiler_->pause();
@@ -1193,7 +1193,7 @@ void Logger::ResumeProfiler(int flags, int tag) {
   if (tag != 0) {
     UncheckedIntEvent("open-tag", tag);
   }
-  if (flags & PROFILER_MODULE_CPU) {
+  if (profiler_ != NULL && (flags & PROFILER_MODULE_CPU)) {
     if (cpu_profiler_nesting_++ == 0) {
       ++logging_nesting_;
       if (FLAG_prof_lazy) {
@@ -1295,6 +1295,10 @@ void Logger::LogCodeObject(Object* object) {
         description = "A call IC from the snapshot";
         tag = Logger::CALL_IC_TAG;
         break;
+      case Code::KEYED_CALL_IC:
+        description = "A keyed call IC from the snapshot";
+        tag = Logger::KEYED_CALL_IC_TAG;
+        break;
     }
     PROFILE(CodeCreateEvent(tag, code_object, description));
   }
@@ -1313,9 +1317,8 @@ void Logger::LogCodeObjects() {
 void Logger::LogCompiledFunctions() {
   HandleScope scope;
   const int compiled_funcs_count = EnumerateCompiledFunctions(NULL);
-  Handle<SharedFunctionInfo>* sfis =
-      NewArray< Handle<SharedFunctionInfo> >(compiled_funcs_count);
-  EnumerateCompiledFunctions(sfis);
+  ScopedVector< Handle<SharedFunctionInfo> > sfis(compiled_funcs_count);
+  EnumerateCompiledFunctions(sfis.start());
 
   // During iteration, there can be heap allocation due to
   // GetScriptLineNumber call.
@@ -1360,8 +1363,6 @@ void Logger::LogCompiledFunctions() {
           Logger::LAZY_COMPILE_TAG, shared->code(), *func_name));
     }
   }
-
-  DeleteArray(sfis);
 }
 
 

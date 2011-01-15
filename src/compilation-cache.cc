@@ -81,6 +81,7 @@ class CompilationSubCache {
 
   // GC support.
   void Iterate(ObjectVisitor* v);
+  void IterateFunctions(ObjectVisitor* v);
 
   // Clear this sub-cache evicting all its content.
   void Clear();
@@ -212,6 +213,16 @@ void CompilationSubCache::Age() {
 
   // Set the first generation as unborn.
   tables_[0] = Heap::undefined_value();
+}
+
+
+void CompilationSubCache::IterateFunctions(ObjectVisitor* v) {
+  Object* undefined = Heap::raw_unchecked_undefined_value();
+  for (int i = 0; i < generations_; i++) {
+    if (tables_[i] != undefined) {
+      reinterpret_cast<CompilationCacheTable*>(tables_[i])->IterateElements(v);
+    }
+  }
 }
 
 
@@ -505,10 +516,16 @@ void CompilationCache::Clear() {
   }
 }
 
-
 void CompilationCache::Iterate(ObjectVisitor* v) {
   for (int i = 0; i < kSubCacheCount; i++) {
     subcaches[i]->Iterate(v);
+  }
+}
+
+
+void CompilationCache::IterateFunctions(ObjectVisitor* v) {
+  for (int i = 0; i < kSubCacheCount; i++) {
+    subcaches[i]->IterateFunctions(v);
   }
 }
 

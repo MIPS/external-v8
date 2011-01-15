@@ -36,8 +36,8 @@ TEST(HeapMaps) {
   InitializeVM();
   CheckMap(Heap::meta_map(), MAP_TYPE, Map::kSize);
   CheckMap(Heap::heap_number_map(), HEAP_NUMBER_TYPE, HeapNumber::kSize);
-  CheckMap(Heap::fixed_array_map(), FIXED_ARRAY_TYPE, FixedArray::kHeaderSize);
-  CheckMap(Heap::string_map(), STRING_TYPE, SeqTwoByteString::kAlignedSize);
+  CheckMap(Heap::fixed_array_map(), FIXED_ARRAY_TYPE, kVariableSizeSentinel);
+  CheckMap(Heap::string_map(), STRING_TYPE, kVariableSizeSentinel);
 }
 
 
@@ -77,7 +77,6 @@ static void CheckFindCodeObject() {
   CodeDesc desc;
   assm.GetCode(&desc);
   Object* code = Heap::CreateCode(desc,
-                                  NULL,
                                   Code::ComputeFlags(Code::STUB),
                                   Handle<Object>(Heap::undefined_value()));
   CHECK(code->IsCode());
@@ -91,7 +90,6 @@ static void CheckFindCodeObject() {
   }
 
   Object* copy = Heap::CreateCode(desc,
-                                  NULL,
                                   Code::ComputeFlags(Code::STUB),
                                   Handle<Object>(Heap::undefined_value()));
   CHECK(copy->IsCode());
@@ -177,7 +175,7 @@ TEST(HeapObjects) {
 TEST(Tagging) {
   InitializeVM();
   int request = 24;
-  CHECK_EQ(request, static_cast<int>(OBJECT_SIZE_ALIGN(request)));
+  CHECK_EQ(request, static_cast<int>(OBJECT_POINTER_ALIGN(request)));
   CHECK(Smi::FromInt(42)->IsSmi());
   CHECK(Failure::RetryAfterGC(request, NEW_SPACE)->IsFailure());
   CHECK_EQ(request, Failure::RetryAfterGC(request, NEW_SPACE)->requested());
@@ -324,8 +322,8 @@ static bool WeakPointerCleared = false;
 
 static void TestWeakGlobalHandleCallback(v8::Persistent<v8::Value> handle,
                                          void* id) {
-  USE(handle);
   if (1234 == reinterpret_cast<intptr_t>(id)) WeakPointerCleared = true;
+  handle.Dispose();
 }
 
 
@@ -400,17 +398,8 @@ TEST(WeakGlobalHandlesMark) {
 
   CHECK(WeakPointerCleared);
   CHECK(!GlobalHandles::IsNearDeath(h1.location()));
-  CHECK(GlobalHandles::IsNearDeath(h2.location()));
 
   GlobalHandles::Destroy(h1.location());
-  GlobalHandles::Destroy(h2.location());
-}
-
-static void TestDeleteWeakGlobalHandleCallback(
-    v8::Persistent<v8::Value> handle,
-    void* id) {
-  if (1234 == reinterpret_cast<intptr_t>(id)) WeakPointerCleared = true;
-  handle.Dispose();
 }
 
 TEST(DeleteWeakGlobalHandle) {
@@ -429,7 +418,7 @@ TEST(DeleteWeakGlobalHandle) {
 
   GlobalHandles::MakeWeak(h.location(),
                           reinterpret_cast<void*>(1234),
-                          &TestDeleteWeakGlobalHandleCallback);
+                          &TestWeakGlobalHandleCallback);
 
   // Scanvenge does not recognize weak reference.
   Heap::PerformScavenge();
@@ -666,14 +655,14 @@ TEST(JSArray) {
   array->SetElementsLength(*length);
 
   uint32_t int_length = 0;
-  CHECK(Array::IndexFromObject(*length, &int_length));
+  CHECK(length->ToArrayIndex(&int_length));
   CHECK_EQ(*length, array->length());
   CHECK(array->HasDictionaryElements());  // Must be in slow mode.
 
   // array[length] = name.
   array->SetElement(int_length, *name);
   uint32_t new_int_length = 0;
-  CHECK(Array::IndexFromObject(array->length(), &new_int_length));
+  CHECK(array->length()->ToArrayIndex(&new_int_length));
   CHECK_EQ(static_cast<double>(int_length), new_int_length - 1);
   CHECK_EQ(array->GetElement(int_length), *name);
   CHECK_EQ(array->GetElement(0), *name);
@@ -808,4 +797,196 @@ TEST(Iteration) {
 
   CHECK_EQ(objs_count, next_objs_index);
   CHECK_EQ(objs_count, ObjectsFoundInHeap(objs, objs_count));
+}
+
+
+TEST(LargeObjectSpaceContains) {
+  InitializeVM();
+
+  int free_bytes = Heap::MaxObjectSizeInPagedSpace();
+  CHECK(Heap::CollectGarbage(free_bytes, NEW_SPACE));
+
+  Address current_top = Heap::new_space()->top();
+  Page* page = Page::FromAddress(current_top);
+  Address current_page = page->address();
+  Address next_page = current_page + Page::kPageSize;
+  int bytes_to_page = static_cast<int>(next_page - current_top);
+  if (bytes_to_page <= FixedArray::kHeaderSize) {
+    // Alas, need to cross another page to be able to
+    // put desired value.
+    next_page += Page::kPageSize;
+    bytes_to_page = static_cast<int>(next_page - current_top);
+  }
+  CHECK(bytes_to_page > FixedArray::kHeaderSize);
+
+  intptr_t* flags_ptr = &Page::FromAddress(next_page)->flags_;
+  Address flags_addr = reinterpret_cast<Address>(flags_ptr);
+
+  int bytes_to_allocate =
+      static_cast<int>(flags_addr - current_top) + kPointerSize;
+
+  int n_elements = (bytes_to_allocate - FixedArray::kHeaderSize) /
+      kPointerSize;
+  CHECK_EQ(bytes_to_allocate, FixedArray::SizeFor(n_elements));
+  FixedArray* array = FixedArray::cast(
+      Heap::AllocateFixedArray(n_elements));
+
+  int index = n_elements - 1;
+  CHECK_EQ(flags_ptr,
+           HeapObject::RawField(array, FixedArray::OffsetOfElementAt(index)));
+  array->set(index, Smi::FromInt(0));
+  // This chould have turned next page into LargeObjectPage:
+  // CHECK(Page::FromAddress(next_page)->IsLargeObjectPage());
+
+  HeapObject* addr = HeapObject::FromAddress(next_page + 2 * kPointerSize);
+  CHECK(Heap::new_space()->Contains(addr));
+  CHECK(!Heap::lo_space()->Contains(addr));
+}
+
+
+TEST(EmptyHandleEscapeFrom) {
+  InitializeVM();
+
+  v8::HandleScope scope;
+  Handle<JSObject> runaway;
+
+  {
+      v8::HandleScope nested;
+      Handle<JSObject> empty;
+      runaway = empty.EscapeFrom(&nested);
+  }
+
+  CHECK(runaway.is_null());
+}
+
+
+static int LenFromSize(int size) {
+  return (size - FixedArray::kHeaderSize) / kPointerSize;
+}
+
+
+TEST(Regression39128) {
+  // Test case for crbug.com/39128.
+  InitializeVM();
+
+  // Increase the chance of 'bump-the-pointer' allocation in old space.
+  bool force_compaction = true;
+  Heap::CollectAllGarbage(force_compaction);
+
+  v8::HandleScope scope;
+
+  // The plan: create JSObject which references objects in new space.
+  // Then clone this object (forcing it to go into old space) and check
+  // that region dirty marks are updated correctly.
+
+  // Step 1: prepare a map for the object.  We add 1 inobject property to it.
+  Handle<JSFunction> object_ctor(Top::global_context()->object_function());
+  CHECK(object_ctor->has_initial_map());
+  Handle<Map> object_map(object_ctor->initial_map());
+  // Create a map with single inobject property.
+  Handle<Map> my_map = Factory::CopyMap(object_map, 1);
+  int n_properties = my_map->inobject_properties();
+  CHECK_GT(n_properties, 0);
+
+  int object_size = my_map->instance_size();
+
+  // Step 2: allocate a lot of objects so to almost fill new space: we need
+  // just enough room to allocate JSObject and thus fill the newspace.
+
+  int allocation_amount = Min(FixedArray::kMaxSize,
+                              Heap::MaxObjectSizeInNewSpace());
+  int allocation_len = LenFromSize(allocation_amount);
+  NewSpace* new_space = Heap::new_space();
+  Address* top_addr = new_space->allocation_top_address();
+  Address* limit_addr = new_space->allocation_limit_address();
+  while ((*limit_addr - *top_addr) > allocation_amount) {
+    CHECK(!Heap::always_allocate());
+    Object* array = Heap::AllocateFixedArray(allocation_len);
+    CHECK(!array->IsFailure());
+    CHECK(new_space->Contains(array));
+  }
+
+  // Step 3: now allocate fixed array and JSObject to fill the whole new space.
+  int to_fill = static_cast<int>(*limit_addr - *top_addr - object_size);
+  int fixed_array_len = LenFromSize(to_fill);
+  CHECK(fixed_array_len < FixedArray::kMaxLength);
+
+  CHECK(!Heap::always_allocate());
+  Object* array = Heap::AllocateFixedArray(fixed_array_len);
+  CHECK(!array->IsFailure());
+  CHECK(new_space->Contains(array));
+
+  Object* object = Heap::AllocateJSObjectFromMap(*my_map);
+  CHECK(!object->IsFailure());
+  CHECK(new_space->Contains(object));
+  JSObject* jsobject = JSObject::cast(object);
+  CHECK_EQ(0, FixedArray::cast(jsobject->elements())->length());
+  CHECK_EQ(0, jsobject->properties()->length());
+  // Create a reference to object in new space in jsobject.
+  jsobject->FastPropertyAtPut(-1, array);
+
+  CHECK_EQ(0, static_cast<int>(*limit_addr - *top_addr));
+
+  // Step 4: clone jsobject, but force always allocate first to create a clone
+  // in old pointer space.
+  Address old_pointer_space_top = Heap::old_pointer_space()->top();
+  AlwaysAllocateScope aa_scope;
+  Object* clone_obj = Heap::CopyJSObject(jsobject);
+  CHECK(!object->IsFailure());
+  JSObject* clone = JSObject::cast(clone_obj);
+  if (clone->address() != old_pointer_space_top) {
+    // Alas, got allocated from free list, we cannot do checks.
+    return;
+  }
+  CHECK(Heap::old_pointer_space()->Contains(clone->address()));
+
+  // Step 5: verify validity of region dirty marks.
+  Address clone_addr = clone->address();
+  Page* page = Page::FromAddress(clone_addr);
+  // Check that region covering inobject property 1 is marked dirty.
+  CHECK(page->IsRegionDirty(clone_addr + (object_size - kPointerSize)));
+}
+
+TEST(TestCodeFlushing) {
+  i::FLAG_allow_natives_syntax = true;
+  // If we do not flush code this test is invalid.
+  if (!FLAG_flush_code) return;
+  InitializeVM();
+  v8::HandleScope scope;
+  const char* source = "function foo() {"
+                       "  var x = 42;"
+                       "  var y = 42;"
+                       "  var z = x + y;"
+                       "};"
+                       "foo()";
+  Handle<String> foo_name = Factory::LookupAsciiSymbol("foo");
+
+  // This compile will add the code to the compilation cache.
+  CompileRun(source);
+
+  // Check function is compiled.
+  Object* func_value = Top::context()->global()->GetProperty(*foo_name);
+  CHECK(func_value->IsJSFunction());
+  Handle<JSFunction> function(JSFunction::cast(func_value));
+  CHECK(function->shared()->is_compiled());
+
+  Heap::CollectAllGarbage(true);
+  Heap::CollectAllGarbage(true);
+
+  CHECK(function->shared()->is_compiled());
+
+  Heap::CollectAllGarbage(true);
+  Heap::CollectAllGarbage(true);
+  Heap::CollectAllGarbage(true);
+  Heap::CollectAllGarbage(true);
+  Heap::CollectAllGarbage(true);
+  Heap::CollectAllGarbage(true);
+
+  // foo should no longer be in the compilation cache
+  CHECK(!function->shared()->is_compiled());
+  CHECK(!function->is_compiled());
+  // Call foo to get it recompiled.
+  CompileRun("foo()");
+  CHECK(function->shared()->is_compiled());
+  CHECK(function->is_compiled());
 }

@@ -38,7 +38,9 @@
 #include "jsregexp.h"
 #include "regexp-macro-assembler.h"
 #include "regexp-macro-assembler-irregexp.h"
-#ifdef V8_NATIVE_REGEXP
+#ifdef V8_INTERPRETED_REGEXP
+#include "interpreter-irregexp.h"
+#else  // V8_INTERPRETED_REGEXP
 #ifdef V8_TARGET_ARCH_ARM
 #include "arm/macro-assembler-arm.h"
 #include "arm/regexp-macro-assembler-arm.h"
@@ -55,9 +57,7 @@
 #include "mips/macro-assembler-mips.h"
 #include "mips/regexp-macro-assembler-mips.h"
 #endif
-#else
-#include "interpreter-irregexp.h"
-#endif
+#endif  // V8_INTERPRETED_REGEXP
 
 using namespace v8::internal;
 
@@ -649,7 +649,7 @@ TEST(ParsePossessiveRepetition) {
 // Tests of interpreter.
 
 
-#ifdef V8_NATIVE_REGEXP
+#ifndef V8_INTERPRETED_REGEXP
 
 #if V8_TARGET_ARCH_IA32
 typedef RegExpMacroAssemblerIA32 ArchRegExpMacroAssembler;
@@ -1271,7 +1271,7 @@ TEST(MacroAssemblerNativeLotsOfRegisters) {
   Top::clear_pending_exception();
 }
 
-#else  // ! V8_REGEX_NATIVE
+#else  // V8_INTERPRETED_REGEXP
 
 TEST(MacroAssembler) {
   V8::Initialize(NULL);
@@ -1336,7 +1336,7 @@ TEST(MacroAssembler) {
   CHECK_EQ(42, captures[0]);
 }
 
-#endif  // ! V8_REGEXP_NATIVE
+#endif  // V8_INTERPRETED_REGEXP
 
 
 TEST(AddInverseToTable) {
@@ -1403,7 +1403,8 @@ TEST(LatinCanonicalize) {
   for (uc32 c = 128; c < (1 << 21); c++)
     CHECK_GE(canonicalize(c), 128);
   unibrow::Mapping<unibrow::ToUppercase> to_upper;
-  for (uc32 c = 0; c < (1 << 21); c++) {
+  // Canonicalization is only defined for the Basic Multilingual Plane.
+  for (uc32 c = 0; c < (1 << 16); c++) {
     unibrow::uchar upper[unibrow::ToUppercase::kMaxWidth];
     int length = to_upper.get(c, '\0', upper);
     if (length == 0) {
@@ -1418,7 +1419,7 @@ TEST(LatinCanonicalize) {
 }
 
 
-static uc32 CanonRange(uc32 c) {
+static uc32 CanonRangeEnd(uc32 c) {
   unibrow::uchar canon[unibrow::CanonicalizationRange::kMaxWidth];
   int count = unibrow::CanonicalizationRange::Convert(c, '\0', canon, NULL);
   if (count == 0) {
@@ -1431,47 +1432,29 @@ static uc32 CanonRange(uc32 c) {
 
 
 TEST(RangeCanonicalization) {
-  CHECK_NE(CanonRange(0) & CharacterRange::kStartMarker, 0);
   // Check that we arrive at the same result when using the basic
   // range canonicalization primitives as when using immediate
   // canonicalization.
   unibrow::Mapping<unibrow::Ecma262UnCanonicalize> un_canonicalize;
-  for (int i = 0; i < CharacterRange::kRangeCanonicalizeMax; i++) {
-    int range = CanonRange(i);
-    int indirect_length = 0;
-    unibrow::uchar indirect[unibrow::Ecma262UnCanonicalize::kMaxWidth];
-    if ((range & CharacterRange::kStartMarker) == 0) {
-      indirect_length = un_canonicalize.get(i - range, '\0', indirect);
-      for (int i = 0; i < indirect_length; i++)
-        indirect[i] += range;
-    } else {
-      indirect_length = un_canonicalize.get(i, '\0', indirect);
-    }
-    unibrow::uchar direct[unibrow::Ecma262UnCanonicalize::kMaxWidth];
-    int direct_length = un_canonicalize.get(i, '\0', direct);
-    CHECK_EQ(direct_length, indirect_length);
-  }
-  // Check that we arrive at the same results when skipping over
-  // canonicalization ranges.
-  int next_block = 0;
-  while (next_block < CharacterRange::kRangeCanonicalizeMax) {
-    uc32 start = CanonRange(next_block);
-    CHECK_NE((start & CharacterRange::kStartMarker), 0);
-    unsigned dist = start & CharacterRange::kPayloadMask;
-    unibrow::uchar first[unibrow::Ecma262UnCanonicalize::kMaxWidth];
-    int first_length = un_canonicalize.get(next_block, '\0', first);
-    for (unsigned i = 1; i < dist; i++) {
-      CHECK_EQ(i, CanonRange(next_block + i));
-      unibrow::uchar succ[unibrow::Ecma262UnCanonicalize::kMaxWidth];
-      int succ_length = un_canonicalize.get(next_block + i, '\0', succ);
-      CHECK_EQ(first_length, succ_length);
-      for (int j = 0; j < succ_length; j++) {
-        int calc = first[j] + i;
-        int found = succ[j];
-        CHECK_EQ(calc, found);
+  int block_start = 0;
+  while (block_start <= 0xFFFF) {
+    uc32 block_end = CanonRangeEnd(block_start);
+    unsigned block_length = block_end - block_start + 1;
+    if (block_length > 1) {
+      unibrow::uchar first[unibrow::Ecma262UnCanonicalize::kMaxWidth];
+      int first_length = un_canonicalize.get(block_start, '\0', first);
+      for (unsigned i = 1; i < block_length; i++) {
+        unibrow::uchar succ[unibrow::Ecma262UnCanonicalize::kMaxWidth];
+        int succ_length = un_canonicalize.get(block_start + i, '\0', succ);
+        CHECK_EQ(first_length, succ_length);
+        for (int j = 0; j < succ_length; j++) {
+          int calc = first[j] + i;
+          int found = succ[j];
+          CHECK_EQ(calc, found);
+        }
       }
     }
-    next_block = next_block + dist;
+    block_start = block_start + block_length;
   }
 }
 

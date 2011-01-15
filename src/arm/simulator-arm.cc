@@ -26,8 +26,11 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <stdlib.h>
+#include <math.h>
 #include <cstdarg>
 #include "v8.h"
+
+#if defined(V8_TARGET_ARCH_ARM)
 
 #include "disasm.h"
 #include "assembler.h"
@@ -724,7 +727,18 @@ void Simulator::set_register(int reg, int32_t value) {
 // the special case of accessing the PC register.
 int32_t Simulator::get_register(int reg) const {
   ASSERT((reg >= 0) && (reg < num_registers));
+  // Stupid code added to avoid bug in GCC.
+  // See: http://gcc.gnu.org/bugzilla/show_bug.cgi?id=43949
+  if (reg >= num_registers) return 0;
+  // End stupid code.
   return registers_[reg] + ((reg == pc) ? Instr::kPCReadOffset : 0);
+}
+
+
+void Simulator::set_dw_register(int dreg, const int* dbl) {
+  ASSERT((dreg >= 0) && (dreg < num_d_registers));
+  registers_[dreg] = dbl[0];
+  registers_[dreg + 1] = dbl[1];
 }
 
 
@@ -864,27 +878,42 @@ void Simulator::TrashCallerSaveRegisters() {
   registers_[12] = 0x50Bad4U;
 }
 
-
-// The ARM cannot do unaligned reads and writes.  On some ARM platforms an
-// interrupt is caused.  On others it does a funky rotation thing.  For now we
-// simply disallow unaligned reads, but at some point we may want to move to
-// emulating the rotate behaviour.  Note that simulator runs have the runtime
+// Some Operating Systems allow unaligned access on ARMv7 targets. We
+// assume that unaligned accesses are not allowed unless the v8 build system
+// defines the CAN_USE_UNALIGNED_ACCESSES macro to be non-zero.
+// The following statements below describes the behavior of the ARM CPUs
+// that don't support unaligned access.
+// Some ARM platforms raise an interrupt on detecting unaligned access.
+// On others it does a funky rotation thing.  For now we
+// simply disallow unaligned reads.  Note that simulator runs have the runtime
 // system running directly on the host system and only generated code is
 // executed in the simulator.  Since the host is typically IA32 we will not
-// get the correct ARM-like behaviour on unaligned accesses.
+// get the correct ARM-like behaviour on unaligned accesses for those ARM
+// targets that don't support unaligned loads and stores.
+
 
 int Simulator::ReadW(int32_t addr, Instr* instr) {
+#if V8_TARGET_CAN_READ_UNALIGNED
+  intptr_t* ptr = reinterpret_cast<intptr_t*>(addr);
+  return *ptr;
+#else
   if ((addr & 3) == 0) {
     intptr_t* ptr = reinterpret_cast<intptr_t*>(addr);
     return *ptr;
   }
-  PrintF("Unaligned read at 0x%08x\n", addr);
+  PrintF("Unaligned read at 0x%08x, pc=%p\n", addr, instr);
   UNIMPLEMENTED();
   return 0;
+#endif
 }
 
 
 void Simulator::WriteW(int32_t addr, int value, Instr* instr) {
+#if V8_TARGET_CAN_READ_UNALIGNED
+  intptr_t* ptr = reinterpret_cast<intptr_t*>(addr);
+  *ptr = value;
+  return;
+#else
   if ((addr & 3) == 0) {
     intptr_t* ptr = reinterpret_cast<intptr_t*>(addr);
     *ptr = value;
@@ -892,10 +921,15 @@ void Simulator::WriteW(int32_t addr, int value, Instr* instr) {
   }
   PrintF("Unaligned write at 0x%08x, pc=%p\n", addr, instr);
   UNIMPLEMENTED();
+#endif
 }
 
 
 uint16_t Simulator::ReadHU(int32_t addr, Instr* instr) {
+#if V8_TARGET_CAN_READ_UNALIGNED
+  uint16_t* ptr = reinterpret_cast<uint16_t*>(addr);
+  return *ptr;
+#else
   if ((addr & 1) == 0) {
     uint16_t* ptr = reinterpret_cast<uint16_t*>(addr);
     return *ptr;
@@ -903,10 +937,15 @@ uint16_t Simulator::ReadHU(int32_t addr, Instr* instr) {
   PrintF("Unaligned unsigned halfword read at 0x%08x, pc=%p\n", addr, instr);
   UNIMPLEMENTED();
   return 0;
+#endif
 }
 
 
 int16_t Simulator::ReadH(int32_t addr, Instr* instr) {
+#if V8_TARGET_CAN_READ_UNALIGNED
+  int16_t* ptr = reinterpret_cast<int16_t*>(addr);
+  return *ptr;
+#else
   if ((addr & 1) == 0) {
     int16_t* ptr = reinterpret_cast<int16_t*>(addr);
     return *ptr;
@@ -914,10 +953,16 @@ int16_t Simulator::ReadH(int32_t addr, Instr* instr) {
   PrintF("Unaligned signed halfword read at 0x%08x\n", addr);
   UNIMPLEMENTED();
   return 0;
+#endif
 }
 
 
 void Simulator::WriteH(int32_t addr, uint16_t value, Instr* instr) {
+#if V8_TARGET_CAN_READ_UNALIGNED
+  uint16_t* ptr = reinterpret_cast<uint16_t*>(addr);
+  *ptr = value;
+  return;
+#else
   if ((addr & 1) == 0) {
     uint16_t* ptr = reinterpret_cast<uint16_t*>(addr);
     *ptr = value;
@@ -925,10 +970,16 @@ void Simulator::WriteH(int32_t addr, uint16_t value, Instr* instr) {
   }
   PrintF("Unaligned unsigned halfword write at 0x%08x, pc=%p\n", addr, instr);
   UNIMPLEMENTED();
+#endif
 }
 
 
 void Simulator::WriteH(int32_t addr, int16_t value, Instr* instr) {
+#if V8_TARGET_CAN_READ_UNALIGNED
+  int16_t* ptr = reinterpret_cast<int16_t*>(addr);
+  *ptr = value;
+  return;
+#else
   if ((addr & 1) == 0) {
     int16_t* ptr = reinterpret_cast<int16_t*>(addr);
     *ptr = value;
@@ -936,6 +987,7 @@ void Simulator::WriteH(int32_t addr, int16_t value, Instr* instr) {
   }
   PrintF("Unaligned halfword write at 0x%08x, pc=%p\n", addr, instr);
   UNIMPLEMENTED();
+#endif
 }
 
 
@@ -960,6 +1012,41 @@ void Simulator::WriteB(int32_t addr, uint8_t value) {
 void Simulator::WriteB(int32_t addr, int8_t value) {
   int8_t* ptr = reinterpret_cast<int8_t*>(addr);
   *ptr = value;
+}
+
+
+int32_t* Simulator::ReadDW(int32_t addr) {
+#if V8_TARGET_CAN_READ_UNALIGNED
+  int32_t* ptr = reinterpret_cast<int32_t*>(addr);
+  return ptr;
+#else
+  if ((addr & 3) == 0) {
+    int32_t* ptr = reinterpret_cast<int32_t*>(addr);
+    return ptr;
+  }
+  PrintF("Unaligned read at 0x%08x\n", addr);
+  UNIMPLEMENTED();
+  return 0;
+#endif
+}
+
+
+void Simulator::WriteDW(int32_t addr, int32_t value1, int32_t value2) {
+#if V8_TARGET_CAN_READ_UNALIGNED
+  int32_t* ptr = reinterpret_cast<int32_t*>(addr);
+  *ptr++ = value1;
+  *ptr = value2;
+  return;
+#else
+  if ((addr & 3) == 0) {
+    int32_t* ptr = reinterpret_cast<int32_t*>(addr);
+    *ptr++ = value1;
+    *ptr = value2;
+    return;
+  }
+  PrintF("Unaligned write at 0x%08x\n", addr);
+  UNIMPLEMENTED();
+#endif
 }
 
 
@@ -1295,7 +1382,9 @@ void Simulator::HandleRList(Instr* instr, bool load) {
     }
     case 3: {
       // Print("ib");
-      UNIMPLEMENTED();
+      start_address = rn_val + 4;
+      end_address = rn_val + (num_regs * 4);
+      rn_val = end_address;
       break;
     }
     default: {
@@ -1590,7 +1679,19 @@ void Simulator::DecodeType01(Instr* instr) {
           }
         }
       }
-      if (instr->HasH()) {
+      if (((instr->Bits(7, 4) & 0xd) == 0xd) && (instr->Bit(20) == 0)) {
+        ASSERT((rd % 2) == 0);
+        if (instr->HasH()) {
+          // The strd instruction.
+          int32_t value1 = get_register(rd);
+          int32_t value2 = get_register(rd+1);
+          WriteDW(addr, value1, value2);
+        } else {
+          // The ldrd instruction.
+          int* rn_data = ReadDW(addr);
+          set_dw_register(rd, rn_data);
+        }
+      } else if (instr->HasH()) {
         if (instr->HasSign()) {
           if (instr->HasL()) {
             int16_t val = ReadH(addr, instr);
@@ -1765,7 +1866,9 @@ void Simulator::DecodeType01(Instr* instr) {
           SetNZFlags(alu_out);
           SetCFlag(shifter_carry_out);
         } else {
-          UNIMPLEMENTED();
+          // Format(instr, "movw'cond 'rd, 'imm").
+          alu_out = instr->ImmedMovwMovtField();
+          set_register(rd, alu_out);
         }
         break;
       }
@@ -1794,7 +1897,10 @@ void Simulator::DecodeType01(Instr* instr) {
           SetCFlag(!BorrowFrom(rn_val, shifter_operand));
           SetVFlag(OverflowFrom(alu_out, rn_val, shifter_operand, false));
         } else {
-          UNIMPLEMENTED();
+          // Format(instr, "movt'cond 'rd, 'imm").
+          alu_out = (get_register(rd) & 0xffff) |
+              (instr->ImmedMovwMovtField() << 16);
+          set_register(rd, alu_out);
         }
         break;
       }
@@ -1937,7 +2043,6 @@ void Simulator::DecodeType2(Instr* instr) {
 
 
 void Simulator::DecodeType3(Instr* instr) {
-  ASSERT(instr->Bits(6, 4) == 0x5 || instr->Bit(4) == 0);
   int rd = instr->RdField();
   int rn = instr->RnField();
   int32_t rn_val = get_register(rn);
@@ -1948,11 +2053,41 @@ void Simulator::DecodeType3(Instr* instr) {
     case 0: {
       ASSERT(!instr->HasW());
       Format(instr, "'memop'cond'b 'rd, ['rn], -'shift_rm");
+      UNIMPLEMENTED();
       break;
     }
     case 1: {
-      ASSERT(!instr->HasW());
-      Format(instr, "'memop'cond'b 'rd, ['rn], +'shift_rm");
+      if (instr->HasW()) {
+        ASSERT(instr->Bits(5, 4) == 0x1);
+
+        if (instr->Bit(22) == 0x1) {  // USAT.
+          int32_t sat_pos = instr->Bits(20, 16);
+          int32_t sat_val = (1 << sat_pos) - 1;
+          int32_t shift = instr->Bits(11, 7);
+          int32_t shift_type = instr->Bit(6);
+          int32_t rm_val = get_register(instr->RmField());
+          if (shift_type == 0) {  // LSL
+            rm_val <<= shift;
+          } else {  // ASR
+            rm_val >>= shift;
+          }
+          // If saturation occurs, the Q flag should be set in the CPSR.
+          // There is no Q flag yet, and no instruction (MRS) to read the
+          // CPSR directly.
+          if (rm_val > sat_val) {
+            rm_val = sat_val;
+          } else if (rm_val < 0) {
+            rm_val = 0;
+          }
+          set_register(rd, rm_val);
+        } else {  // SSAT.
+          UNIMPLEMENTED();
+        }
+        return;
+      } else {
+        Format(instr, "'memop'cond'b 'rd, ['rn], +'shift_rm");
+        UNIMPLEMENTED();
+      }
       break;
     }
     case 2: {
@@ -1964,17 +2099,47 @@ void Simulator::DecodeType3(Instr* instr) {
       break;
     }
     case 3: {
-      // UBFX.
       if (instr->HasW() && (instr->Bits(6, 4) == 0x5)) {
         uint32_t widthminus1 = static_cast<uint32_t>(instr->Bits(20, 16));
-        uint32_t lsbit = static_cast<uint32_t>(instr->ShiftAmountField());
+        uint32_t lsbit = static_cast<uint32_t>(instr->Bits(11, 7));
         uint32_t msbit = widthminus1 + lsbit;
         if (msbit <= 31) {
-          uint32_t rm_val =
-              static_cast<uint32_t>(get_register(instr->RmField()));
-          uint32_t extr_val = rm_val << (31 - msbit);
-          extr_val = extr_val >> (31 - widthminus1);
-          set_register(instr->RdField(), extr_val);
+          if (instr->Bit(22)) {
+            // ubfx - unsigned bitfield extract.
+            uint32_t rm_val =
+                static_cast<uint32_t>(get_register(instr->RmField()));
+            uint32_t extr_val = rm_val << (31 - msbit);
+            extr_val = extr_val >> (31 - widthminus1);
+            set_register(instr->RdField(), extr_val);
+          } else {
+            // sbfx - signed bitfield extract.
+            int32_t rm_val = get_register(instr->RmField());
+            int32_t extr_val = rm_val << (31 - msbit);
+            extr_val = extr_val >> (31 - widthminus1);
+            set_register(instr->RdField(), extr_val);
+          }
+        } else {
+          UNREACHABLE();
+        }
+        return;
+      } else if (!instr->HasW() && (instr->Bits(6, 4) == 0x1)) {
+        uint32_t lsbit = static_cast<uint32_t>(instr->Bits(11, 7));
+        uint32_t msbit = static_cast<uint32_t>(instr->Bits(20, 16));
+        if (msbit >= lsbit) {
+          // bfc or bfi - bitfield clear/insert.
+          uint32_t rd_val =
+              static_cast<uint32_t>(get_register(instr->RdField()));
+          uint32_t bitcount = msbit - lsbit + 1;
+          uint32_t mask = (1 << bitcount) - 1;
+          rd_val &= ~(mask << lsbit);
+          if (instr->RmField() != 15) {
+            // bfi - bitfield insert.
+            uint32_t rm_val =
+                static_cast<uint32_t>(get_register(instr->RmField()));
+            rm_val &= mask;
+            rd_val |= rm_val << lsbit;
+          }
+          set_register(instr->RdField(), rd_val);
         } else {
           UNREACHABLE();
         }
@@ -2134,7 +2299,8 @@ static int GlueRegCode(bool last_bit, int vm, int m) {
 // Dd = vmul(Dn, Dm)
 // Dd = vdiv(Dn, Dm)
 // vcmp(Dd, Dm)
-// VMRS
+// vmrs
+// Dd = vsqrt(Dm)
 void Simulator::DecodeTypeVFP(Instr* instr) {
   ASSERT((instr->TypeField() == 7) && (instr->Bit(24) == 0x0) );
   ASSERT(instr->Bits(11, 9) == 0x5);
@@ -2146,7 +2312,14 @@ void Simulator::DecodeTypeVFP(Instr* instr) {
   if (instr->Bit(4) == 0) {
     if (instr->Opc1Field() == 0x7) {
       // Other data processing instructions
-      if ((instr->Opc2Field() == 0x7) && (instr->Opc3Field() == 0x3)) {
+      if ((instr->Opc2Field() == 0x0) && (instr->Opc3Field() == 0x1)) {
+        // vmov register to register.
+        if (instr->SzField() == 0x1) {
+          set_d_register_from_double(vd, get_double_from_d_register(vm));
+        } else {
+          set_s_register_from_float(vd, get_float_from_s_register(vm));
+        }
+      } else if ((instr->Opc2Field() == 0x7) && (instr->Opc3Field() == 0x3)) {
         DecodeVCVTBetweenDoubleAndSingle(instr);
       } else if ((instr->Opc2Field() == 0x8) && (instr->Opc3Field() & 0x1)) {
         DecodeVCVTBetweenFloatingPointAndInteger(instr);
@@ -2156,6 +2329,18 @@ void Simulator::DecodeTypeVFP(Instr* instr) {
       } else if (((instr->Opc2Field() == 0x4) || (instr->Opc2Field() == 0x5)) &&
                  (instr->Opc3Field() & 0x1)) {
         DecodeVCMP(instr);
+      } else if (((instr->Opc2Field() == 0x1)) && (instr->Opc3Field() == 0x3)) {
+        // vsqrt
+        double dm_value = get_double_from_d_register(vm);
+        double dd_value = sqrt(dm_value);
+        set_d_register_from_double(vd, dd_value);
+      } else if (instr->Opc3Field() == 0x0) {
+        // vmov immediate.
+        if (instr->SzField() == 0x1) {
+          set_d_register_from_double(vd, instr->DoubleImmedVmov());
+        } else {
+          UNREACHABLE();  // Not used by v8.
+        }
       } else {
         UNREACHABLE();  // Not used by V8.
       }
@@ -2252,11 +2437,17 @@ void Simulator::DecodeVCMP(Instr* instr) {
   }
 
   int d = GlueRegCode(!dp_operation, instr->VdField(), instr->DField());
-  int m = GlueRegCode(!dp_operation, instr->VmField(), instr->MField());
+  int m = 0;
+  if (instr->Opc2Field() == 0x4) {
+    m = GlueRegCode(!dp_operation, instr->VmField(), instr->MField());
+  }
 
   if (dp_operation) {
     double dd_value = get_double_from_d_register(d);
-    double dm_value = get_double_from_d_register(m);
+    double dm_value = 0.0;
+    if (instr->Opc2Field() == 0x4) {
+      dm_value = get_double_from_d_register(m);
+    }
 
     Compute_FPSCR_Flags(dd_value, dm_value);
   } else {
@@ -2639,3 +2830,5 @@ uintptr_t Simulator::PopAddress() {
 } }  // namespace assembler::arm
 
 #endif  // __arm__
+
+#endif  // V8_TARGET_ARCH_ARM

@@ -32,6 +32,7 @@
 #include "execution.h"
 #include "factory.h"
 #include "macro-assembler.h"
+#include "objects-visiting.h"
 
 namespace v8 {
 namespace internal {
@@ -93,6 +94,12 @@ Handle<String> Factory::NewStringFromTwoByte(Vector<const uc16> string,
                                              PretenureFlag pretenure) {
   CALL_HEAP_FUNCTION(Heap::AllocateStringFromTwoByte(string, pretenure),
                      String);
+}
+
+
+Handle<String> Factory::NewRawAsciiString(int length,
+                                          PretenureFlag pretenure) {
+  CALL_HEAP_FUNCTION(Heap::AllocateRawAsciiString(length, pretenure), String);
 }
 
 
@@ -271,11 +278,23 @@ Handle<Map> Factory::CopyMap(Handle<Map> src,
   copy->set_inobject_properties(inobject_properties);
   copy->set_unused_property_fields(inobject_properties);
   copy->set_instance_size(copy->instance_size() + instance_size_delta);
+  copy->set_visitor_id(StaticVisitorBase::GetVisitorId(*copy));
   return copy;
 }
 
+
 Handle<Map> Factory::CopyMapDropTransitions(Handle<Map> src) {
   CALL_HEAP_FUNCTION(src->CopyDropTransitions(), Map);
+}
+
+
+Handle<Map> Factory::GetFastElementsMap(Handle<Map> src) {
+  CALL_HEAP_FUNCTION(src->GetFastElementsMap(), Map);
+}
+
+
+Handle<Map> Factory::GetSlowElementsMap(Handle<Map> src) {
+  CALL_HEAP_FUNCTION(src->GetSlowElementsMap(), Map);
 }
 
 
@@ -467,6 +486,10 @@ Handle<JSFunction> Factory::NewFunction(Handle<String> name,
                                         bool force_initial_map) {
   // Allocate the function
   Handle<JSFunction> function = NewFunction(name, the_hole_value());
+
+  // Setup the code pointer in both the shared function info and in
+  // the function itself.
+  function->shared()->set_code(*code);
   function->set_code(*code);
 
   if (force_initial_map ||
@@ -492,9 +515,12 @@ Handle<JSFunction> Factory::NewFunctionWithPrototype(Handle<String> name,
                                                      Handle<JSObject> prototype,
                                                      Handle<Code> code,
                                                      bool force_initial_map) {
-  // Allocate the function
+  // Allocate the function.
   Handle<JSFunction> function = NewFunction(name, prototype);
 
+  // Setup the code pointer in both the shared function info and in
+  // the function itself.
+  function->shared()->set_code(*code);
   function->set_code(*code);
 
   if (force_initial_map ||
@@ -516,6 +542,7 @@ Handle<JSFunction> Factory::NewFunctionWithPrototype(Handle<String> name,
 Handle<JSFunction> Factory::NewFunctionWithoutPrototype(Handle<String> name,
                                                         Handle<Code> code) {
   Handle<JSFunction> function = NewFunctionWithoutPrototype(name);
+  function->shared()->set_code(*code);
   function->set_code(*code);
   ASSERT(!function->has_initial_map());
   ASSERT(!function->has_prototype());
@@ -524,10 +551,9 @@ Handle<JSFunction> Factory::NewFunctionWithoutPrototype(Handle<String> name,
 
 
 Handle<Code> Factory::NewCode(const CodeDesc& desc,
-                              ZoneScopeInfo* sinfo,
                               Code::Flags flags,
                               Handle<Object> self_ref) {
-  CALL_HEAP_FUNCTION(Heap::CreateCode(desc, sinfo, flags, self_ref), Code);
+  CALL_HEAP_FUNCTION(Heap::CreateCode(desc, flags, self_ref), Code);
 }
 
 
@@ -663,9 +689,13 @@ Handle<JSArray> Factory::NewJSArrayWithElements(Handle<FixedArray> elements,
 
 
 Handle<SharedFunctionInfo> Factory::NewSharedFunctionInfo(
-    Handle<String> name, int number_of_literals, Handle<Code> code) {
+    Handle<String> name,
+    int number_of_literals,
+    Handle<Code> code,
+    Handle<SerializedScopeInfo> scope_info) {
   Handle<SharedFunctionInfo> shared = NewSharedFunctionInfo(name);
   shared->set_code(*code);
+  shared->set_scope_info(*scope_info);
   int literals_array_size = number_of_literals;
   // If the function contains object, regexp or array literals,
   // allocate extra space for a literals array prefix containing the

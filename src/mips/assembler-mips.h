@@ -187,7 +187,10 @@ extern const FPURegister f31;
 // Negation of the default no_condition (-1) results in a non-default
 // no_condition value (-2). As long as tests for no_condition check
 // for condition < 0, this will work as expected.
-inline Condition NegateCondition(Condition cc);
+inline Condition NegateCondition(Condition cc) {
+  ASSERT(cc != cc_always);
+  return static_cast<Condition>(cc ^ 1);
+}
 
 inline Condition ReverseCondition(Condition cc) {
   switch (cc) {
@@ -368,16 +371,6 @@ class Assembler : public Malloced {
   // The high 8 bits are set to zero.
   void label_at_put(Label* L, int at_offset);
 
-  // Size of an instruction.
-  static const int kInstrSize = sizeof(Instr);
-
-  // Difference between address of current opcode and value read from pc
-  // register.
-  static const int kPcLoadDelta = 4;
-
-  // Difference between address of current opcode and target address offset.
-  static const int kBranchPCOffset = 4;
-
   // Read/Modify the code target address in the branch/call instruction at pc.
   static Address target_address_at(Address pc);
   static void set_target_address_at(Address pc, Address target);
@@ -396,8 +389,17 @@ class Assembler : public Malloced {
     set_target_address_at(instruction_payload, target);
   }
 
-  static const int kCallTargetSize = 3 * kPointerSize;
-  static const int kExternalTargetSize = 3 * kPointerSize;
+  // Size of an instruction.
+  static const int kInstrSize = sizeof(Instr);
+
+  // Difference between address of current opcode and target address offset.
+  static const int kBranchPCOffset = 4;
+
+  // Here we are patching the address in the LUI/ORI instruction pair.
+  // I can't tell if these are right or wrong. We have not used the
+  // serialization yet (as of 11/18/2010). Good luck.
+  static const int kCallTargetSize = 2 * kInstrSize;
+  static const int kExternalTargetSize = 4 * kInstrSize;
 
   // Distance between the instruction referring to the address of the call
   // target and the return address.
@@ -407,13 +409,31 @@ class Assembler : public Malloced {
   // to jump to.
   static const int kPatchReturnSequenceAddressOffset = 0;
 
+  // Distance between start of patched debug break slot and the emitted address
+  // to jump to.
+  static const int kPatchDebugBreakSlotAddressOffset =  0 * kInstrSize;
+
+  // Difference between address of current opcode and value read from pc
+  // register.
+  static const int kPcLoadDelta = 4;
+
   // Number of instructions used for the JS return sequence. The constant is
   // used by the debugger to patch the JS return sequence.
-  static const int kJSReturnSequenceLength = 7;
+  static const int kJSReturnSequenceInstructions = 7;
+  static const int kDebugBreakSlotInstructions = 4;
+  static const int kDebugBreakSlotLength =
+      kDebugBreakSlotInstructions * kInstrSize;
 
 
   // ---------------------------------------------------------------------------
   // Code generation.
+
+  // Insert the smallest number of nop instructions
+  // possible to align the pc offset to a multiple
+  // of m. m must be a power of 2 (>= 4).
+  void Align(int m);
+  // Aligns code to something that's optimal for a jump target for the platform.
+  void CodeTargetAlign();
 
   // Generic nop instruction. You should generally use nop().
   // nop(1) is used in the property load inline patcher.
@@ -534,11 +554,13 @@ class Assembler : public Malloced {
   // Conditional move.
   void movz(Register rd, Register rs, Register rt);
   void movn(Register rd, Register rs, Register rt);
+  void movt(Register rd, Register rs, uint16_t cc = 0);
+  void movf(Register rd, Register rs, uint16_t cc = 0);
 
   // Bit twiddling.
   void clz(Register rd, Register rs);
-  void ins(Register rt, Register rs, uint16_t pos, uint16_t size);
-  void ext(Register rt, Register rs, uint16_t pos, uint16_t size);
+  void ins_(Register rt, Register rs, uint16_t pos, uint16_t size);
+  void ext_(Register rt, Register rs, uint16_t pos, uint16_t size);
 
   //--------Coprocessor-instructions----------------
 
@@ -560,6 +582,7 @@ class Assembler : public Malloced {
   void abs_d(FPURegister fd, FPURegister fs);
   void mov_d(FPURegister fd, FPURegister fs);
   void neg_d(FPURegister fd, FPURegister fs);
+  void sqrt_d(FPURegister fd, FPURegister fs);
 
   // Conversion.
   void cvt_w_s(FPURegister fd, FPURegister fs);
@@ -588,17 +611,36 @@ class Assembler : public Malloced {
   void bc1f(Label* L, uint16_t cc = 0) { bc1f(branch_offset(L, false)>>2, cc); }
   void bc1t(int16_t offset, uint16_t cc = 0);
   void bc1t(Label* L, uint16_t cc = 0) { bc1t(branch_offset(L, false)>>2, cc); }
-
+  void fcmp(FPURegister src1, const double src2, FPUCondition cond);
 
   // Check the code size generated from label to here.
   int InstructionsGeneratedSince(Label* l) {
     return (pc_offset() - l->pos()) / kInstrSize;
   }
 
+  // Class for scoping postponing the trampoline pool generation.
+  class BlockTrampolinePoolScope {
+   public:
+    explicit BlockTrampolinePoolScope(Assembler* assem) : assem_(assem) {
+      assem_->StartBlockTrampolinePool();
+    }
+    ~BlockTrampolinePoolScope() {
+      assem_->EndBlockTrampolinePool();
+    }
+
+   private:
+    Assembler* assem_;
+
+    DISALLOW_IMPLICIT_CONSTRUCTORS(BlockTrampolinePoolScope);
+  };
+
   // Debugging.
 
   // Mark address of the ExitJSFrame code.
   void RecordJSReturn();
+
+  // Mark address of a debug break slot.
+  void RecordDebugBreakSlot();
 
   // Record a comment relocation entry that can be used by a disassembler.
   // Use --debug_code to enable.
@@ -606,12 +648,18 @@ class Assembler : public Malloced {
 
   void RecordPosition(int pos);
   void RecordStatementPosition(int pos);
-  void WriteRecordedPositions();
+  bool WriteRecordedPositions();
 
   int32_t pc_offset() const { return pc_ - buffer_; }
   int32_t current_position() const { return current_position_; }
   int32_t current_statement_position() const {
     return current_statement_position_;
+  }
+
+  bool can_peephole_optimize(int instructions) {
+    if (!FLAG_peephole_optimization) return false;
+    if (last_bound_pos_ > pc_offset() - instructions * kInstrSize) return false;
+    return reloc_info_writer.last_pc() <= pc_ - instructions * kInstrSize;
   }
 
   // Postpone the generation of the trampoline pool for the specified number of
@@ -640,11 +688,24 @@ class Assembler : public Malloced {
   static bool is_branch(Instr instr);
 
   static bool is_nop(Instr instr, unsigned int type);
+  static bool IsPop(Instr instr);
+  static bool IsPush(Instr instr);
+  static bool IsLwRegFpOffset(Instr instr);
+  static bool IsSwRegFpOffset(Instr instr);
+  static bool IsLwRegFpNegOffset(Instr instr);
+  static bool IsSwRegFpNegOffset(Instr instr);
+
+  static Register GetRt(Instr instr);
 
   static int32_t get_branch_offset(Instr instr);
   static bool is_lw(Instr instr);
   static int16_t get_lw_offset(Instr instr);
   static Instr set_lw_offset(Instr instr, int16_t offset);
+
+  static bool IsSw(Instr instr);
+  static Instr SetSwOffset(Instr instr, int16_t offset);
+  static bool IsAddImmediate(Instr instr);
+  static Instr SetAddImmediateOffset(Instr instr, int16_t offset);
 
  protected:
   int32_t buffer_space() const { return reloc_info_writer.pos() - pc_; }
@@ -665,6 +726,17 @@ class Assembler : public Malloced {
   void BlockTrampolinePoolBefore(int pc_offset) {
     if (no_trampoline_pool_before_ < pc_offset)
       no_trampoline_pool_before_ = pc_offset;
+  }
+
+  void StartBlockTrampolinePool() {
+    trampoline_pool_blocked_nesting_++;
+  }
+  void EndBlockTrampolinePool() {
+    trampoline_pool_blocked_nesting_--;
+  }
+
+  bool is_trampoline_pool_blocked() const {
+    return trampoline_pool_blocked_nesting_ > 0;
   }
 
  private:
@@ -697,6 +769,7 @@ class Assembler : public Malloced {
   int next_buffer_check_;  // pc offset of next buffer check.
 
   // Emission of the trampoline pool may be blocked in some code sequences.
+  int trampoline_pool_blocked_nesting_;  // Block emission if this is not zero.
   int no_trampoline_pool_before_;  // Block emission before this pc offset.
 
   // Keep track of the last emitted pool to guarantee a maximal distance.
@@ -850,6 +923,7 @@ class Assembler : public Malloced {
   friend class RegExpMacroAssemblerMIPS;
   friend class RelocInfo;
   friend class CodePatcher;
+  friend class BlockTrampolinePoolScope;
 };
 
 } }  // namespace v8::internal

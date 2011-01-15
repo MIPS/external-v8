@@ -33,16 +33,29 @@
 #include "compiler.h"
 #include "data-flow.h"
 #include "debug.h"
-#include "fast-codegen.h"
-#include "flow-graph.h"
 #include "full-codegen.h"
 #include "liveedit.h"
 #include "oprofile-agent.h"
 #include "rewriter.h"
 #include "scopes.h"
+#include "scopeinfo.h"
 
 namespace v8 {
 namespace internal {
+
+// For normal operation the syntax checker is used to determine whether to
+// use the full compiler for top level code or not. However if the flag
+// --always-full-compiler is specified or debugging is active the full
+// compiler will be used for all code.
+static bool AlwaysFullCompiler() {
+// Mips has not implemented full-codegen yet, so stay with old debugging
+// for now.
+#if defined(ENABLE_DEBUGGER_SUPPORT) && !defined(V8_TARGET_ARCH_MIPS)
+  return FLAG_always_full_compiler || Debugger::IsDebuggerActive();
+#else
+  return FLAG_always_full_compiler;
+#endif
+}
 
 
 static Handle<Code> MakeCode(Handle<Context> context, CompilationInfo* info) {
@@ -80,61 +93,26 @@ static Handle<Code> MakeCode(Handle<Context> context, CompilationInfo* info) {
     return Handle<Code>::null();
   }
 
-  if (function->scope()->num_parameters() > 0 ||
-      function->scope()->num_stack_slots()) {
-    AssignedVariablesAnalyzer ava(function);
-    ava.Analyze();
-    if (ava.HasStackOverflow()) {
-      return Handle<Code>::null();
-    }
-  }
-
-  if (FLAG_use_flow_graph) {
-    FlowGraphBuilder builder;
-    FlowGraph* graph = builder.Build(function);
-    USE(graph);
-
-#ifdef DEBUG
-    if (FLAG_print_graph_text && !builder.HasStackOverflow()) {
-      graph->PrintAsText(function->name());
-    }
-#endif
-  }
-
   // Generate code and return it.  Code generator selection is governed by
   // which backends are enabled and whether the function is considered
   // run-once code or not:
   //
   //  --full-compiler enables the dedicated backend for code we expect to be
   //    run once
-  //  --fast-compiler enables a speculative optimizing backend (for
-  //    non-run-once code)
   //
   // The normal choice of backend can be overridden with the flags
-  // --always-full-compiler and --always-fast-compiler, which are mutually
-  // incompatible.
-  CHECK(!FLAG_always_full_compiler || !FLAG_always_fast_compiler);
-
+  // --always-full-compiler.
   Handle<SharedFunctionInfo> shared = info->shared_info();
   bool is_run_once = (shared.is_null())
       ? info->scope()->is_global_scope()
       : (shared->is_toplevel() || shared->try_full_codegen());
-
-  if (FLAG_always_full_compiler || (FLAG_full_compiler && is_run_once)) {
-    FullCodeGenSyntaxChecker checker;
-    checker.Check(function);
-    if (checker.has_supported_syntax()) {
-      return FullCodeGenerator::MakeCode(info);
-    }
-  } else if (FLAG_always_fast_compiler ||
-             (FLAG_fast_compiler && !is_run_once)) {
-    FastCodeGenSyntaxChecker checker;
-    checker.Check(info);
-    if (checker.has_supported_syntax()) {
-      return FastCodeGenerator::MakeCode(info);
-    }
+  bool use_full = FLAG_full_compiler && !function->contains_loops();
+  if (AlwaysFullCompiler() || (use_full && is_run_once)) {
+    return FullCodeGenerator::MakeCode(info);
   }
 
+  AssignedVariablesAnalyzer ava(function);
+  if (!ava.Analyze()) return Handle<Code>::null();
   return CodeGenerator::MakeCode(info);
 }
 
@@ -142,7 +120,12 @@ static Handle<Code> MakeCode(Handle<Context> context, CompilationInfo* info) {
 #ifdef ENABLE_DEBUGGER_SUPPORT
 Handle<Code> MakeCodeForLiveEdit(CompilationInfo* info) {
   Handle<Context> context = Handle<Context>::null();
-  return MakeCode(context, info);
+  Handle<Code> code = MakeCode(context, info);
+  if (!info->shared_info().is_null()) {
+    info->shared_info()->set_scope_info(
+        *SerializedScopeInfo::Create(info->scope()));
+  }
+  return code;
 }
 #endif
 
@@ -238,9 +221,11 @@ static Handle<SharedFunctionInfo> MakeFunctionInfo(bool is_global,
 
   // Allocate function.
   Handle<SharedFunctionInfo> result =
-      Factory::NewSharedFunctionInfo(lit->name(),
-                                     lit->materialized_literal_count(),
-                                     code);
+      Factory::NewSharedFunctionInfo(
+          lit->name(),
+          lit->materialized_literal_count(),
+          code,
+          SerializedScopeInfo::Create(info.scope()));
 
   ASSERT_EQ(RelocInfo::kNoPosition, lit->function_token_position());
   Compiler::SetFunctionInfo(result, lit, true, script);
@@ -259,9 +244,6 @@ static Handle<SharedFunctionInfo> MakeFunctionInfo(bool is_global,
 
   return result;
 }
-
-
-static StaticResource<SafeStringInputBuffer> safe_string_input_buffer;
 
 
 Handle<SharedFunctionInfo> Compiler::Compile(Handle<String> source,
@@ -292,9 +274,7 @@ Handle<SharedFunctionInfo> Compiler::Compile(Handle<String> source,
     // No cache entry found. Do pre-parsing and compile the script.
     ScriptDataImpl* pre_data = input_pre_data;
     if (pre_data == NULL && source_length >= FLAG_min_preparse_length) {
-      Access<SafeStringInputBuffer> buf(&safe_string_input_buffer);
-      buf->Reset(source.location());
-      pre_data = PreParse(source, buf.value(), extension);
+      pre_data = PreParse(source, NULL, extension);
     }
 
     // Create a script object describing the script to be compiled.
@@ -431,7 +411,12 @@ bool Compiler::CompileLazy(CompilationInfo* info) {
                             info->script(),
                             code);
 
-  // Update the shared function info with the compiled code.
+  // Update the shared function info with the compiled code and the scope info.
+  // Please note, that the order of the sharedfunction initialization is
+  // important since set_scope_info might trigger a GC, causing the ASSERT
+  // below to be invalid if the code was flushed. By settting the code
+  // object last we avoid this.
+  shared->set_scope_info(*SerializedScopeInfo::Create(info->scope()));
   shared->set_code(*code);
 
   // Set the expected number of properties for instances.
@@ -445,6 +430,7 @@ bool Compiler::CompileLazy(CompilationInfo* info) {
 
   // Check the function has compiled code.
   ASSERT(shared->is_compiled());
+  shared->set_code_age(0);
   return true;
 }
 
@@ -467,10 +453,12 @@ Handle<SharedFunctionInfo> Compiler::BuildFunctionInfo(FunctionLiteral* literal,
   bool allow_lazy = literal->AllowsLazyCompilation() &&
       !LiveEditFunctionTracker::IsActive();
 
+  Handle<SerializedScopeInfo> scope_info(SerializedScopeInfo::Empty());
+
   // Generate code
   Handle<Code> code;
   if (FLAG_lazy && allow_lazy) {
-    code = ComputeLazyCompile(literal->num_parameters());
+    code = Handle<Code>(Builtins::builtin(Builtins::LazyCompile));
   } else {
     // The bodies of function literals have not yet been visited by
     // the AST optimizer/analyzer.
@@ -478,56 +466,19 @@ Handle<SharedFunctionInfo> Compiler::BuildFunctionInfo(FunctionLiteral* literal,
       return Handle<SharedFunctionInfo>::null();
     }
 
-    if (literal->scope()->num_parameters() > 0 ||
-        literal->scope()->num_stack_slots()) {
-      AssignedVariablesAnalyzer ava(literal);
-      ava.Analyze();
-      if (ava.HasStackOverflow()) {
-        return Handle<SharedFunctionInfo>::null();
-      }
-    }
-
-    if (FLAG_use_flow_graph) {
-      FlowGraphBuilder builder;
-      FlowGraph* graph = builder.Build(literal);
-      USE(graph);
-
-#ifdef DEBUG
-      if (FLAG_print_graph_text && !builder.HasStackOverflow()) {
-        graph->PrintAsText(literal->name());
-      }
-#endif
-    }
-
     // Generate code and return it.  The way that the compilation mode
     // is controlled by the command-line flags is described in
     // the static helper function MakeCode.
     CompilationInfo info(literal, script, false);
 
-    CHECK(!FLAG_always_full_compiler || !FLAG_always_fast_compiler);
     bool is_run_once = literal->try_full_codegen();
-    bool is_compiled = false;
-    if (FLAG_always_full_compiler || (FLAG_full_compiler && is_run_once)) {
-      FullCodeGenSyntaxChecker checker;
-      checker.Check(literal);
-      if (checker.has_supported_syntax()) {
-        code = FullCodeGenerator::MakeCode(&info);
-        is_compiled = true;
-      }
-    } else if (FLAG_always_fast_compiler ||
-               (FLAG_fast_compiler && !is_run_once)) {
-      // Since we are not lazily compiling we do not have a receiver to
-      // specialize for.
-      FastCodeGenSyntaxChecker checker;
-      checker.Check(&info);
-      if (checker.has_supported_syntax()) {
-        code = FastCodeGenerator::MakeCode(&info);
-        is_compiled = true;
-      }
-    }
-
-    if (!is_compiled) {
+    bool use_full = FLAG_full_compiler && !literal->contains_loops();
+    if (AlwaysFullCompiler() || (use_full && is_run_once)) {
+      code = FullCodeGenerator::MakeCode(&info);
+    } else {
       // We fall back to the classic V8 code generator.
+      AssignedVariablesAnalyzer ava(literal);
+      if (!ava.Analyze()) return Handle<SharedFunctionInfo>::null();
       code = CodeGenerator::MakeCode(&info);
     }
 
@@ -544,13 +495,15 @@ Handle<SharedFunctionInfo> Compiler::BuildFunctionInfo(FunctionLiteral* literal,
                               literal->start_position(),
                               script,
                               code);
+    scope_info = SerializedScopeInfo::Create(info.scope());
   }
 
   // Create a shared function info object.
   Handle<SharedFunctionInfo> result =
       Factory::NewSharedFunctionInfo(literal->name(),
                                      literal->materialized_literal_count(),
-                                     code);
+                                     code,
+                                     scope_info);
   SetFunctionInfo(result, literal, false, script);
 
   // Set the expected number of properties for instances and return
@@ -583,6 +536,7 @@ void Compiler::SetFunctionInfo(Handle<SharedFunctionInfo> function_info,
       lit->has_only_simple_this_property_assignments(),
       *lit->this_property_assignments());
   function_info->set_try_full_codegen(lit->try_full_codegen());
+  function_info->set_allows_lazy_compilation(lit->AllowsLazyCompilation());
 }
 
 

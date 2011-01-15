@@ -63,6 +63,7 @@ function testArguments(dcp, arguments, success, is_script) {
   } else {
     assertFalse(response.success, request + ' -> ' + json_response);
   }
+  return response;
 }
 
 function listener(event, exec_state, event_data, data) {
@@ -75,7 +76,7 @@ function listener(event, exec_state, event_data, data) {
     var request = '{' + base_request + '}'
     var response = safeEval(dcp.processDebugJSONRequest(request));
     assertFalse(response.success);
-    
+
     var mirror;
 
     testArguments(dcp, '{}', false);
@@ -116,6 +117,14 @@ function listener(event, exec_state, event_data, data) {
     mirror = debug.MakeMirror(o.a);
     testArguments(dcp, '{"type":"handle","target":' + mirror.handle() + '}', true, false);
 
+    testArguments(dcp, '{"type":"script","target":"sourceUrlScript","line":0}', true, true);
+
+    // Set a break point on a line with the comment, and check that actual position
+    // is the next line after the comment.
+    request = '{"type":"scriptId","target":' + g_script_id + ',"line":' + (g_line + 1) + '}';
+    response = testArguments(dcp, request, true, false);
+    assertEquals(g_line + 2, response.body.actual_locations[0].line);
+
     // Indicate that all was processed.
     listenerComplete = true;
   }
@@ -132,10 +141,12 @@ function f() {
 };
 
 function g() {
+  // Comment.
   f();
 };
 
 eval('function h(){}');
+eval('function sourceUrlFunc() { a = 2; }\n//@ sourceURL=sourceUrlScript');
 
 o = {a:function(){},b:function(){}}
 
@@ -143,9 +154,12 @@ o = {a:function(){},b:function(){}}
 f_script_id = Debug.findScript(f).id;
 g_script_id = Debug.findScript(g).id;
 h_script_id = Debug.findScript(h).id;
+sourceURL_script_id = Debug.findScript(sourceUrlFunc).id;
+
 assertTrue(f_script_id > 0, "invalid script id for f");
 assertTrue(g_script_id > 0, "invalid script id for g");
 assertTrue(h_script_id > 0, "invalid script id for h");
+assertTrue(sourceURL_script_id > 0, "invalid script id for sourceUrlFunc");
 assertEquals(f_script_id, g_script_id);
 
 // Get the source line for the test functions.
@@ -161,5 +175,43 @@ assertEquals(h_line, 0, "invalid line for h");
 Debug.setBreakPoint(g, 0, 0);
 g();
 
-// Make sure that the debug event listener vas invoked.
+// Make sure that the debug event listener was invoked.
 assertTrue(listenerComplete, "listener did not run to completion: " + exception);
+
+// Try setting breakpoint by url specified in sourceURL
+
+var breakListenerCalled = false;
+
+function breakListener(event) {
+  if (event == Debug.DebugEvent.Break)
+    breakListenerCalled = true;
+}
+
+Debug.setListener(breakListener);
+
+sourceUrlFunc();
+
+assertTrue(breakListenerCalled, "Break listener not called on breakpoint set by sourceURL");
+
+
+// Breakpoint in a script with no statements test case. If breakpoint is set
+// to the script body, its actual position is taken from the nearest statement
+// below or like in this case is reset to the very end of the script.
+// Unless some precautions made, this position becomes out-of-range and
+// we get an exception.
+
+// Gets a script of 'i1' function and sets the breakpoint at line #4 which
+// should be empty.
+function SetBreakpointInI1Script() {
+  var i_script = Debug.findScript(i1);
+  assertTrue(!!i_script, "invalid script for i1");
+  Debug.setScriptBreakPoint(Debug.ScriptBreakPointType.ScriptId,
+                            i_script.id, 4);
+}
+
+// Creates the eval script and tries to set the breakpoint.
+// The tricky part is that the script function must be strongly reachable at the
+// moment. Since there's no way of simply getting the pointer to the function,
+// we run this code while the script function is being activated on stack.
+eval('SetBreakpointInI1Script()\nfunction i1(){}\n\n\n\nfunction i2(){}\n');
+

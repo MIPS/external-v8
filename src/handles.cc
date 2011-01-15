@@ -197,7 +197,17 @@ void TransformToFastProperties(Handle<JSObject> object,
 
 void FlattenString(Handle<String> string) {
   CALL_HEAP_FUNCTION_VOID(string->TryFlatten());
+}
+
+
+Handle<String> FlattenGetString(Handle<String> string) {
+  Handle<String> result;
+  CALL_AND_RETRY(string->TryFlatten(),
+                 { result = Handle<String>(String::cast(__object__));
+                   break; },
+                 return Handle<String>());
   ASSERT(string->IsFlat());
+  return result;
 }
 
 
@@ -396,6 +406,11 @@ Handle<Object> SetElement(Handle<JSObject> object,
 
 Handle<JSObject> Copy(Handle<JSObject> obj) {
   CALL_HEAP_FUNCTION(Heap::CopyJSObject(*obj), JSObject);
+}
+
+
+Handle<Object> SetAccessor(Handle<JSObject> obj, Handle<AccessorInfo> info) {
+  CALL_HEAP_FUNCTION(obj->DefineAccessor(*info), Object);
 }
 
 
@@ -622,8 +637,8 @@ Handle<FixedArray> GetKeysInFixedArrayFor(Handle<JSObject> object,
 
     // Check access rights if required.
     if (current->IsAccessCheckNeeded() &&
-      !Top::MayNamedAccess(*current, Heap::undefined_value(),
-                           v8::ACCESS_KEYS)) {
+        !Top::MayNamedAccess(*current, Heap::undefined_value(),
+                             v8::ACCESS_KEYS)) {
       Top::ReportFailedAccessCheck(*current, v8::ACCESS_KEYS);
       break;
     }
@@ -649,8 +664,12 @@ Handle<FixedArray> GetKeysInFixedArrayFor(Handle<JSObject> object,
     // therefore it does not make sense to cache the property names
     // for arguments objects.  Arguments objects will always have
     // elements.
+    // Wrapped strings have elements, but don't have an elements
+    // array or dictionary.  So the fast inline test for whether to
+    // use the cache says yes, so we should not create a cache.
     bool cache_enum_keys =
         ((current->map()->constructor() != *arguments_function) &&
+         !current->IsJSValue() &&
          !current->IsAccessCheckNeeded() &&
          !current->HasNamedInterceptor() &&
          !current->HasIndexedInterceptor());
@@ -752,20 +771,32 @@ bool CompileLazyShared(Handle<SharedFunctionInfo> shared,
 bool CompileLazy(Handle<JSFunction> function,
                  Handle<Object> receiver,
                  ClearExceptionFlag flag) {
-  CompilationInfo info(function, 0, receiver);
-  bool result = CompileLazyHelper(&info, flag);
-  PROFILE(FunctionCreateEvent(*function));
-  return result;
+  if (function->shared()->is_compiled()) {
+    function->set_code(function->shared()->code());
+    function->shared()->set_code_age(0);
+    return true;
+  } else {
+    CompilationInfo info(function, 0, receiver);
+    bool result = CompileLazyHelper(&info, flag);
+    PROFILE(FunctionCreateEvent(*function));
+    return result;
+  }
 }
 
 
 bool CompileLazyInLoop(Handle<JSFunction> function,
                        Handle<Object> receiver,
                        ClearExceptionFlag flag) {
-  CompilationInfo info(function, 1, receiver);
-  bool result = CompileLazyHelper(&info, flag);
-  PROFILE(FunctionCreateEvent(*function));
-  return result;
+  if (function->shared()->is_compiled()) {
+    function->set_code(function->shared()->code());
+    function->shared()->set_code_age(0);
+    return true;
+  } else {
+    CompilationInfo info(function, 1, receiver);
+    bool result = CompileLazyHelper(&info, flag);
+    PROFILE(FunctionCreateEvent(*function));
+    return result;
+  }
 }
 
 
@@ -787,11 +818,6 @@ OptimizedObjectForAddingMultipleProperties(Handle<JSObject> object,
   } else {
     has_been_transformed_ = false;
   }
-}
-
-
-Handle<Code> ComputeLazyCompile(int argc) {
-  CALL_HEAP_FUNCTION(StubCache::ComputeLazyCompile(argc), Code);
 }
 
 

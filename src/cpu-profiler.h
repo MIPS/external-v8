@@ -31,6 +31,7 @@
 #ifdef ENABLE_LOGGING_AND_PROFILING
 
 #include "circular-queue.h"
+#include "unbound-queue.h"
 
 namespace v8 {
 namespace internal {
@@ -41,7 +42,7 @@ class CodeMap;
 class CpuProfile;
 class CpuProfilesCollection;
 class ProfileGenerator;
-
+class TokenEnumerator;
 
 #define CODE_EVENTS_TYPE_LIST(V)                \
   V(CODE_CREATION, CodeCreateEventRecord)       \
@@ -94,8 +95,9 @@ class CodeDeleteEventRecord : public CodeEventRecord {
 
 class CodeAliasEventRecord : public CodeEventRecord {
  public:
-  Address alias;
   Address start;
+  CodeEntry* entry;
+  Address code_start;
 
   INLINE(void UpdateCodeMap(CodeMap* code_map));
 };
@@ -103,6 +105,11 @@ class CodeAliasEventRecord : public CodeEventRecord {
 
 class TickSampleEventRecord BASE_EMBEDDED {
  public:
+  TickSampleEventRecord()
+      : filler(1) {
+    ASSERT(filler != SamplingCircularQueue::kClear);
+  }
+
   // The first machine word of a TickSampleEventRecord must not ever
   // become equal to SamplingCircularQueue::kClear.  As both order and
   // TickSample's first field are not reliable in this sense (order
@@ -117,9 +124,6 @@ class TickSampleEventRecord BASE_EMBEDDED {
   }
 
   INLINE(static TickSampleEventRecord* init(void* value));
-
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(TickSampleEventRecord);
 };
 
 
@@ -151,12 +155,14 @@ class ProfilerEventsProcessor : public Thread {
                        Address start, unsigned size);
   void CodeMoveEvent(Address from, Address to);
   void CodeDeleteEvent(Address from);
-  void FunctionCreateEvent(Address alias, Address start);
+  void FunctionCreateEvent(Address alias, Address start, int security_token_id);
   void FunctionMoveEvent(Address from, Address to);
   void FunctionDeleteEvent(Address from);
   void RegExpCodeCreateEvent(Logger::LogEventsAndTags tag,
                              const char* prefix, String* name,
                              Address start, unsigned size);
+  // Puts current stack into tick sample events buffer.
+  void AddCurrentStack();
 
   // Tick sample events are filled directly in the buffer of the circular
   // queue (because the structure is of fixed width, but usually not all
@@ -180,8 +186,9 @@ class ProfilerEventsProcessor : public Thread {
 
   ProfileGenerator* generator_;
   bool running_;
-  CircularQueue<CodeEventsContainer> events_buffer_;
+  UnboundQueue<CodeEventsContainer> events_buffer_;
   SamplingCircularQueue ticks_buffer_;
+  UnboundQueue<TickSampleEventRecord> ticks_from_vm_buffer_;
   unsigned enqueue_order_;
 };
 
@@ -212,10 +219,10 @@ class CpuProfiler {
   static void StartProfiling(const char* title);
   static void StartProfiling(String* title);
   static CpuProfile* StopProfiling(const char* title);
-  static CpuProfile* StopProfiling(String* title);
+  static CpuProfile* StopProfiling(Object* security_token, String* title);
   static int GetProfilesCount();
-  static CpuProfile* GetProfile(int index);
-  static CpuProfile* FindProfile(unsigned uid);
+  static CpuProfile* GetProfile(Object* security_token, int index);
+  static CpuProfile* FindProfile(Object* security_token, unsigned uid);
 
   // Invoked from stack sampler (thread or signal handler.)
   static TickSample* TickSampleEvent();
@@ -252,11 +259,12 @@ class CpuProfiler {
   void StartCollectingProfile(String* title);
   void StartProcessorIfNotStarted();
   CpuProfile* StopCollectingProfile(const char* title);
-  CpuProfile* StopCollectingProfile(String* title);
-  void StopProcessorIfLastProfile();
+  CpuProfile* StopCollectingProfile(Object* security_token, String* title);
+  void StopProcessorIfLastProfile(const char* title);
 
   CpuProfilesCollection* profiles_;
   unsigned next_profile_uid_;
+  TokenEnumerator* token_enumerator_;
   ProfileGenerator* generator_;
   ProfilerEventsProcessor* processor_;
   int saved_logging_nesting_;

@@ -33,6 +33,7 @@
 #include "debug.h"
 #include "execution.h"
 #include "objects-inl.h"
+#include "objects-visiting.h"
 #include "macro-assembler.h"
 #include "scanner.h"
 #include "scopeinfo.h"
@@ -189,7 +190,7 @@ Object* Object::GetPropertyWithCallback(Object* receiver,
   }
 
   UNREACHABLE();
-  return 0;
+  return NULL;
 }
 
 
@@ -631,7 +632,7 @@ Object* String::SlowTryFlatten(PretenureFlag pretenure) {
     case kConsStringTag: {
       ConsString* cs = ConsString::cast(this);
       if (cs->second()->length() == 0) {
-        return this;
+        return cs->first();
       }
       // There's little point in putting the flat string in new space if the
       // cons string is in old space.  It can never get GCed until there is
@@ -669,7 +670,7 @@ Object* String::SlowTryFlatten(PretenureFlag pretenure) {
       }
       cs->set_first(result);
       cs->set_second(Heap::empty_string());
-      return this;
+      return result;
     }
     default:
       return this;
@@ -678,15 +679,18 @@ Object* String::SlowTryFlatten(PretenureFlag pretenure) {
 
 
 bool String::MakeExternal(v8::String::ExternalStringResource* resource) {
+  // Externalizing twice leaks the external resource, so it's
+  // prohibited by the API.
+  ASSERT(!this->IsExternalString());
 #ifdef DEBUG
   if (FLAG_enable_slow_asserts) {
     // Assert that the resource and the string are equivalent.
     ASSERT(static_cast<size_t>(this->length()) == resource->length());
-    SmartPointer<uc16> smart_chars(NewArray<uc16>(this->length()));
-    String::WriteToFlat(this, *smart_chars, 0, this->length());
-    ASSERT(memcmp(*smart_chars,
+    ScopedVector<uc16> smart_chars(this->length());
+    String::WriteToFlat(this, smart_chars.start(), 0, this->length());
+    ASSERT(memcmp(smart_chars.start(),
                   resource->data(),
-                  resource->length() * sizeof(**smart_chars)) == 0);
+                  resource->length() * sizeof(smart_chars[0])) == 0);
   }
 #endif  // DEBUG
 
@@ -697,13 +701,16 @@ bool String::MakeExternal(v8::String::ExternalStringResource* resource) {
     return false;
   }
   ASSERT(size >= ExternalString::kSize);
+  bool is_ascii = this->IsAsciiRepresentation();
   bool is_symbol = this->IsSymbol();
   int length = this->length();
   int hash_field = this->hash_field();
 
   // Morph the object to an external string by adjusting the map and
   // reinitializing the fields.
-  this->set_map(Heap::external_string_map());
+  this->set_map(is_ascii ?
+                Heap::external_string_with_ascii_data_map() :
+                Heap::external_string_map());
   ExternalTwoByteString* self = ExternalTwoByteString::cast(this);
   self->set_length(length);
   self->set_hash_field(hash_field);
@@ -713,7 +720,9 @@ bool String::MakeExternal(v8::String::ExternalStringResource* resource) {
   if (is_symbol) {
     self->Hash();  // Force regeneration of the hash value.
     // Now morph this external string into a external symbol.
-    this->set_map(Heap::external_symbol_map());
+    this->set_map(is_ascii ?
+                  Heap::external_symbol_with_ascii_data_map() :
+                  Heap::external_symbol_map());
   }
 
   // Fill the remainder of the string with dead wood.
@@ -728,11 +737,11 @@ bool String::MakeExternal(v8::String::ExternalAsciiStringResource* resource) {
   if (FLAG_enable_slow_asserts) {
     // Assert that the resource and the string are equivalent.
     ASSERT(static_cast<size_t>(this->length()) == resource->length());
-    SmartPointer<char> smart_chars(NewArray<char>(this->length()));
-    String::WriteToFlat(this, *smart_chars, 0, this->length());
-    ASSERT(memcmp(*smart_chars,
+    ScopedVector<char> smart_chars(this->length());
+    String::WriteToFlat(this, smart_chars.start(), 0, this->length());
+    ASSERT(memcmp(smart_chars.start(),
                   resource->data(),
-                  resource->length()*sizeof(**smart_chars)) == 0);
+                  resource->length() * sizeof(smart_chars[0])) == 0);
   }
 #endif  // DEBUG
 
@@ -1015,38 +1024,6 @@ void HeapObject::HeapObjectShortPrint(StringStream* accumulator) {
 }
 
 
-int HeapObject::SlowSizeFromMap(Map* map) {
-  // Avoid calling functions such as FixedArray::cast during GC, which
-  // read map pointer of this object again.
-  InstanceType instance_type = map->instance_type();
-  uint32_t type = static_cast<uint32_t>(instance_type);
-
-  if (instance_type < FIRST_NONSTRING_TYPE
-      && (StringShape(instance_type).IsSequential())) {
-    if ((type & kStringEncodingMask) == kAsciiStringTag) {
-      SeqAsciiString* seq_ascii_this = reinterpret_cast<SeqAsciiString*>(this);
-      return seq_ascii_this->SeqAsciiStringSize(instance_type);
-    } else {
-      SeqTwoByteString* self = reinterpret_cast<SeqTwoByteString*>(this);
-      return self->SeqTwoByteStringSize(instance_type);
-    }
-  }
-
-  switch (instance_type) {
-    case FIXED_ARRAY_TYPE:
-      return reinterpret_cast<FixedArray*>(this)->FixedArraySize();
-    case BYTE_ARRAY_TYPE:
-      return reinterpret_cast<ByteArray*>(this)->ByteArraySize();
-    case CODE_TYPE:
-      return reinterpret_cast<Code*>(this)->CodeSize();
-    case MAP_TYPE:
-      return Map::kSize;
-    default:
-      return map->instance_size();
-  }
-}
-
-
 void HeapObject::Iterate(ObjectVisitor* v) {
   // Handle header
   IteratePointer(v, kMapOffset);
@@ -1065,7 +1042,7 @@ void HeapObject::IterateBody(InstanceType type, int object_size,
       case kSeqStringTag:
         break;
       case kConsStringTag:
-        reinterpret_cast<ConsString*>(this)->ConsStringIterateBody(v);
+        ConsString::BodyDescriptor::IterateBody(this, v);
         break;
       case kExternalStringTag:
         if ((type & kStringEncodingMask) == kAsciiStringTag) {
@@ -1082,34 +1059,36 @@ void HeapObject::IterateBody(InstanceType type, int object_size,
 
   switch (type) {
     case FIXED_ARRAY_TYPE:
-      reinterpret_cast<FixedArray*>(this)->FixedArrayIterateBody(v);
+      FixedArray::BodyDescriptor::IterateBody(this, object_size, v);
       break;
     case JS_OBJECT_TYPE:
     case JS_CONTEXT_EXTENSION_OBJECT_TYPE:
     case JS_VALUE_TYPE:
     case JS_ARRAY_TYPE:
     case JS_REGEXP_TYPE:
-    case JS_FUNCTION_TYPE:
     case JS_GLOBAL_PROXY_TYPE:
     case JS_GLOBAL_OBJECT_TYPE:
     case JS_BUILTINS_OBJECT_TYPE:
-      reinterpret_cast<JSObject*>(this)->JSObjectIterateBody(object_size, v);
+      JSObject::BodyDescriptor::IterateBody(this, object_size, v);
+      break;
+    case JS_FUNCTION_TYPE:
+      reinterpret_cast<JSFunction*>(this)
+          ->JSFunctionIterateBody(object_size, v);
       break;
     case ODDBALL_TYPE:
-      reinterpret_cast<Oddball*>(this)->OddballIterateBody(v);
+      Oddball::BodyDescriptor::IterateBody(this, v);
       break;
     case PROXY_TYPE:
       reinterpret_cast<Proxy*>(this)->ProxyIterateBody(v);
       break;
     case MAP_TYPE:
-      reinterpret_cast<Map*>(this)->MapIterateBody(v);
+      Map::BodyDescriptor::IterateBody(this, v);
       break;
     case CODE_TYPE:
       reinterpret_cast<Code*>(this)->CodeIterateBody(v);
       break;
     case JS_GLOBAL_PROPERTY_CELL_TYPE:
-      reinterpret_cast<JSGlobalPropertyCell*>(this)
-          ->JSGlobalPropertyCellIterateBody(v);
+      JSGlobalPropertyCell::BodyDescriptor::IterateBody(this, v);
       break;
     case HEAP_NUMBER_TYPE:
     case FILLER_TYPE:
@@ -1123,16 +1102,15 @@ void HeapObject::IterateBody(InstanceType type, int object_size,
     case EXTERNAL_UNSIGNED_INT_ARRAY_TYPE:
     case EXTERNAL_FLOAT_ARRAY_TYPE:
       break;
-    case SHARED_FUNCTION_INFO_TYPE: {
-      SharedFunctionInfo* shared = reinterpret_cast<SharedFunctionInfo*>(this);
-      shared->SharedFunctionInfoIterateBody(v);
+    case SHARED_FUNCTION_INFO_TYPE:
+      SharedFunctionInfo::BodyDescriptor::IterateBody(this, v);
       break;
-    }
+
 #define MAKE_STRUCT_CASE(NAME, Name, name) \
         case NAME##_TYPE:
       STRUCT_LIST(MAKE_STRUCT_CASE)
 #undef MAKE_STRUCT_CASE
-      IterateStructBody(object_size, v);
+      StructBodyDescriptor::IterateBody(this, object_size, v);
       break;
     default:
       PrintF("Unknown type: %d\n", type);
@@ -1141,18 +1119,25 @@ void HeapObject::IterateBody(InstanceType type, int object_size,
 }
 
 
-void HeapObject::IterateStructBody(int object_size, ObjectVisitor* v) {
-  IteratePointers(v, HeapObject::kHeaderSize, object_size);
-}
-
-
 Object* HeapNumber::HeapNumberToBoolean() {
   // NaN, +0, and -0 should return the false object
-  switch (fpclassify(value())) {
-    case FP_NAN:  // fall through
-    case FP_ZERO: return Heap::false_value();
-    default: return Heap::true_value();
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+  union IeeeDoubleLittleEndianArchType u;
+#elif __BYTE_ORDER == __BIG_ENDIAN
+  union IeeeDoubleBigEndianArchType u;
+#endif
+  u.d = value();
+  if (u.bits.exp == 2047) {
+    // Detect NaN for IEEE double precision floating point.
+    if ((u.bits.man_low | u.bits.man_high) != 0)
+      return Heap::false_value();
   }
+  if (u.bits.exp == 0) {
+    // Detect +0, and -0 for IEEE double precision floating point.
+    if ((u.bits.man_low | u.bits.man_high) == 0)
+      return Heap::false_value();
+  }
+  return Heap::true_value();
 }
 
 
@@ -1198,12 +1183,6 @@ String* JSObject::constructor_name() {
   }
   // If the constructor is not present, return "Object".
   return Heap::Object_symbol();
-}
-
-
-void JSObject::JSObjectIterateBody(int object_size, ObjectVisitor* v) {
-  // Iterate over all fields in the body. Assumes all are Object*.
-  IteratePointers(v, kPropertiesOffset, object_size);
 }
 
 
@@ -1268,7 +1247,7 @@ Object* JSObject::AddFastProperty(String* name,
   }
 
   if (map()->unused_property_fields() == 0) {
-    if (properties()->length() > kMaxFastProperties) {
+    if (properties()->length() > MaxFastProperties()) {
       Object* obj = NormalizeProperties(CLEAR_INOBJECT_PROPERTIES, 0);
       if (obj->IsFailure()) return obj;
       return AddSlowProperty(name, value, attributes);
@@ -1329,7 +1308,7 @@ Object* JSObject::AddConstantFunctionProperty(String* name,
   if (attributes != NONE) {
     return function;
   }
-  ConstTransitionDescriptor mark(name);
+  ConstTransitionDescriptor mark(name, Map::cast(new_map));
   new_descriptors =
       old_map->instance_descriptors()->CopyInsert(&mark, KEEP_TRANSITIONS);
   if (new_descriptors->IsFailure()) {
@@ -1378,6 +1357,11 @@ Object* JSObject::AddProperty(String* name,
                               Object* value,
                               PropertyAttributes attributes) {
   ASSERT(!IsJSGlobalProxy());
+  if (!map()->is_extensible()) {
+    Handle<Object> args[1] = {Handle<String>(name)};
+    return Top::Throw(*Factory::NewTypeError("object_not_extensible",
+                                               HandleVector(args, 1)));
+  }
   if (HasFastProperties()) {
     // Ensure the descriptor array does not get too big.
     if (map()->instance_descriptors()->number_of_descriptors() <
@@ -1466,7 +1450,7 @@ Object* JSObject::ConvertDescriptorToField(String* name,
                                            Object* new_value,
                                            PropertyAttributes attributes) {
   if (map()->unused_property_fields() == 0 &&
-      properties()->length() > kMaxFastProperties) {
+      properties()->length() > MaxFastProperties()) {
     Object* obj = NormalizeProperties(CLEAR_INOBJECT_PROPERTIES, 0);
     if (obj->IsFailure()) return obj;
     return ReplaceSlowProperty(name, new_value, attributes);
@@ -1613,7 +1597,7 @@ Object* JSObject::SetPropertyWithCallback(Object* structure,
   }
 
   UNREACHABLE();
-  return 0;
+  return NULL;
 }
 
 
@@ -1657,7 +1641,8 @@ void JSObject::LookupCallbackSetterInPrototypes(String* name,
 }
 
 
-Object* JSObject::LookupCallbackSetterInPrototypes(uint32_t index) {
+bool JSObject::SetElementWithCallbackSetterInPrototypes(uint32_t index,
+                                                        Object* value) {
   for (Object* pt = GetPrototype();
        pt != Heap::null_value();
        pt = pt->GetPrototype()) {
@@ -1670,22 +1655,18 @@ Object* JSObject::LookupCallbackSetterInPrototypes(uint32_t index) {
       Object* element = dictionary->ValueAt(entry);
       PropertyDetails details = dictionary->DetailsAt(entry);
       if (details.type() == CALLBACKS) {
-        // Only accessors allowed as elements.
-        return FixedArray::cast(element)->get(kSetterIndex);
+        SetElementWithCallback(element, index, value, JSObject::cast(pt));
+        return true;
       }
     }
   }
-  return Heap::undefined_value();
+  return false;
 }
 
 
 void JSObject::LookupInDescriptor(String* name, LookupResult* result) {
   DescriptorArray* descriptors = map()->instance_descriptors();
-  int number = DescriptorLookupCache::Lookup(descriptors, name);
-  if (number == DescriptorLookupCache::kAbsent) {
-    number = descriptors->Search(name);
-    DescriptorLookupCache::Update(descriptors, name, number);
-  }
+  int number = descriptors->SearchWithCache(name);
   if (number != DescriptorArray::kNotFound) {
     result->DescriptorResult(this, descriptors->GetDetails(number), number);
   } else {
@@ -1737,8 +1718,6 @@ void JSObject::LocalLookupRealNamedProperty(String* name,
       result->DictionaryResult(this, entry);
       return;
     }
-    // Slow case object skipped during lookup. Do not use inline caching.
-    if (!IsGlobalObject()) result->DisallowCaching();
   }
   result->NotFound();
 }
@@ -1805,8 +1784,10 @@ Object* JSObject::SetPropertyWithFailedAccessCheck(LookupResult* result,
     }
   }
 
+  HandleScope scope;
+  Handle<Object> value_handle(value);
   Top::ReportFailedAccessCheck(this, v8::ACCESS_SET);
-  return value;
+  return *value_handle;
 }
 
 
@@ -1884,10 +1865,25 @@ Object* JSObject::SetProperty(LookupResult* result,
                                      result->holder());
     case INTERCEPTOR:
       return SetPropertyWithInterceptor(name, value, attributes);
-    case CONSTANT_TRANSITION:
-      // Replace with a MAP_TRANSITION to a new map with a FIELD, even
-      // if the value is a function.
+    case CONSTANT_TRANSITION: {
+      // If the same constant function is being added we can simply
+      // transition to the target map.
+      Map* target_map = result->GetTransitionMap();
+      DescriptorArray* target_descriptors = target_map->instance_descriptors();
+      int number = target_descriptors->SearchWithCache(name);
+      ASSERT(number != DescriptorArray::kNotFound);
+      ASSERT(target_descriptors->GetType(number) == CONSTANT_FUNCTION);
+      JSFunction* function =
+          JSFunction::cast(target_descriptors->GetValue(number));
+      ASSERT(!Heap::InNewSpace(function));
+      if (value == function) {
+        set_map(target_map);
+        return value;
+      }
+      // Otherwise, replace with a MAP_TRANSITION to a new map with a
+      // FIELD, even if the value is a constant function.
       return ConvertDescriptorToFieldAndMapTransition(name, value, attributes);
+    }
     case NULL_DESCRIPTOR:
       return ConvertDescriptorToFieldAndMapTransition(name, value, attributes);
     default:
@@ -2015,16 +2011,15 @@ PropertyAttributes JSObject::GetPropertyAttributeWithInterceptor(
     v8::NamedPropertyQuery query =
         v8::ToCData<v8::NamedPropertyQuery>(interceptor->query());
     LOG(ApiNamedPropertyAccess("interceptor-named-has", *holder_handle, name));
-    v8::Handle<v8::Boolean> result;
+    v8::Handle<v8::Integer> result;
     {
       // Leaving JavaScript.
       VMState state(EXTERNAL);
       result = query(v8::Utils::ToLocal(name_handle), info);
     }
     if (!result.IsEmpty()) {
-      // Convert the boolean result to a property attribute
-      // specification.
-      return result->IsTrue() ? NONE : ABSENT;
+      ASSERT(result->IsInt32());
+      return static_cast<PropertyAttributes>(result->Int32Value());
     }
   } else if (!interceptor->getter()->IsUndefined()) {
     v8::NamedPropertyGetter getter =
@@ -2036,7 +2031,7 @@ PropertyAttributes JSObject::GetPropertyAttributeWithInterceptor(
       VMState state(EXTERNAL);
       result = getter(v8::Utils::ToLocal(name_handle), info);
     }
-    if (!result.IsEmpty()) return NONE;
+    if (!result.IsEmpty()) return DONT_ENUM;
   }
   return holder_handle->GetPropertyAttributePostInterceptor(*receiver_handle,
                                                             *name_handle,
@@ -2179,6 +2174,7 @@ Object* JSObject::NormalizeProperties(PropertyNormalizationMode mode,
     int new_instance_size = map()->instance_size() - instance_size_delta;
     new_map->set_inobject_properties(0);
     new_map->set_instance_size(new_instance_size);
+    new_map->set_visitor_id(StaticVisitorBase::GetVisitorId(new_map));
     Heap::CreateFillerObjectAt(this->address() + new_instance_size,
                                instance_size_delta);
   }
@@ -2214,6 +2210,11 @@ Object* JSObject::TransformToFastProperties(int unused_property_fields) {
 Object* JSObject::NormalizeElements() {
   ASSERT(!HasPixelElements() && !HasExternalArrayElements());
   if (HasDictionaryElements()) return this;
+  ASSERT(map()->has_fast_elements());
+
+  Object* obj = map()->GetSlowElementsMap();
+  if (obj->IsFailure()) return obj;
+  Map* new_map = Map::cast(obj);
 
   // Get number of entries.
   FixedArray* array = FixedArray::cast(elements());
@@ -2222,7 +2223,7 @@ Object* JSObject::NormalizeElements() {
   int length = IsJSArray() ?
                Smi::cast(JSArray::cast(this)->length())->value() :
                array->length();
-  Object* obj = NumberDictionary::Allocate(length);
+  obj = NumberDictionary::Allocate(length);
   if (obj->IsFailure()) return obj;
   NumberDictionary* dictionary = NumberDictionary::cast(obj);
   // Copy entries.
@@ -2235,7 +2236,10 @@ Object* JSObject::NormalizeElements() {
       dictionary = NumberDictionary::cast(result);
     }
   }
-  // Switch to using the dictionary as the backing storage for elements.
+  // Switch to using the dictionary as the backing storage for
+  // elements. Set the new map first to satify the elements type
+  // assert in set_elements().
+  set_map(new_map);
   set_elements(dictionary);
 
   Counters::elements_to_dictionary.Increment();
@@ -2300,6 +2304,8 @@ Object* JSObject::DeleteElementPostInterceptor(uint32_t index,
   ASSERT(!HasPixelElements() && !HasExternalArrayElements());
   switch (GetElementsKind()) {
     case FAST_ELEMENTS: {
+      Object* obj = EnsureWritableFastElements();
+      if (obj->IsFailure()) return obj;
       uint32_t length = IsJSArray() ?
       static_cast<uint32_t>(Smi::cast(JSArray::cast(this)->length())->value()) :
       static_cast<uint32_t>(FixedArray::cast(elements())->length());
@@ -2380,6 +2386,8 @@ Object* JSObject::DeleteElement(uint32_t index, DeleteMode mode) {
 
   switch (GetElementsKind()) {
     case FAST_ELEMENTS: {
+      Object* obj = EnsureWritableFastElements();
+      if (obj->IsFailure()) return obj;
       uint32_t length = IsJSArray() ?
       static_cast<uint32_t>(Smi::cast(JSArray::cast(this)->length())->value()) :
       static_cast<uint32_t>(FixedArray::cast(elements())->length());
@@ -2560,6 +2568,25 @@ bool JSObject::ReferencesObject(Object* obj) {
 }
 
 
+Object* JSObject::PreventExtensions() {
+  // If there are fast elements we normalize.
+  if (HasFastElements()) {
+    NormalizeElements();
+  }
+  // Make sure that we never go back to fast case.
+  element_dictionary()->set_requires_slow_elements();
+
+  // Do a map transition, other objects with this map may still
+  // be extensible.
+  Object* new_map = map()->CopyDropTransitions();
+  if (new_map->IsFailure()) return new_map;
+  Map::cast(new_map)->set_is_extensible(false);
+  set_map(Map::cast(new_map));
+  ASSERT(!map()->is_extensible());
+  return new_map;
+}
+
+
 // Tests for the fast common case for property enumeration:
 // - This object and all prototypes has an enum cache (which means that it has
 //   no interceptors and needs no access checks).
@@ -2692,33 +2719,14 @@ Object* JSObject::DefineGetterSetter(String* name,
   // interceptor calls.
   AssertNoContextChange ncc;
 
-  // Check access rights if needed.
-  if (IsAccessCheckNeeded() &&
-      !Top::MayNamedAccess(this, name, v8::ACCESS_SET)) {
-    Top::ReportFailedAccessCheck(this, v8::ACCESS_SET);
-    return Heap::undefined_value();
-  }
-
   // Try to flatten before operating on the string.
   name->TryFlatten();
 
-  // Check if there is an API defined callback object which prohibits
-  // callback overwriting in this object or it's prototype chain.
-  // This mechanism is needed for instance in a browser setting, where
-  // certain accessors such as window.location should not be allowed
-  // to be overwritten because allowing overwriting could potentially
-  // cause security problems.
-  LookupResult callback_result;
-  LookupCallback(name, &callback_result);
-  if (callback_result.IsFound()) {
-    Object* obj = callback_result.GetCallbackObject();
-    if (obj->IsAccessorInfo() &&
-        AccessorInfo::cast(obj)->prohibits_overwriting()) {
-      return Heap::undefined_value();
-    }
+  if (!CanSetCallback(name)) {
+    return Heap::undefined_value();
   }
 
-  uint32_t index;
+  uint32_t index = 0;
   bool is_element = name->AsArrayIndex(&index);
   if (is_element && IsJSArray()) return Heap::undefined_value();
 
@@ -2746,9 +2754,10 @@ Object* JSObject::DefineGetterSetter(String* name,
           PropertyDetails details = dictionary->DetailsAt(entry);
           if (details.IsReadOnly()) return Heap::undefined_value();
           if (details.type() == CALLBACKS) {
-            // Only accessors allowed as elements.
-            ASSERT(result->IsFixedArray());
-            return result;
+            if (result->IsFixedArray()) {
+              return result;
+            }
+            // Otherwise allow to override it.
           }
         }
         break;
@@ -2765,15 +2774,10 @@ Object* JSObject::DefineGetterSetter(String* name,
       if (result.IsReadOnly()) return Heap::undefined_value();
       if (result.type() == CALLBACKS) {
         Object* obj = result.GetCallbackObject();
+        // Need to preserve old getters/setters.
         if (obj->IsFixedArray()) {
-          // The object might be in fast mode even though it has
-          // a getter/setter.
-          Object* ok = NormalizeProperties(CLEAR_INOBJECT_PROPERTIES, 0);
-          if (ok->IsFailure()) return ok;
-
-          PropertyDetails details = PropertyDetails(attributes, CALLBACKS);
-          SetNormalizedProperty(name, obj, details);
-          return obj;
+          // Use set to update attributes.
+          return SetPropertyCallback(name, obj, attributes);
         }
       }
     }
@@ -2782,50 +2786,100 @@ Object* JSObject::DefineGetterSetter(String* name,
   // Allocate the fixed array to hold getter and setter.
   Object* structure = Heap::AllocateFixedArray(2, TENURED);
   if (structure->IsFailure()) return structure;
-  PropertyDetails details = PropertyDetails(attributes, CALLBACKS);
 
   if (is_element) {
-    // Normalize object to make this operation simple.
-    Object* ok = NormalizeElements();
-    if (ok->IsFailure()) return ok;
-
-    // Update the dictionary with the new CALLBACKS property.
-    Object* dict =
-        element_dictionary()->Set(index, structure, details);
-    if (dict->IsFailure()) return dict;
-
-    // If name is an index we need to stay in slow case.
-    NumberDictionary* elements = NumberDictionary::cast(dict);
-    elements->set_requires_slow_elements();
-    // Set the potential new dictionary on the object.
-    set_elements(NumberDictionary::cast(dict));
+    return SetElementCallback(index, structure, attributes);
   } else {
-    // Normalize object to make this operation simple.
-    Object* ok = NormalizeProperties(CLEAR_INOBJECT_PROPERTIES, 0);
-    if (ok->IsFailure()) return ok;
-
-    // For the global object allocate a new map to invalidate the global inline
-    // caches which have a global property cell reference directly in the code.
-    if (IsGlobalObject()) {
-      Object* new_map = map()->CopyDropDescriptors();
-      if (new_map->IsFailure()) return new_map;
-      set_map(Map::cast(new_map));
-    }
-
-    // Update the dictionary with the new CALLBACKS property.
-    return SetNormalizedProperty(name, structure, details);
+    return SetPropertyCallback(name, structure, attributes);
   }
+}
+
+
+bool JSObject::CanSetCallback(String* name) {
+  ASSERT(!IsAccessCheckNeeded()
+         || Top::MayNamedAccess(this, name, v8::ACCESS_SET));
+
+  // Check if there is an API defined callback object which prohibits
+  // callback overwriting in this object or it's prototype chain.
+  // This mechanism is needed for instance in a browser setting, where
+  // certain accessors such as window.location should not be allowed
+  // to be overwritten because allowing overwriting could potentially
+  // cause security problems.
+  LookupResult callback_result;
+  LookupCallback(name, &callback_result);
+  if (callback_result.IsProperty()) {
+    Object* obj = callback_result.GetCallbackObject();
+    if (obj->IsAccessorInfo() &&
+        AccessorInfo::cast(obj)->prohibits_overwriting()) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+
+Object* JSObject::SetElementCallback(uint32_t index,
+                                     Object* structure,
+                                     PropertyAttributes attributes) {
+  PropertyDetails details = PropertyDetails(attributes, CALLBACKS);
+
+  // Normalize elements to make this operation simple.
+  Object* ok = NormalizeElements();
+  if (ok->IsFailure()) return ok;
+
+  // Update the dictionary with the new CALLBACKS property.
+  Object* dict =
+      element_dictionary()->Set(index, structure, details);
+  if (dict->IsFailure()) return dict;
+
+  NumberDictionary* elements = NumberDictionary::cast(dict);
+  elements->set_requires_slow_elements();
+  // Set the potential new dictionary on the object.
+  set_elements(elements);
 
   return structure;
 }
 
 
+Object* JSObject::SetPropertyCallback(String* name,
+                                      Object* structure,
+                                      PropertyAttributes attributes) {
+  PropertyDetails details = PropertyDetails(attributes, CALLBACKS);
+
+  bool convert_back_to_fast = HasFastProperties() &&
+      (map()->instance_descriptors()->number_of_descriptors()
+          < DescriptorArray::kMaxNumberOfDescriptors);
+
+  // Normalize object to make this operation simple.
+  Object* ok = NormalizeProperties(CLEAR_INOBJECT_PROPERTIES, 0);
+  if (ok->IsFailure()) return ok;
+
+  // For the global object allocate a new map to invalidate the global inline
+  // caches which have a global property cell reference directly in the code.
+  if (IsGlobalObject()) {
+    Object* new_map = map()->CopyDropDescriptors();
+    if (new_map->IsFailure()) return new_map;
+    set_map(Map::cast(new_map));
+  }
+
+  // Update the dictionary with the new CALLBACKS property.
+  Object* result = SetNormalizedProperty(name, structure, details);
+  if (result->IsFailure()) return result;
+
+  if (convert_back_to_fast) {
+    ok = TransformToFastProperties(0);
+    if (ok->IsFailure()) return ok;
+  }
+  return result;
+}
+
 Object* JSObject::DefineAccessor(String* name, bool is_getter, JSFunction* fun,
                                  PropertyAttributes attributes) {
   // Check access rights if needed.
   if (IsAccessCheckNeeded() &&
-      !Top::MayNamedAccess(this, name, v8::ACCESS_HAS)) {
-    Top::ReportFailedAccessCheck(this, v8::ACCESS_HAS);
+      !Top::MayNamedAccess(this, name, v8::ACCESS_SET)) {
+    Top::ReportFailedAccessCheck(this, v8::ACCESS_SET);
     return Heap::undefined_value();
   }
 
@@ -2844,6 +2898,80 @@ Object* JSObject::DefineAccessor(String* name, bool is_getter, JSFunction* fun,
 }
 
 
+Object* JSObject::DefineAccessor(AccessorInfo* info) {
+  String* name = String::cast(info->name());
+  // Check access rights if needed.
+  if (IsAccessCheckNeeded() &&
+      !Top::MayNamedAccess(this, name, v8::ACCESS_SET)) {
+    Top::ReportFailedAccessCheck(this, v8::ACCESS_SET);
+    return Heap::undefined_value();
+  }
+
+  if (IsJSGlobalProxy()) {
+    Object* proto = GetPrototype();
+    if (proto->IsNull()) return this;
+    ASSERT(proto->IsJSGlobalObject());
+    return JSObject::cast(proto)->DefineAccessor(info);
+  }
+
+  // Make sure that the top context does not change when doing callbacks or
+  // interceptor calls.
+  AssertNoContextChange ncc;
+
+  // Try to flatten before operating on the string.
+  name->TryFlatten();
+
+  if (!CanSetCallback(name)) {
+    return Heap::undefined_value();
+  }
+
+  uint32_t index = 0;
+  bool is_element = name->AsArrayIndex(&index);
+
+  if (is_element) {
+    if (IsJSArray()) return Heap::undefined_value();
+
+    // Accessors overwrite previous callbacks (cf. with getters/setters).
+    switch (GetElementsKind()) {
+      case FAST_ELEMENTS:
+        break;
+      case PIXEL_ELEMENTS:
+      case EXTERNAL_BYTE_ELEMENTS:
+      case EXTERNAL_UNSIGNED_BYTE_ELEMENTS:
+      case EXTERNAL_SHORT_ELEMENTS:
+      case EXTERNAL_UNSIGNED_SHORT_ELEMENTS:
+      case EXTERNAL_INT_ELEMENTS:
+      case EXTERNAL_UNSIGNED_INT_ELEMENTS:
+      case EXTERNAL_FLOAT_ELEMENTS:
+        // Ignore getters and setters on pixel and external array
+        // elements.
+        return Heap::undefined_value();
+      case DICTIONARY_ELEMENTS:
+        break;
+      default:
+        UNREACHABLE();
+        break;
+    }
+
+    Object* ok = SetElementCallback(index, info, info->property_attributes());
+    if (ok->IsFailure()) return ok;
+  } else {
+    // Lookup the name.
+    LookupResult result;
+    LocalLookup(name, &result);
+    // ES5 forbids turning a property into an accessor if it's not
+    // configurable (that is IsDontDelete in ES3 and v8), see 8.6.1 (Table 5).
+    if (result.IsProperty() && (result.IsReadOnly() || result.IsDontDelete())) {
+      return Heap::undefined_value();
+    }
+    Object* ok = SetPropertyCallback(name, info, info->property_attributes());
+    if (ok->IsFailure()) return ok;
+  }
+
+  return this;
+}
+
+
 Object* JSObject::LookupAccessor(String* name, bool is_getter) {
   // Make sure that the top context does not change when doing callbacks or
   // interceptor calls.
@@ -2858,7 +2986,7 @@ Object* JSObject::LookupAccessor(String* name, bool is_getter) {
 
   // Make the lookup and include prototypes.
   int accessor_index = is_getter ? kGetterIndex : kSetterIndex;
-  uint32_t index;
+  uint32_t index = 0;
   if (name->AsArrayIndex(&index)) {
     for (Object* obj = this;
          obj != Heap::null_value();
@@ -2871,8 +2999,9 @@ Object* JSObject::LookupAccessor(String* name, bool is_getter) {
           Object* element = dictionary->ValueAt(entry);
           PropertyDetails details = dictionary->DetailsAt(entry);
           if (details.type() == CALLBACKS) {
-            // Only accessors allowed as elements.
-            return FixedArray::cast(element)->get(accessor_index);
+            if (element->IsFixedArray()) {
+              return FixedArray::cast(element)->get(accessor_index);
+            }
           }
         }
       }
@@ -2960,7 +3089,7 @@ Object* Map::CopyDropTransitions() {
   Object* descriptors = instance_descriptors()->RemoveTransitions();
   if (descriptors->IsFailure()) return descriptors;
   cast(new_map)->set_instance_descriptors(DescriptorArray::cast(descriptors));
-  return cast(new_map);
+  return new_map;
 }
 
 
@@ -3262,11 +3391,6 @@ void CodeCacheHashTable::RemoveByIndex(int index) {
   set(EntryToIndex(index), Heap::null_value());
   set(EntryToIndex(index) + 1, Heap::null_value());
   ElementRemoved();
-}
-
-
-void FixedArray::FixedArrayIterateBody(ObjectVisitor* v) {
-  IteratePointers(v, kHeaderSize, kHeaderSize + length() * kPointerSize);
 }
 
 
@@ -4359,16 +4483,6 @@ void ConsString::ConsStringReadBlockIntoBuffer(ReadBlockBuffer* rbb,
 }
 
 
-void ConsString::ConsStringIterateBody(ObjectVisitor* v) {
-  IteratePointers(v, kFirstOffset, kSecondOffset + kPointerSize);
-}
-
-
-void JSGlobalPropertyCell::JSGlobalPropertyCellIterateBody(ObjectVisitor* v) {
-  IteratePointers(v, kValueOffset, kValueOffset + kPointerSize);
-}
-
-
 uint16_t ConsString::ConsStringGet(int index) {
   ASSERT(index >= 0 && index < this->length());
 
@@ -4472,24 +4586,6 @@ void String::WriteToFlat(String* src,
 }
 
 
-#define FIELD_ADDR(p, offset) \
-  (reinterpret_cast<byte*>(p) + offset - kHeapObjectTag)
-
-void ExternalAsciiString::ExternalAsciiStringIterateBody(ObjectVisitor* v) {
-  typedef v8::String::ExternalAsciiStringResource Resource;
-  v->VisitExternalAsciiString(
-      reinterpret_cast<Resource**>(FIELD_ADDR(this, kResourceOffset)));
-}
-
-
-void ExternalTwoByteString::ExternalTwoByteStringIterateBody(ObjectVisitor* v) {
-  typedef v8::String::ExternalStringResource Resource;
-  v->VisitExternalTwoByteString(
-      reinterpret_cast<Resource**>(FIELD_ADDR(this, kResourceOffset)));
-}
-
-#undef FIELD_ADDR
-
 template <typename IteratorA, typename IteratorB>
 static inline bool CompareStringContents(IteratorA* ia, IteratorB* ib) {
   // General slow case check.  We know that the ia and ib iterators
@@ -4580,51 +4676,58 @@ bool String::SlowEquals(String* other) {
     if (Hash() != other->Hash()) return false;
   }
 
-  if (StringShape(this).IsSequentialAscii() &&
-      StringShape(other).IsSequentialAscii()) {
-    const char* str1 = SeqAsciiString::cast(this)->GetChars();
-    const char* str2 = SeqAsciiString::cast(other)->GetChars();
+  // We know the strings are both non-empty. Compare the first chars
+  // before we try to flatten the strings.
+  if (this->Get(0) != other->Get(0)) return false;
+
+  String* lhs = this->TryFlattenGetString();
+  String* rhs = other->TryFlattenGetString();
+
+  if (StringShape(lhs).IsSequentialAscii() &&
+      StringShape(rhs).IsSequentialAscii()) {
+    const char* str1 = SeqAsciiString::cast(lhs)->GetChars();
+    const char* str2 = SeqAsciiString::cast(rhs)->GetChars();
     return CompareRawStringContents(Vector<const char>(str1, len),
                                     Vector<const char>(str2, len));
   }
 
-  if (this->IsFlat()) {
-    if (IsAsciiRepresentation()) {
-      Vector<const char> vec1 = this->ToAsciiVector();
-      if (other->IsFlat()) {
-        if (other->IsAsciiRepresentation()) {
-          Vector<const char> vec2 = other->ToAsciiVector();
+  if (lhs->IsFlat()) {
+    if (lhs->IsAsciiRepresentation()) {
+      Vector<const char> vec1 = lhs->ToAsciiVector();
+      if (rhs->IsFlat()) {
+        if (rhs->IsAsciiRepresentation()) {
+          Vector<const char> vec2 = rhs->ToAsciiVector();
           return CompareRawStringContents(vec1, vec2);
         } else {
           VectorIterator<char> buf1(vec1);
-          VectorIterator<uc16> ib(other->ToUC16Vector());
+          VectorIterator<uc16> ib(rhs->ToUC16Vector());
           return CompareStringContents(&buf1, &ib);
         }
       } else {
         VectorIterator<char> buf1(vec1);
-        string_compare_buffer_b.Reset(0, other);
+        string_compare_buffer_b.Reset(0, rhs);
         return CompareStringContents(&buf1, &string_compare_buffer_b);
       }
     } else {
-      Vector<const uc16> vec1 = this->ToUC16Vector();
-      if (other->IsFlat()) {
-        if (other->IsAsciiRepresentation()) {
+      Vector<const uc16> vec1 = lhs->ToUC16Vector();
+      if (rhs->IsFlat()) {
+        if (rhs->IsAsciiRepresentation()) {
           VectorIterator<uc16> buf1(vec1);
-          VectorIterator<char> ib(other->ToAsciiVector());
+          VectorIterator<char> ib(rhs->ToAsciiVector());
           return CompareStringContents(&buf1, &ib);
         } else {
-          Vector<const uc16> vec2(other->ToUC16Vector());
+          Vector<const uc16> vec2(rhs->ToUC16Vector());
           return CompareRawStringContents(vec1, vec2);
         }
       } else {
         VectorIterator<uc16> buf1(vec1);
-        string_compare_buffer_b.Reset(0, other);
+        string_compare_buffer_b.Reset(0, rhs);
         return CompareStringContents(&buf1, &string_compare_buffer_b);
       }
     }
   } else {
-    string_compare_buffer_a.Reset(0, this);
-    return CompareStringContentsPartial(&string_compare_buffer_a, other);
+    string_compare_buffer_a.Reset(0, lhs);
+    return CompareStringContentsPartial(&string_compare_buffer_a, rhs);
   }
 }
 
@@ -4676,7 +4779,7 @@ static inline uint32_t HashSequentialString(const schar* chars, int length) {
 
 uint32_t String::ComputeAndSetHash() {
   // Should only be called if hash code has not yet been computed.
-  ASSERT(!(hash_field() & kHashComputedMask));
+  ASSERT(!HasHashCode());
 
   const int len = length();
 
@@ -4695,7 +4798,7 @@ uint32_t String::ComputeAndSetHash() {
   set_hash_field(field);
 
   // Check the hash code is there.
-  ASSERT(hash_field() & kHashComputedMask);
+  ASSERT(HasHashCode());
   uint32_t result = field >> kHashShift;
   ASSERT(result != 0);  // Ensure that the hash value of 0 is never computed.
   return result;
@@ -4736,7 +4839,7 @@ bool String::SlowAsArrayIndex(uint32_t* index) {
   if (length() <= kMaxCachedArrayIndexLength) {
     Hash();  // force computation of hash code
     uint32_t field = hash_field();
-    if ((field & kIsArrayIndexMask) == 0) return false;
+    if ((field & kIsNotArrayIndexMask) != 0) return false;
     // Isolate the array index form the full hash field.
     *index = (kArrayIndexHashMask & field) >> kHashShift;
     return true;
@@ -4750,16 +4853,19 @@ bool String::SlowAsArrayIndex(uint32_t* index) {
 static inline uint32_t HashField(uint32_t hash,
                                  bool is_array_index,
                                  int length = -1) {
-  uint32_t result =
-      (hash << String::kHashShift) | String::kHashComputedMask;
+  uint32_t result = (hash << String::kHashShift);
   if (is_array_index) {
     // For array indexes mix the length into the hash as an array index could
     // be zero.
     ASSERT(length > 0);
+    ASSERT(length <= String::kMaxArrayIndexSize);
     ASSERT(TenToThe(String::kMaxCachedArrayIndexLength) <
            (1 << String::kArrayIndexValueBits));
-    result |= String::kIsArrayIndexMask;
+    ASSERT(String::kMaxArrayIndexSize < (1 << String::kArrayIndexValueBits));
+    result &= ~String::kIsNotArrayIndexMask;
     result |= length << String::kArrayIndexHashLengthShift;
+  } else {
+    result |= String::kIsNotArrayIndexMask;
   }
   return result;
 }
@@ -4825,7 +4931,8 @@ void String::PrintOn(FILE* file) {
 void Map::CreateBackPointers() {
   DescriptorArray* descriptors = instance_descriptors();
   for (int i = 0; i < descriptors->number_of_descriptors(); i++) {
-    if (descriptors->GetType(i) == MAP_TRANSITION) {
+    if (descriptors->GetType(i) == MAP_TRANSITION ||
+        descriptors->GetType(i) == CONSTANT_TRANSITION) {
       // Get target.
       Map* target = Map::cast(descriptors->GetValue(i));
 #ifdef DEBUG
@@ -4866,13 +4973,14 @@ void Map::ClearNonLiveTransitions(Object* real_prototype) {
     // map is not reached again by following a back pointer from a
     // non-live object.
     PropertyDetails details(Smi::cast(contents->get(i + 1)));
-    if (details.type() == MAP_TRANSITION) {
+    if (details.type() == MAP_TRANSITION ||
+        details.type() == CONSTANT_TRANSITION) {
       Map* target = reinterpret_cast<Map*>(contents->get(i));
       ASSERT(target->IsHeapObject());
       if (!target->IsMarked()) {
         ASSERT(target->IsMap());
-        contents->set(i + 1, NullDescriptorDetails);
-        contents->set_null(i);
+        contents->set_unchecked(i + 1, NullDescriptorDetails);
+        contents->set_null_unchecked(i);
         ASSERT(target->prototype() == this ||
                target->prototype() == real_prototype);
         // Getter prototype() is read-only, set_prototype() has side effects.
@@ -4883,9 +4991,12 @@ void Map::ClearNonLiveTransitions(Object* real_prototype) {
 }
 
 
-void Map::MapIterateBody(ObjectVisitor* v) {
-  // Assumes all Object* members are contiguously allocated!
-  IteratePointers(v, kPrototypeOffset, kCodeCacheOffset + kPointerSize);
+void JSFunction::JSFunctionIterateBody(int object_size, ObjectVisitor* v) {
+  // Iterate over all fields in the body but take care in dealing with
+  // the code entry.
+  IteratePointers(v, kPropertiesOffset, kCodeEntryOffset);
+  v->VisitCodeEntry(this->address() + kCodeEntryOffset);
+  IteratePointers(v, kCodeEntryOffset + kPointerSize, object_size);
 }
 
 
@@ -4900,9 +5011,9 @@ Object* JSFunction::SetInstancePrototype(Object* value) {
     // prototype is put into the initial map where it belongs.
     set_prototype_or_initial_map(value);
   }
+  Heap::ClearInstanceofCache();
   return value;
 }
-
 
 
 Object* JSFunction::SetPrototype(Object* value) {
@@ -4951,12 +5062,6 @@ Context* JSFunction::GlobalContextFromLiterals(FixedArray* literals) {
 }
 
 
-void Oddball::OddballIterateBody(ObjectVisitor* v) {
-  // Assumes all Object* members are contiguously allocated!
-  IteratePointers(v, kToStringOffset, kToNumberOffset + kPointerSize);
-}
-
-
 Object* Oddball::Initialize(const char* to_string, Object* to_number) {
   Object* symbol = Heap::LookupAsciiSymbol(to_string);
   if (symbol->IsFailure()) return symbol;
@@ -4968,7 +5073,7 @@ Object* Oddball::Initialize(const char* to_string, Object* to_number) {
 
 bool SharedFunctionInfo::HasSourceCode() {
   return !script()->IsUndefined() &&
-         !Script::cast(script())->source()->IsUndefined();
+         !reinterpret_cast<Script*>(script())->source()->IsUndefined();
 }
 
 
@@ -5129,13 +5234,6 @@ void SharedFunctionInfo::SourceCodePrint(StringStream* accumulator,
 }
 
 
-void SharedFunctionInfo::SharedFunctionInfoIterateBody(ObjectVisitor* v) {
-  IteratePointers(v,
-                  kNameOffset,
-                  kThisPropertyAssignmentsOffset + kPointerSize);
-}
-
-
 void ObjectVisitor::VisitCodeTarget(RelocInfo* rinfo) {
   ASSERT(RelocInfo::IsCodeTarget(rinfo->rmode()));
   Object* target = Code::GetCodeFromTargetAddress(rinfo->target_address());
@@ -5145,28 +5243,25 @@ void ObjectVisitor::VisitCodeTarget(RelocInfo* rinfo) {
 }
 
 
+void ObjectVisitor::VisitCodeEntry(Address entry_address) {
+  Object* code = Code::GetObjectFromEntryAddress(entry_address);
+  Object* old_code = code;
+  VisitPointer(&code);
+  if (code != old_code) {
+    Memory::Address_at(entry_address) = reinterpret_cast<Code*>(code)->entry();
+  }
+}
+
+
 void ObjectVisitor::VisitDebugTarget(RelocInfo* rinfo) {
-  ASSERT(RelocInfo::IsJSReturn(rinfo->rmode()) &&
-         rinfo->IsPatchedReturnSequence());
+  ASSERT((RelocInfo::IsJSReturn(rinfo->rmode()) &&
+          rinfo->IsPatchedReturnSequence()) ||
+         (RelocInfo::IsDebugBreakSlot(rinfo->rmode()) &&
+          rinfo->IsPatchedDebugBreakSlotSequence()));
   Object* target = Code::GetCodeFromTargetAddress(rinfo->call_address());
   Object* old_target = target;
   VisitPointer(&target);
   CHECK_EQ(target, old_target);  // VisitPointer doesn't change Code* *target.
-}
-
-
-void Code::CodeIterateBody(ObjectVisitor* v) {
-  int mode_mask = RelocInfo::kCodeTargetMask |
-                  RelocInfo::ModeMask(RelocInfo::EMBEDDED_OBJECT) |
-                  RelocInfo::ModeMask(RelocInfo::EXTERNAL_REFERENCE) |
-                  RelocInfo::ModeMask(RelocInfo::JS_RETURN) |
-                  RelocInfo::ModeMask(RelocInfo::RUNTIME_ENTRY);
-
-  for (RelocIterator it(this, mode_mask); !it.done(); it.next()) {
-    it.rinfo()->Visit(v);
-  }
-
-  ScopeInfo<>::IterateScopeInfo(this, v);
 }
 
 
@@ -5181,14 +5276,6 @@ void Code::Relocate(intptr_t delta) {
 void Code::CopyFrom(const CodeDesc& desc) {
   // copy code
   memmove(instruction_start(), desc.buffer, desc.instr_size);
-
-  // fill gap with zero bytes
-  { byte* p = instruction_start() + desc.instr_size;
-    byte* q = relocation_start();
-    while (p < q) {
-      *p++ = 0;
-    }
-  }
 
   // copy reloc info
   memmove(relocation_start(),
@@ -5288,6 +5375,7 @@ const char* Code::Kind2String(Kind kind) {
     case STORE_IC: return "STORE_IC";
     case KEYED_STORE_IC: return "KEYED_STORE_IC";
     case CALL_IC: return "CALL_IC";
+    case KEYED_CALL_IC: return "KEYED_CALL_IC";
     case BINARY_OP_IC: return "BINARY_OP_IC";
   }
   UNREACHABLE();
@@ -5350,14 +5438,18 @@ void Code::Disassemble(const char* name) {
 #endif  // ENABLE_DISASSEMBLER
 
 
-void JSObject::SetFastElements(FixedArray* elems) {
+Object* JSObject::SetFastElementsCapacityAndLength(int capacity, int length) {
   // We should never end in here with a pixel or external array.
   ASSERT(!HasPixelElements() && !HasExternalArrayElements());
-#ifdef DEBUG
-  // Check the provided array is filled with the_hole.
-  uint32_t len = static_cast<uint32_t>(elems->length());
-  for (uint32_t i = 0; i < len; i++) ASSERT(elems->get(i)->IsTheHole());
-#endif
+
+  Object* obj = Heap::AllocateFixedArrayWithHoles(capacity);
+  if (obj->IsFailure()) return obj;
+  FixedArray* elems = FixedArray::cast(obj);
+
+  obj = map()->GetFastElementsMap();
+  if (obj->IsFailure()) return obj;
+  Map* new_map = Map::cast(obj);
+
   AssertNoAllocation no_gc;
   WriteBarrierMode mode = elems->GetWriteBarrierMode(no_gc);
   switch (GetElementsKind()) {
@@ -5385,7 +5477,15 @@ void JSObject::SetFastElements(FixedArray* elems) {
       UNREACHABLE();
       break;
   }
+
+  set_map(new_map);
   set_elements(elems);
+
+  if (IsJSArray()) {
+    JSArray::cast(this)->set_length(Smi::FromInt(length));
+  }
+
+  return this;
 }
 
 
@@ -5472,13 +5572,15 @@ Object* JSObject::SetElementsLength(Object* len) {
 
   Object* smi_length = len->ToSmi();
   if (smi_length->IsSmi()) {
-    int value = Smi::cast(smi_length)->value();
+    const int value = Smi::cast(smi_length)->value();
     if (value < 0) return ArrayLengthRangeError();
     switch (GetElementsKind()) {
       case FAST_ELEMENTS: {
         int old_capacity = FixedArray::cast(elements())->length();
         if (value <= old_capacity) {
           if (IsJSArray()) {
+            Object* obj = EnsureWritableFastElements();
+            if (obj->IsFailure()) return obj;
             int old_length = FastD2I(JSArray::cast(this)->length()->Number());
             // NOTE: We may be able to optimize this by removing the
             // last part of the elements backing storage array and
@@ -5494,12 +5596,8 @@ Object* JSObject::SetElementsLength(Object* len) {
         int new_capacity = value > min ? value : min;
         if (new_capacity <= kMaxFastElementsLength ||
             !ShouldConvertToSlowElements(new_capacity)) {
-          Object* obj = Heap::AllocateFixedArrayWithHoles(new_capacity);
+          Object* obj = SetFastElementsCapacityAndLength(new_capacity, value);
           if (obj->IsFailure()) return obj;
-          if (IsJSArray()) {
-            JSArray::cast(this)->set_length(Smi::cast(smi_length));
-          }
-          SetFastElements(FixedArray::cast(obj));
           return this;
         }
         break;
@@ -5510,7 +5608,8 @@ Object* JSObject::SetElementsLength(Object* len) {
             // If the length of a slow array is reset to zero, we clear
             // the array and flush backing storage. This has the added
             // benefit that the array returns to fast mode.
-            initialize_elements();
+            Object* obj = ResetElements();
+            if (obj->IsFailure()) return obj;
           } else {
             // Remove deleted elements.
             uint32_t old_length =
@@ -5530,7 +5629,7 @@ Object* JSObject::SetElementsLength(Object* len) {
   // General slow case.
   if (len->IsNumber()) {
     uint32_t length;
-    if (Array::IndexFromObject(len, &length)) {
+    if (len->ToArrayIndex(&length)) {
       return SetSlowElements(len);
     } else {
       return ArrayLengthRangeError();
@@ -5585,6 +5684,8 @@ Object* JSObject::SetPrototype(Object* value,
   if (new_map->IsFailure()) return new_map;
   Map::cast(new_map)->set_prototype(value);
   real_receiver->set_map(Map::cast(new_map));
+
+  Heap::ClearInstanceofCache();
 
   return value;
 }
@@ -5660,13 +5761,16 @@ bool JSObject::HasElementWithInterceptor(JSObject* receiver, uint32_t index) {
     v8::IndexedPropertyQuery query =
         v8::ToCData<v8::IndexedPropertyQuery>(interceptor->query());
     LOG(ApiIndexedPropertyAccess("interceptor-indexed-has", this, index));
-    v8::Handle<v8::Boolean> result;
+    v8::Handle<v8::Integer> result;
     {
       // Leaving JavaScript.
       VMState state(EXTERNAL);
       result = query(index, info);
     }
-    if (!result.IsEmpty()) return result->IsTrue();
+    if (!result.IsEmpty()) {
+      ASSERT(result->IsInt32());
+      return true;  // absence of property is signaled by empty handle.
+    }
   } else if (!interceptor->getter()->IsUndefined()) {
     v8::IndexedPropertyGetter getter =
         v8::ToCData<v8::IndexedPropertyGetter>(interceptor->getter());
@@ -5829,19 +5933,122 @@ Object* JSObject::SetElementWithInterceptor(uint32_t index, Object* value) {
 }
 
 
+Object* JSObject::GetElementWithCallback(Object* receiver,
+                                         Object* structure,
+                                         uint32_t index,
+                                         Object* holder) {
+  ASSERT(!structure->IsProxy());
+
+  // api style callbacks.
+  if (structure->IsAccessorInfo()) {
+    AccessorInfo* data = AccessorInfo::cast(structure);
+    Object* fun_obj = data->getter();
+    v8::AccessorGetter call_fun = v8::ToCData<v8::AccessorGetter>(fun_obj);
+    HandleScope scope;
+    Handle<JSObject> self(JSObject::cast(receiver));
+    Handle<JSObject> holder_handle(JSObject::cast(holder));
+    Handle<Object> number = Factory::NewNumberFromUint(index);
+    Handle<String> key(Factory::NumberToString(number));
+    LOG(ApiNamedPropertyAccess("load", *self, *key));
+    CustomArguments args(data->data(), *self, *holder_handle);
+    v8::AccessorInfo info(args.end());
+    v8::Handle<v8::Value> result;
+    {
+      // Leaving JavaScript.
+      VMState state(EXTERNAL);
+      result = call_fun(v8::Utils::ToLocal(key), info);
+    }
+    RETURN_IF_SCHEDULED_EXCEPTION();
+    if (result.IsEmpty()) return Heap::undefined_value();
+    return *v8::Utils::OpenHandle(*result);
+  }
+
+  // __defineGetter__ callback
+  if (structure->IsFixedArray()) {
+    Object* getter = FixedArray::cast(structure)->get(kGetterIndex);
+    if (getter->IsJSFunction()) {
+      return Object::GetPropertyWithDefinedGetter(receiver,
+                                                  JSFunction::cast(getter));
+    }
+    // Getter is not a function.
+    return Heap::undefined_value();
+  }
+
+  UNREACHABLE();
+  return NULL;
+}
+
+
+Object* JSObject::SetElementWithCallback(Object* structure,
+                                         uint32_t index,
+                                         Object* value,
+                                         JSObject* holder) {
+  HandleScope scope;
+
+  // We should never get here to initialize a const with the hole
+  // value since a const declaration would conflict with the setter.
+  ASSERT(!value->IsTheHole());
+  Handle<Object> value_handle(value);
+
+  // To accommodate both the old and the new api we switch on the
+  // data structure used to store the callbacks.  Eventually proxy
+  // callbacks should be phased out.
+  ASSERT(!structure->IsProxy());
+
+  if (structure->IsAccessorInfo()) {
+    // api style callbacks
+    AccessorInfo* data = AccessorInfo::cast(structure);
+    Object* call_obj = data->setter();
+    v8::AccessorSetter call_fun = v8::ToCData<v8::AccessorSetter>(call_obj);
+    if (call_fun == NULL) return value;
+    Handle<Object> number = Factory::NewNumberFromUint(index);
+    Handle<String> key(Factory::NumberToString(number));
+    LOG(ApiNamedPropertyAccess("store", this, *key));
+    CustomArguments args(data->data(), this, JSObject::cast(holder));
+    v8::AccessorInfo info(args.end());
+    {
+      // Leaving JavaScript.
+      VMState state(EXTERNAL);
+      call_fun(v8::Utils::ToLocal(key),
+               v8::Utils::ToLocal(value_handle),
+               info);
+    }
+    RETURN_IF_SCHEDULED_EXCEPTION();
+    return *value_handle;
+  }
+
+  if (structure->IsFixedArray()) {
+    Object* setter = FixedArray::cast(structure)->get(kSetterIndex);
+    if (setter->IsJSFunction()) {
+     return SetPropertyWithDefinedSetter(JSFunction::cast(setter), value);
+    } else {
+      Handle<Object> holder_handle(holder);
+      Handle<Object> key(Factory::NewNumberFromUint(index));
+      Handle<Object> args[2] = { key, holder_handle };
+      return Top::Throw(*Factory::NewTypeError("no_setter_in_callback",
+                                               HandleVector(args, 2)));
+    }
+  }
+
+  UNREACHABLE();
+  return NULL;
+}
+
+
 // Adding n elements in fast case is O(n*n).
 // Note: revisit design to have dual undefined values to capture absent
 // elements.
 Object* JSObject::SetFastElement(uint32_t index, Object* value) {
   ASSERT(HasFastElements());
 
-  FixedArray* elms = FixedArray::cast(elements());
+  Object* elms_obj = EnsureWritableFastElements();
+  if (elms_obj->IsFailure()) return elms_obj;
+  FixedArray* elms = FixedArray::cast(elms_obj);
   uint32_t elms_length = static_cast<uint32_t>(elms->length());
 
   if (!IsJSArray() && (index >= elms_length || elms->get(index)->IsTheHole())) {
-    Object* setter = LookupCallbackSetterInPrototypes(index);
-    if (setter->IsJSFunction()) {
-      return SetPropertyWithDefinedSetter(JSFunction::cast(setter), value);
+    if (SetElementWithCallbackSetterInPrototypes(index, value)) {
+      return value;
     }
   }
 
@@ -5851,8 +6058,7 @@ Object* JSObject::SetFastElement(uint32_t index, Object* value) {
     if (IsJSArray()) {
       // Update the length of the array if needed.
       uint32_t array_length = 0;
-      CHECK(Array::IndexFromObject(JSArray::cast(this)->length(),
-                                   &array_length));
+      CHECK(JSArray::cast(this)->length()->ToArrayIndex(&array_length));
       if (index >= array_length) {
         JSArray::cast(this)->set_length(Smi::FromInt(index + 1));
       }
@@ -5867,12 +6073,8 @@ Object* JSObject::SetFastElement(uint32_t index, Object* value) {
     if (new_capacity <= kMaxFastElementsLength ||
         !ShouldConvertToSlowElements(new_capacity)) {
       ASSERT(static_cast<uint32_t>(new_capacity) > index);
-      Object* obj = Heap::AllocateFixedArrayWithHoles(new_capacity);
+      Object* obj = SetFastElementsCapacityAndLength(new_capacity, index + 1);
       if (obj->IsFailure()) return obj;
-      SetFastElements(FixedArray::cast(obj));
-      if (IsJSArray()) {
-        JSArray::cast(this)->set_length(Smi::FromInt(index + 1));
-      }
       FixedArray::cast(elements())->set(index, value);
       return value;
     }
@@ -5885,12 +6087,15 @@ Object* JSObject::SetFastElement(uint32_t index, Object* value) {
   return SetElement(index, value);
 }
 
+
 Object* JSObject::SetElement(uint32_t index, Object* value) {
   // Check access rights if needed.
   if (IsAccessCheckNeeded() &&
       !Top::MayIndexedAccess(this, index, v8::ACCESS_SET)) {
+    HandleScope scope;
+    Handle<Object> value_handle(value);
     Top::ReportFailedAccessCheck(this, v8::ACCESS_SET);
-    return value;
+    return *value_handle;
   }
 
   if (IsJSGlobalProxy()) {
@@ -5959,18 +6164,7 @@ Object* JSObject::SetElementWithoutInterceptor(uint32_t index, Object* value) {
         Object* element = dictionary->ValueAt(entry);
         PropertyDetails details = dictionary->DetailsAt(entry);
         if (details.type() == CALLBACKS) {
-          // Only accessors allowed as elements.
-          FixedArray* structure = FixedArray::cast(element);
-          if (structure->get(kSetterIndex)->IsJSFunction()) {
-            JSFunction* setter = JSFunction::cast(structure->get(kSetterIndex));
-            return SetPropertyWithDefinedSetter(setter, value);
-          } else {
-            Handle<Object> self(this);
-            Handle<Object> key(Factory::NewNumberFromUint(index));
-            Handle<Object> args[2] = { key, self };
-            return Top::Throw(*Factory::NewTypeError("no_setter_in_callback",
-                                                     HandleVector(args, 2)));
-          }
+          return SetElementWithCallback(element, index, value, this);
         } else {
           dictionary->UpdateMaxNumberKey(index);
           dictionary->ValueAtPut(entry, value);
@@ -5978,11 +6172,18 @@ Object* JSObject::SetElementWithoutInterceptor(uint32_t index, Object* value) {
       } else {
         // Index not already used. Look for an accessor in the prototype chain.
         if (!IsJSArray()) {
-          Object* setter = LookupCallbackSetterInPrototypes(index);
-          if (setter->IsJSFunction()) {
-            return SetPropertyWithDefinedSetter(JSFunction::cast(setter),
-                                                value);
+          if (SetElementWithCallbackSetterInPrototypes(index, value)) {
+            return value;
           }
+        }
+        // When we set the is_extensible flag to false we always force
+        // the element into dictionary mode (and force them to stay there).
+        if (!map()->is_extensible()) {
+          Handle<Object> number(Heap::NumberFromUint32(index));
+          Handle<String> index_string(Factory::NumberToString(number));
+          Handle<Object> args[1] = { index_string };
+          return Top::Throw(*Factory::NewTypeError("object_not_extensible",
+                                                   HandleVector(args, 1)));
         }
         Object* result = dictionary->AtNumberPut(index, value);
         if (result->IsFailure()) return result;
@@ -6003,15 +6204,12 @@ Object* JSObject::SetElementWithoutInterceptor(uint32_t index, Object* value) {
       if (ShouldConvertToFastElements()) {
         uint32_t new_length = 0;
         if (IsJSArray()) {
-          CHECK(Array::IndexFromObject(JSArray::cast(this)->length(),
-                                       &new_length));
-          JSArray::cast(this)->set_length(Smi::FromInt(new_length));
+          CHECK(JSArray::cast(this)->length()->ToArrayIndex(&new_length));
         } else {
           new_length = NumberDictionary::cast(elements())->max_number_key() + 1;
         }
-        Object* obj = Heap::AllocateFixedArrayWithHoles(new_length);
+        Object* obj = SetFastElementsCapacityAndLength(new_length, new_length);
         if (obj->IsFailure()) return obj;
-        SetFastElements(FixedArray::cast(obj));
 #ifdef DEBUG
         if (FLAG_trace_normalization) {
           PrintF("Object elements are fast case again:\n");
@@ -6035,7 +6233,7 @@ Object* JSObject::SetElementWithoutInterceptor(uint32_t index, Object* value) {
 
 Object* JSArray::JSArrayUpdateLengthFromIndex(uint32_t index, Object* value) {
   uint32_t old_len = 0;
-  CHECK(Array::IndexFromObject(length(), &old_len));
+  CHECK(length()->ToArrayIndex(&old_len));
   // Check to see if we need to update the length. For now, we make
   // sure that the length stays within 32-bits (unsigned).
   if (index >= old_len && index != 0xffffffff) {
@@ -6084,16 +6282,10 @@ Object* JSObject::GetElementPostInterceptor(JSObject* receiver,
         Object* element = dictionary->ValueAt(entry);
         PropertyDetails details = dictionary->DetailsAt(entry);
         if (details.type() == CALLBACKS) {
-          // Only accessors allowed as elements.
-          FixedArray* structure = FixedArray::cast(element);
-          Object* getter = structure->get(kGetterIndex);
-          if (getter->IsJSFunction()) {
-            return GetPropertyWithDefinedGetter(receiver,
-                                                JSFunction::cast(getter));
-          } else {
-            // Getter is not a function.
-            return Heap::undefined_value();
-          }
+          return GetElementWithCallback(receiver,
+                                        element,
+                                        index,
+                                        this);
         }
         return element;
       }
@@ -6241,16 +6433,10 @@ Object* JSObject::GetElementWithReceiver(JSObject* receiver, uint32_t index) {
         Object* element = dictionary->ValueAt(entry);
         PropertyDetails details = dictionary->DetailsAt(entry);
         if (details.type() == CALLBACKS) {
-          // Only accessors allowed as elements.
-          FixedArray* structure = FixedArray::cast(element);
-          Object* getter = structure->get(kGetterIndex);
-          if (getter->IsJSFunction()) {
-            return GetPropertyWithDefinedGetter(receiver,
-                                                JSFunction::cast(getter));
-          } else {
-            // Getter is not a function.
-            return Heap::undefined_value();
-          }
+          return GetElementWithCallback(receiver,
+                                        element,
+                                        index,
+                                        this);
         }
         return element;
       }
@@ -6329,7 +6515,7 @@ bool JSObject::ShouldConvertToFastElements() {
   // fast elements.
   uint32_t length = 0;
   if (IsJSArray()) {
-    CHECK(Array::IndexFromObject(JSArray::cast(this)->length(), &length));
+    CHECK(JSArray::cast(this)->length()->ToArrayIndex(&length));
   } else {
     length = dictionary->max_number_key();
   }
@@ -7020,15 +7206,9 @@ class SymbolKey : public HashTableKey {
   }
 
   Object* AsObject() {
-    // If the string is a cons string, attempt to flatten it so that
-    // symbols will most often be flat strings.
-    if (StringShape(string_).IsCons()) {
-      ConsString* cons_string = ConsString::cast(string_);
-      cons_string->TryFlatten();
-      if (cons_string->second()->length() == 0) {
-        string_ = cons_string->first();
-      }
-    }
+    // Attempt to flatten the string, so that symbols will most often
+    // be flat strings.
+    string_ = string_->TryFlattenGetString();
     // Transform string to symbol if possible.
     Map* map = Heap::SymbolMapForString(string_);
     if (map != NULL) {
@@ -7097,6 +7277,46 @@ int HashTable<Shape, Key>::FindEntry(Key key) {
     Object* element = KeyAt(entry);
     if (element->IsUndefined()) break;  // Empty entry.
     if (!element->IsNull() && Shape::IsMatch(key, element)) return entry;
+    entry = NextProbe(entry, count++, capacity);
+  }
+  return kNotFound;
+}
+
+
+// Find entry for key otherwise return kNotFound.
+int StringDictionary::FindEntry(String* key) {
+  if (!key->IsSymbol()) {
+    return HashTable<StringDictionaryShape, String*>::FindEntry(key);
+  }
+
+  // Optimized for symbol key. Knowledge of the key type allows:
+  // 1. Move the check if the key is a symbol out of the loop.
+  // 2. Avoid comparing hash codes in symbol to symbol comparision.
+  // 3. Detect a case when a dictionary key is not a symbol but the key is.
+  //    In case of positive result the dictionary key may be replaced by
+  //    the symbol with minimal performance penalty. It gives a chance to
+  //    perform further lookups in code stubs (and significant performance boost
+  //    a certain style of code).
+
+  // EnsureCapacity will guarantee the hash table is never full.
+  uint32_t capacity = Capacity();
+  uint32_t entry = FirstProbe(key->Hash(), capacity);
+  uint32_t count = 1;
+
+  while (true) {
+    int index = EntryToIndex(entry);
+    Object* element = get(index);
+    if (element->IsUndefined()) break;  // Empty entry.
+    if (key == element) return entry;
+    if (!element->IsSymbol() &&
+        !element->IsNull() &&
+        String::cast(element)->Equals(key)) {
+      // Replace a non-symbol key by the equivalent symbol for faster further
+      // lookups.
+      set(index, key);
+      return entry;
+    }
+    ASSERT(element->IsNull() || !String::cast(element)->Equals(key));
     entry = NextProbe(entry, count++, capacity);
   }
   return kNotFound;
@@ -7333,15 +7553,22 @@ Object* JSObject::PrepareElementsForSort(uint32_t limit) {
     }
     // Convert to fast elements.
 
+    Object* obj = map()->GetFastElementsMap();
+    if (obj->IsFailure()) return obj;
+    Map* new_map = Map::cast(obj);
+
     PretenureFlag tenure = Heap::InNewSpace(this) ? NOT_TENURED: TENURED;
     Object* new_array =
         Heap::AllocateFixedArray(dict->NumberOfElements(), tenure);
-    if (new_array->IsFailure()) {
-      return new_array;
-    }
+    if (new_array->IsFailure()) return new_array;
     FixedArray* fast_elements = FixedArray::cast(new_array);
     dict->CopyValuesTo(fast_elements);
+
+    set_map(new_map);
     set_elements(fast_elements);
+  } else {
+    Object* obj = EnsureWritableFastElements();
+    if (obj->IsFailure()) return obj;
   }
   ASSERT(HasFastElements());
 
@@ -7962,7 +8189,7 @@ Object* Dictionary<Shape, Key>::DeleteProperty(int entry,
 
 template<typename Shape, typename Key>
 Object* Dictionary<Shape, Key>::AtPut(Key key, Object* value) {
-  int entry = FindEntry(key);
+  int entry = this->FindEntry(key);
 
   // If the entry is present set the value;
   if (entry != Dictionary<Shape, Key>::kNotFound) {
@@ -7987,7 +8214,7 @@ Object* Dictionary<Shape, Key>::Add(Key key,
                                     Object* value,
                                     PropertyDetails details) {
   // Valdate key is absent.
-  SLOW_ASSERT((FindEntry(key) == Dictionary<Shape, Key>::kNotFound));
+  SLOW_ASSERT((this->FindEntry(key) == Dictionary<Shape, Key>::kNotFound));
   // Check whether the dictionary should be extended.
   Object* obj = EnsureCapacity(1, key);
   if (obj->IsFailure()) return obj;
@@ -8046,7 +8273,7 @@ Object* NumberDictionary::AddNumberEntry(uint32_t key,
                                          Object* value,
                                          PropertyDetails details) {
   UpdateMaxNumberKey(key);
-  SLOW_ASSERT(FindEntry(key) == kNotFound);
+  SLOW_ASSERT(this->FindEntry(key) == kNotFound);
   return Add(key, value, details);
 }
 

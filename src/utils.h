@@ -37,11 +37,48 @@ namespace internal {
 // ----------------------------------------------------------------------------
 // General helper functions
 
+#define IS_POWER_OF_TWO(x) (((x) & ((x) - 1)) == 0)
+
 // Returns true iff x is a power of 2 (or zero). Cannot be used with the
 // maximally negative value of the type T (the -1 overflows).
 template <typename T>
 static inline bool IsPowerOf2(T x) {
-  return (x & (x - 1)) == 0;
+  return IS_POWER_OF_TWO(x);
+}
+
+
+// X must be a power of 2.  Returns the number of trailing zeros.
+template <typename T>
+static inline int WhichPowerOf2(T x) {
+  ASSERT(IsPowerOf2(x));
+  ASSERT(x != 0);
+  if (x < 0) return 31;
+  int bits = 0;
+#ifdef DEBUG
+  int original_x = x;
+#endif
+  if (x >= 0x10000) {
+    bits += 16;
+    x >>= 16;
+  }
+  if (x >= 0x100) {
+    bits += 8;
+    x >>= 8;
+  }
+  if (x >= 0x10) {
+    bits += 4;
+    x >>= 4;
+  }
+  switch (x) {
+    default: UNREACHABLE();
+    case 8: bits++;  // Fall through.
+    case 4: bits++;  // Fall through.
+    case 2: bits++;  // Fall through.
+    case 1: break;
+  }
+  ASSERT_EQ(1 << bits, original_x);
+  return bits;
+  return 0;
 }
 
 
@@ -412,6 +449,9 @@ class ScopedVector : public Vector<T> {
   ~ScopedVector() {
     DeleteArray(this->start());
   }
+
+ private:
+  DISALLOW_IMPLICIT_CONSTRUCTORS(ScopedVector);
 };
 
 
@@ -434,6 +474,206 @@ inline Vector< Handle<Object> > HandleVector(v8::internal::Handle<T>* elms,
   return Vector< Handle<Object> >(
       reinterpret_cast<v8::internal::Handle<Object>*>(elms), length);
 }
+
+
+/*
+ * A class that collects values into a backing store.
+ * Specialized versions of the class can allow access to the backing store
+ * in different ways.
+ * There is no guarantee that the backing store is contiguous (and, as a
+ * consequence, no guarantees that consecutively added elements are adjacent
+ * in memory). The collector may move elements unless it has guaranteed not
+ * to.
+ */
+template <typename T>
+class Collector {
+ public:
+  Collector(int initial_capacity = kMinCapacity,
+            int growth_factor = 2,
+            int max_growth = 1 * MB)
+      : growth_factor_(growth_factor), max_growth_(max_growth) {
+    if (initial_capacity < kMinCapacity) {
+      initial_capacity = kMinCapacity;
+    }
+    current_chunk_ = NewArray<T>(initial_capacity);
+    current_capacity_ = initial_capacity;
+    index_ = 0;
+  }
+
+  virtual ~Collector() {
+    // Free backing store (in reverse allocation order).
+    DeleteArray(current_chunk_);
+    for (int i = chunks_.length() - 1; i >= 0; i--) {
+      chunks_.at(i).Dispose();
+    }
+  }
+
+  // Add a single element.
+  inline void Add(T value) {
+    if (index_ >= current_capacity_) {
+      Grow(1);
+    }
+    current_chunk_[index_] = value;
+    index_++;
+  }
+
+  // Add a block of contiguous elements and return a Vector backed by the
+  // memory area.
+  // A basic Collector will keep this vector valid as long as the Collector
+  // is alive.
+  inline Vector<T> AddBlock(int size, T initial_value) {
+    if (index_ + size > current_capacity_) {
+      Grow(size);
+    }
+    T* position = current_chunk_ + index_;
+    index_ += size;
+    for (int i = 0; i < size; i++) {
+      position[i] = initial_value;
+    }
+    return Vector<T>(position, size);
+  }
+
+
+  // Allocate a single contiguous vector, copy all the collected
+  // elements to the vector, and return it.
+  // The caller is responsible for freeing the memory of the returned
+  // vector (e.g., using Vector::Dispose).
+  Vector<T> ToVector() {
+    // Find the total length.
+    int total_length = index_;
+    for (int i = 0; i < chunks_.length(); i++) {
+      total_length += chunks_.at(i).length();
+    }
+    T* new_store = NewArray<T>(total_length);
+    int position = 0;
+    for (int i = 0; i < chunks_.length(); i++) {
+      Vector<T> chunk = chunks_.at(i);
+      for (int j = 0; j < chunk.length(); j++) {
+        new_store[position] = chunk[j];
+        position++;
+      }
+    }
+    for (int i = 0; i < index_; i++) {
+      new_store[position] = current_chunk_[i];
+      position++;
+    }
+    return Vector<T>(new_store, total_length);
+  }
+
+  // Resets the collector to be empty.
+  virtual void Reset() {
+    for (int i = chunks_.length() - 1; i >= 0; i--) {
+      chunks_.at(i).Dispose();
+    }
+    chunks_.Rewind(0);
+    index_ = 0;
+  }
+
+ protected:
+  static const int kMinCapacity = 16;
+  List<Vector<T> > chunks_;
+  T* current_chunk_;
+  int growth_factor_;
+  int max_growth_;
+  int current_capacity_;
+  int index_;
+
+  // Creates a new current chunk, and stores the old chunk in the chunks_ list.
+  void Grow(int min_capacity) {
+    ASSERT(growth_factor_ > 1);
+    int growth = current_capacity_ * (growth_factor_ - 1);
+    if (growth > max_growth_) {
+      growth = max_growth_;
+    }
+    int new_capacity = current_capacity_ + growth;
+    if (new_capacity < min_capacity) {
+      new_capacity = min_capacity;
+    }
+    T* new_chunk = NewArray<T>(new_capacity);
+    int new_index = PrepareGrow(Vector<T>(new_chunk, new_capacity));
+    chunks_.Add(Vector<T>(current_chunk_, index_));
+    current_chunk_ = new_chunk;
+    current_capacity_ = new_capacity;
+    index_ = new_index;
+    ASSERT(index_ + min_capacity <= current_capacity_);
+  }
+
+  // Before replacing the current chunk, give a subclass the option to move
+  // some of the current data into the new chunk. The function may update
+  // the current index_ value to represent data no longer in the current chunk.
+  // Returns the initial index of the new chunk (after copied data).
+  virtual int PrepareGrow(Vector<T> new_chunk)  {
+    return 0;
+  }
+};
+
+
+/*
+ * A collector that allows sequences of values to be guaranteed to
+ * stay consecutive.
+ * If the backing store grows while a sequence is active, the current
+ * sequence might be moved, but after the sequence is ended, it will
+ * not move again.
+ * NOTICE: Blocks allocated using Collector::AddBlock(int) can move
+ * as well, if inside an active sequence where another element is added.
+ */
+template <typename T>
+class SequenceCollector : public Collector<T> {
+ public:
+  SequenceCollector(int initial_capacity,
+                    int growth_factor = 2,
+                    int max_growth = 1 * MB)
+      : Collector<T>(initial_capacity, growth_factor, max_growth),
+        sequence_start_(kNoSequence) { }
+
+  virtual ~SequenceCollector() {}
+
+  void StartSequence() {
+    ASSERT(sequence_start_ == kNoSequence);
+    sequence_start_ = this->index_;
+  }
+
+  Vector<T> EndSequence() {
+    ASSERT(sequence_start_ != kNoSequence);
+    int sequence_start = sequence_start_;
+    sequence_start_ = kNoSequence;
+    return Vector<T>(this->current_chunk_ + sequence_start,
+                     this->index_ - sequence_start);
+  }
+
+  // Drops the currently added sequence, and all collected elements in it.
+  void DropSequence() {
+    ASSERT(sequence_start_ != kNoSequence);
+    this->index_ = sequence_start_;
+    sequence_start_ = kNoSequence;
+  }
+
+  virtual void Reset() {
+    sequence_start_ = kNoSequence;
+    this->Collector<T>::Reset();
+  }
+
+ private:
+  static const int kNoSequence = -1;
+  int sequence_start_;
+
+  // Move the currently active sequence to the new chunk.
+  virtual int PrepareGrow(Vector<T> new_chunk) {
+    if (sequence_start_ != kNoSequence) {
+      int sequence_length = this->index_ - sequence_start_;
+      // The new chunk is always larger than the current chunk, so there
+      // is room for the copy.
+      ASSERT(sequence_length < new_chunk.length());
+      for (int i = 0; i < sequence_length; i++) {
+        new_chunk[i] = this->current_chunk_[sequence_start_ + i];
+      }
+      this->index_ = sequence_start_;
+      sequence_start_ = 0;
+      return sequence_length;
+    }
+    return 0;
+  }
+};
 
 
 // Simple support to read a file into a 0-terminated C-string.
@@ -522,12 +762,54 @@ class StringBuilder {
 };
 
 
+// Custom memcpy implementation for platforms where the standard version
+// may not be good enough.
+// TODO(lrn): Check whether some IA32 platforms should be excluded.
+#if defined(V8_TARGET_ARCH_IA32)
+
+// TODO(lrn): Extend to other platforms as needed.
+
+typedef void (*MemCopyFunction)(void* dest, const void* src, size_t size);
+
+// Implemented in codegen-<arch>.cc.
+MemCopyFunction CreateMemCopyFunction();
+
+// Copy memory area to disjoint memory area.
+static inline void MemCopy(void* dest, const void* src, size_t size) {
+  static MemCopyFunction memcopy = CreateMemCopyFunction();
+  (*memcopy)(dest, src, size);
+#ifdef DEBUG
+  CHECK_EQ(0, memcmp(dest, src, size));
+#endif
+}
+
+
+// Limit below which the extra overhead of the MemCopy function is likely
+// to outweigh the benefits of faster copying.
+// TODO(lrn): Try to find a more precise value.
+static const int kMinComplexMemCopy = 64;
+
+#else  // V8_TARGET_ARCH_IA32
+
+static inline void MemCopy(void* dest, const void* src, size_t size) {
+  memcpy(dest, src, size);
+}
+
+static const int kMinComplexMemCopy = 256;
+
+#endif  // V8_TARGET_ARCH_IA32
+
+
 // Copy from ASCII/16bit chars to ASCII/16bit chars.
 template <typename sourcechar, typename sinkchar>
 static inline void CopyChars(sinkchar* dest, const sourcechar* src, int chars) {
   sinkchar* limit = dest + chars;
 #ifdef V8_HOST_CAN_READ_UNALIGNED
   if (sizeof(*dest) == sizeof(*src)) {
+    if (chars >= static_cast<int>(kMinComplexMemCopy / sizeof(*dest))) {
+      MemCopy(dest, src, chars * sizeof(*dest));
+      return;
+    }
     // Number of characters in a uintptr_t.
     static const int kStepSize = sizeof(uintptr_t) / sizeof(*dest);  // NOLINT
     while (dest <= limit - kStepSize) {
@@ -657,7 +939,11 @@ inline Dest BitCast(const Source& source) {
   return dest;
 }
 
-} }  // namespace v8::internal
+template <class Dest, class Source>
+inline Dest BitCast(Source* source) {
+  return BitCast<Dest>(reinterpret_cast<uintptr_t>(source));
+}
 
+} }  // namespace v8::internal
 
 #endif  // V8_UTILS_H_

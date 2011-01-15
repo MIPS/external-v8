@@ -56,10 +56,18 @@
 
 #include "v8.h"
 
+#if defined(V8_TARGET_ARCH_MIPS)
+
 #include "constants-mips.h"
 #include "disasm.h"
 #include "macro-assembler.h"
 #include "platform.h"
+
+#ifdef _MIPS_ARCH_MIPS32R2
+  #define mips32r2 1
+#else
+  #define mips32r2 0
+#endif
 
 namespace assembler {
 namespace mips {
@@ -483,17 +491,30 @@ void Decoder::DecodeTypeRegister(Instruction* instr) {
             case NEG_D:
               Format(instr, "neg.d   'fd, 'fs");
               break;
+            case SQRT_D:
+              Format(instr, "sqrt.d   'fd, 'fs");
+              break;
             case CVT_W_D:
               Format(instr, "cvt.w.d 'fd, 'fs");
               break;
-            case CVT_L_D:
-              Format(instr, "cvt.l.d 'fd, 'fs");
+            case CVT_L_D: {
+              if (mips32r2) {
+                Format(instr, "cvt.l.d 'fd, 'fs");
+              } else {
+                Unknown(instr);
+              }
+              }
               break;
             case TRUNC_W_D:
               Format(instr, "trunc.w.d 'fd, 'fs");
               break;
-            case TRUNC_L_D:
-              Format(instr, "trunc.l.d 'fd, 'fs");
+            case TRUNC_L_D: {
+              if (mips32r2) {
+                Format(instr, "trunc.l.d 'fd, 'fs");
+              } else {
+                Unknown(instr);
+              }
+              }
               break;
             case CVT_S_D:
               Format(instr, "cvt.s.d 'fd, 'fs");
@@ -544,11 +565,21 @@ void Decoder::DecodeTypeRegister(Instruction* instr) {
           break;
         case L:
           switch (instr->FunctionFieldRaw()) {
-            case CVT_D_L:
-              Format(instr, "cvt.d.l 'fd, 'fs");
+            case CVT_D_L: {
+              if (mips32r2) {
+                Format(instr, "cvt.d.l 'fd, 'fs");
+              } else {
+                Unknown(instr);
+              }
+              }
               break;
-            case CVT_S_L:
-              Format(instr, "cvt.s.l 'fd, 'fs");
+            case CVT_S_L: {
+              if (mips32r2) {
+                Format(instr, "cvt.s.l 'fd, 'fs");
+              } else {
+                Unknown(instr);
+              }
+              }
               break;
             default:
               UNREACHABLE();
@@ -579,7 +610,11 @@ void Decoder::DecodeTypeRegister(Instruction* instr) {
           if (instr->RsField() == 0) {
             Format(instr, "srl  'rd, 'rt, 'sa");
           } else {
-            Format(instr, "rotr  'rd, 'rt, 'sa");
+            if (mips32r2) {
+              Format(instr, "rotr  'rd, 'rt, 'sa");
+            } else {
+              Unknown(instr);
+            }
           }
           break;
         case SRA:
@@ -592,7 +627,11 @@ void Decoder::DecodeTypeRegister(Instruction* instr) {
           if (instr->SaField() == 0) {
             Format(instr, "srlv 'rd, 'rt, 'rs");
           } else {
-            Format(instr, "rotrv 'rd, 'rt, 'rs");
+            if (mips32r2) {
+              Format(instr, "rotrv 'rd, 'rt, 'rs");
+            } else {
+              Unknown(instr);
+            }
           }
           break;
         case SRAV:
@@ -679,6 +718,13 @@ void Decoder::DecodeTypeRegister(Instruction* instr) {
         case MOVN:
           Format(instr, "movn 'rd, 'rs, 'rt");
           break;
+        case MOVCI:
+          if (instr->Bit(16)) {
+            Format(instr, "movt 'rd, 'rs, 'Cc");
+          } else {
+            Format(instr, "movf 'rd, 'rs, 'Cc");
+          }
+          break;
         default:
           UNREACHABLE();
       };
@@ -697,11 +743,21 @@ void Decoder::DecodeTypeRegister(Instruction* instr) {
       break;
     case SPECIAL3:
       switch (instr->FunctionFieldRaw()) {
-        case INS:
-          Format(instr, "ins  'rt, 'rs, 'sd, 'sa");
+        case INS: {
+          if (mips32r2) {
+            Format(instr, "ins  'rt, 'rs, 'sd, 'sa");
+          } else {
+            Unknown(instr);
+          }
+          }
           break;
-        case EXT:
-          Format(instr, "ext  'rt, 'rs, 'sd, 'sa");
+        case EXT: {
+          if (mips32r2) {
+            Format(instr, "ext  'rt, 'rs, 'sd, 'sa");
+          } else {
+            Unknown(instr);
+          }
+          }
           break;
         default:
           UNREACHABLE();
@@ -967,3 +1023,4 @@ void Disassembler::Disassemble(FILE* f, byte_* begin, byte_* end) {
 
 }  // namespace disasm
 
+#endif  // V8_TARGET_ARCH_MIPS

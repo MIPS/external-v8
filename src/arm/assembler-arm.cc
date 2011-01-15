@@ -36,6 +36,8 @@
 
 #include "v8.h"
 
+#if defined(V8_TARGET_ARCH_ARM)
+
 #include "arm/assembler-arm-inl.h"
 #include "serialize.h"
 
@@ -277,6 +279,39 @@ const Instr kBlxRegMask =
     15 * B24 | 15 * B20 | 15 * B16 | 15 * B12 | 15 * B8 | 15 * B4;
 const Instr kBlxRegPattern =
     B24 | B21 | 15 * B16 | 15 * B12 | 15 * B8 | 3 * B4;
+const Instr kMovMvnMask = 0x6d * B21 | 0xf * B16;
+const Instr kMovMvnPattern = 0xd * B21;
+const Instr kMovMvnFlip = B22;
+const Instr kMovLeaveCCMask = 0xdff * B16;
+const Instr kMovLeaveCCPattern = 0x1a0 * B16;
+const Instr kMovwMask = 0xff * B20;
+const Instr kMovwPattern = 0x30 * B20;
+const Instr kMovwLeaveCCFlip = 0x5 * B21;
+const Instr kCmpCmnMask = 0xdd * B20 | 0xf * B12;
+const Instr kCmpCmnPattern = 0x15 * B20;
+const Instr kCmpCmnFlip = B21;
+const Instr kALUMask = 0x6f * B21;
+const Instr kAddPattern = 0x4 * B21;
+const Instr kSubPattern = 0x2 * B21;
+const Instr kBicPattern = 0xe * B21;
+const Instr kAndPattern = 0x0 * B21;
+const Instr kAddSubFlip = 0x6 * B21;
+const Instr kAndBicFlip = 0xe * B21;
+
+// A mask for the Rd register for push, pop, ldr, str instructions.
+const Instr kRdMask = 0x0000f000;
+static const int kRdShift = 12;
+static const Instr kLdrRegFpOffsetPattern =
+    al | B26 | L | Offset | fp.code() * B16;
+static const Instr kStrRegFpOffsetPattern =
+    al | B26 | Offset | fp.code() * B16;
+static const Instr kLdrRegFpNegOffsetPattern =
+    al | B26 | L | NegOffset | fp.code() * B16;
+static const Instr kStrRegFpNegOffsetPattern =
+    al | B26 | NegOffset | fp.code() * B16;
+static const Instr kLdrStrInstrTypeMask = 0xffff0000;
+static const Instr kLdrStrInstrArgumentMask = 0x0000ffff;
+static const Instr kLdrStrOffsetMask = 0x00000fff;
 
 // Spare buffer.
 static const int kMinimalBufferSize = 4*KB;
@@ -359,6 +394,12 @@ void Assembler::Align(int m) {
 }
 
 
+void Assembler::CodeTargetAlign() {
+  // Preferred alignment of jump targets on some ARM chips.
+  Align(8);
+}
+
+
 bool Assembler::IsNop(Instr instr, int type) {
   // Check for mov rx, rx.
   ASSERT(0 <= type && type <= 14);  // mov pc, pc is not a nop.
@@ -401,6 +442,74 @@ Instr Assembler::SetLdrRegisterImmediateOffset(Instr instr, int offset) {
   instr = (instr & ~B23) | (positive ? B23 : 0);
   // Set the actual offset.
   return (instr & ~Off12Mask) | offset;
+}
+
+
+bool Assembler::IsStrRegisterImmediate(Instr instr) {
+  return (instr & (B27 | B26 | B25 | B22 | B20)) == B26;
+}
+
+
+Instr Assembler::SetStrRegisterImmediateOffset(Instr instr, int offset) {
+  ASSERT(IsStrRegisterImmediate(instr));
+  bool positive = offset >= 0;
+  if (!positive) offset = -offset;
+  ASSERT(is_uint12(offset));
+  // Set bit indicating whether the offset should be added.
+  instr = (instr & ~B23) | (positive ? B23 : 0);
+  // Set the actual offset.
+  return (instr & ~Off12Mask) | offset;
+}
+
+
+bool Assembler::IsAddRegisterImmediate(Instr instr) {
+  return (instr & (B27 | B26 | B25 | B24 | B23 | B22 | B21)) == (B25 | B23);
+}
+
+
+Instr Assembler::SetAddRegisterImmediateOffset(Instr instr, int offset) {
+  ASSERT(IsAddRegisterImmediate(instr));
+  ASSERT(offset >= 0);
+  ASSERT(is_uint12(offset));
+  // Set the offset.
+  return (instr & ~Off12Mask) | offset;
+}
+
+
+Register Assembler::GetRd(Instr instr) {
+  Register reg;
+  reg.code_ = ((instr & kRdMask) >> kRdShift);
+  return reg;
+}
+
+
+bool Assembler::IsPush(Instr instr) {
+  return ((instr & ~kRdMask) == kPushRegPattern);
+}
+
+
+bool Assembler::IsPop(Instr instr) {
+  return ((instr & ~kRdMask) == kPopRegPattern);
+}
+
+
+bool Assembler::IsStrRegFpOffset(Instr instr) {
+  return ((instr & kLdrStrInstrTypeMask) == kStrRegFpOffsetPattern);
+}
+
+
+bool Assembler::IsLdrRegFpOffset(Instr instr) {
+  return ((instr & kLdrStrInstrTypeMask) == kLdrRegFpOffsetPattern);
+}
+
+
+bool Assembler::IsStrRegFpNegOffset(Instr instr) {
+  return ((instr & kLdrStrInstrTypeMask) == kStrRegFpNegOffsetPattern);
+}
+
+
+bool Assembler::IsLdrRegFpNegOffset(Instr instr) {
+  return ((instr & kLdrStrInstrTypeMask) == kLdrRegFpNegOffsetPattern);
 }
 
 
@@ -573,7 +682,16 @@ void Assembler::next(Label* L) {
 }
 
 
+static Instr EncodeMovwImmediate(uint32_t immediate) {
+  ASSERT(immediate < 0x10000);
+  return ((immediate & 0xf000) << 4) | (immediate & 0xfff);
+}
+
+
 // Low-level code emission routines depending on the addressing mode.
+// If this returns true then you have to use the rotate_imm and immed_8
+// that it returns, because it may have already changed the instruction
+// to match them!
 static bool fits_shifter(uint32_t imm32,
                          uint32_t* rotate_imm,
                          uint32_t* immed_8,
@@ -587,11 +705,43 @@ static bool fits_shifter(uint32_t imm32,
       return true;
     }
   }
-  // If the opcode is mov or mvn and if ~imm32 fits, change the opcode.
-  if (instr != NULL && (*instr & 0xd*B21) == 0xd*B21) {
-    if (fits_shifter(~imm32, rotate_imm, immed_8, NULL)) {
-      *instr ^= 0x2*B21;
-      return true;
+  // If the opcode is one with a complementary version and the complementary
+  // immediate fits, change the opcode.
+  if (instr != NULL) {
+    if ((*instr & kMovMvnMask) == kMovMvnPattern) {
+      if (fits_shifter(~imm32, rotate_imm, immed_8, NULL)) {
+        *instr ^= kMovMvnFlip;
+        return true;
+      } else if ((*instr & kMovLeaveCCMask) == kMovLeaveCCPattern) {
+        if (CpuFeatures::IsSupported(ARMv7)) {
+          if (imm32 < 0x10000) {
+            *instr ^= kMovwLeaveCCFlip;
+            *instr |= EncodeMovwImmediate(imm32);
+            *rotate_imm = *immed_8 = 0;  // Not used for movw.
+            return true;
+          }
+        }
+      }
+    } else if ((*instr & kCmpCmnMask) == kCmpCmnPattern) {
+      if (fits_shifter(-imm32, rotate_imm, immed_8, NULL)) {
+        *instr ^= kCmpCmnFlip;
+        return true;
+      }
+    } else {
+      Instr alu_insn = (*instr & kALUMask);
+      if (alu_insn == kAddPattern ||
+          alu_insn == kSubPattern) {
+        if (fits_shifter(-imm32, rotate_imm, immed_8, NULL)) {
+          *instr ^= kAddSubFlip;
+          return true;
+        }
+      } else if (alu_insn == kAndPattern ||
+                 alu_insn == kBicPattern) {
+        if (fits_shifter(~imm32, rotate_imm, immed_8, NULL)) {
+          *instr ^= kAndBicFlip;
+          return true;
+        }
+      }
     }
   }
   return false;
@@ -602,7 +752,7 @@ static bool fits_shifter(uint32_t imm32,
 // if they can be encoded in the ARM's 12 bits of immediate-offset instruction
 // space.  There is no guarantee that the relocated location can be similarly
 // encoded.
-static bool MustUseIp(RelocInfo::Mode rmode) {
+static bool MustUseConstantPool(RelocInfo::Mode rmode) {
   if (rmode == RelocInfo::EXTERNAL_REFERENCE) {
 #ifdef DEBUG
     if (!Serializer::enabled()) {
@@ -617,6 +767,14 @@ static bool MustUseIp(RelocInfo::Mode rmode) {
 }
 
 
+bool Operand::is_single_instruction() const {
+  if (rm_.is_valid()) return true;
+  if (MustUseConstantPool(rmode_)) return false;
+  uint32_t dummy1, dummy2;
+  return fits_shifter(imm32_, &dummy1, &dummy2, NULL);
+}
+
+
 void Assembler::addrmod1(Instr instr,
                          Register rn,
                          Register rd,
@@ -627,19 +785,34 @@ void Assembler::addrmod1(Instr instr,
     // Immediate.
     uint32_t rotate_imm;
     uint32_t immed_8;
-    if (MustUseIp(x.rmode_) ||
+    if (MustUseConstantPool(x.rmode_) ||
         !fits_shifter(x.imm32_, &rotate_imm, &immed_8, &instr)) {
       // The immediate operand cannot be encoded as a shifter operand, so load
       // it first to register ip and change the original instruction to use ip.
       // However, if the original instruction is a 'mov rd, x' (not setting the
       // condition code), then replace it with a 'ldr rd, [pc]'.
-      RecordRelocInfo(x.rmode_, x.imm32_);
       CHECK(!rn.is(ip));  // rn should never be ip, or will be trashed
       Condition cond = static_cast<Condition>(instr & CondMask);
       if ((instr & ~CondMask) == 13*B21) {  // mov, S not set
-        ldr(rd, MemOperand(pc, 0), cond);
+        if (MustUseConstantPool(x.rmode_) ||
+            !CpuFeatures::IsSupported(ARMv7)) {
+          RecordRelocInfo(x.rmode_, x.imm32_);
+          ldr(rd, MemOperand(pc, 0), cond);
+        } else {
+          // Will probably use movw, will certainly not use constant pool.
+          mov(rd, Operand(x.imm32_ & 0xffff), LeaveCC, cond);
+          movt(rd, static_cast<uint32_t>(x.imm32_) >> 16, cond);
+        }
       } else {
-        ldr(ip, MemOperand(pc, 0), cond);
+        // If this is not a mov or mvn instruction we may still be able to avoid
+        // a constant pool entry by using mvn or movw.
+        if (!MustUseConstantPool(x.rmode_) &&
+            (instr & kMovMvnMask) != kMovMvnPattern) {
+          mov(ip, x, LeaveCC, cond);
+        } else {
+          RecordRelocInfo(x.rmode_, x.imm32_);
+          ldr(ip, MemOperand(pc, 0), cond);
+        }
         addrmod1(instr, rn, rd, Operand(ip));
       }
       return;
@@ -654,9 +827,10 @@ void Assembler::addrmod1(Instr instr,
     instr |= x.rs_.code()*B8 | x.shift_op_ | B4 | x.rm_.code();
   }
   emit(instr | rn.code()*B16 | rd.code()*B12);
-  if (rn.is(pc) || x.rm_.is(pc))
+  if (rn.is(pc) || x.rm_.is(pc)) {
     // Block constant pool emission for one instruction after reading pc.
     BlockConstPoolBefore(pc_offset() + kInstrSize);
+  }
 }
 
 
@@ -850,20 +1024,6 @@ void Assembler::bx(Register target, Condition cond) {  // v5 and above, plus v4t
 
 // Data-processing instructions.
 
-// UBFX <Rd>,<Rn>,#<lsb>,#<width - 1>
-// Instruction details available in ARM DDI 0406A, A8-464.
-// cond(31-28) | 01111(27-23)| 1(22) | 1(21) | widthm1(20-16) |
-//  Rd(15-12) | lsb(11-7) | 101(6-4) | Rn(3-0)
-void Assembler::ubfx(Register dst, Register src1, const Operand& src2,
-                     const Operand& src3, Condition cond) {
-  ASSERT(!src2.rm_.is_valid() && !src3.rm_.is_valid());
-  ASSERT(static_cast<uint32_t>(src2.imm32_) <= 0x1f);
-  ASSERT(static_cast<uint32_t>(src3.imm32_) <= 0x1f);
-  emit(cond | 0x3F*B21 | src3.imm32_*B16 |
-       dst.code()*B12 | src2.imm32_*B7 | 0x5*B4 | src1.code());
-}
-
-
 void Assembler::and_(Register dst, Register src1, const Operand& src2,
                      SBit s, Condition cond) {
   addrmod1(cond | 0*B21 | s, src1, dst, src2);
@@ -896,15 +1056,12 @@ void Assembler::add(Register dst, Register src1, const Operand& src2,
   //   str(src, MemOperand(sp, 4, NegPreIndex), al);
   //   add(sp, sp, Operand(kPointerSize));
   // Both instructions can be eliminated.
-  int pattern_size = 2 * kInstrSize;
-  if (FLAG_push_pop_elimination &&
-      last_bound_pos_ <= (pc_offset() - pattern_size) &&
-      reloc_info_writer.last_pc() <= (pc_ - pattern_size) &&
+  if (can_peephole_optimize(2) &&
       // Pattern.
       instr_at(pc_ - 1 * kInstrSize) == kPopInstruction &&
       (instr_at(pc_ - 2 * kInstrSize) & ~RdMask) == kPushRegPattern) {
     pc_ -= 2 * kInstrSize;
-    if (FLAG_print_push_pop_elimination) {
+    if (FLAG_print_peephole_optimization) {
       PrintF("%x push(reg)/pop() eliminated\n", pc_offset());
     }
   }
@@ -964,6 +1121,17 @@ void Assembler::mov(Register dst, const Operand& src, SBit s, Condition cond) {
   // pseudo instructions.
   ASSERT(!(src.is_reg() && src.rm().is(dst) && s == LeaveCC && cond == al));
   addrmod1(cond | 13*B21 | s, r0, dst, src);
+}
+
+
+void Assembler::movw(Register reg, uint32_t immediate, Condition cond) {
+  ASSERT(immediate < 0x10000);
+  mov(reg, Operand(immediate), LeaveCC, cond);
+}
+
+
+void Assembler::movt(Register reg, uint32_t immediate, Condition cond) {
+  emit(cond | 0x34*B20 | reg.code()*B12 | EncodeMovwImmediate(immediate));
 }
 
 
@@ -1056,6 +1224,106 @@ void Assembler::clz(Register dst, Register src, Condition cond) {
 }
 
 
+// Saturating instructions.
+
+// Unsigned saturate.
+void Assembler::usat(Register dst,
+                     int satpos,
+                     const Operand& src,
+                     Condition cond) {
+  // v6 and above.
+  ASSERT(CpuFeatures::IsSupported(ARMv7));
+  ASSERT(!dst.is(pc) && !src.rm_.is(pc));
+  ASSERT((satpos >= 0) && (satpos <= 31));
+  ASSERT((src.shift_op_ == ASR) || (src.shift_op_ == LSL));
+  ASSERT(src.rs_.is(no_reg));
+
+  int sh = 0;
+  if (src.shift_op_ == ASR) {
+      sh = 1;
+  }
+
+  emit(cond | 0x6*B24 | 0xe*B20 | satpos*B16 | dst.code()*B12 |
+       src.shift_imm_*B7 | sh*B6 | 0x1*B4 | src.rm_.code());
+}
+
+
+// Bitfield manipulation instructions.
+
+// Unsigned bit field extract.
+// Extracts #width adjacent bits from position #lsb in a register, and
+// writes them to the low bits of a destination register.
+//   ubfx dst, src, #lsb, #width
+void Assembler::ubfx(Register dst,
+                     Register src,
+                     int lsb,
+                     int width,
+                     Condition cond) {
+  // v7 and above.
+  ASSERT(CpuFeatures::IsSupported(ARMv7));
+  ASSERT(!dst.is(pc) && !src.is(pc));
+  ASSERT((lsb >= 0) && (lsb <= 31));
+  ASSERT((width >= 1) && (width <= (32 - lsb)));
+  emit(cond | 0xf*B23 | B22 | B21 | (width - 1)*B16 | dst.code()*B12 |
+       lsb*B7 | B6 | B4 | src.code());
+}
+
+
+// Signed bit field extract.
+// Extracts #width adjacent bits from position #lsb in a register, and
+// writes them to the low bits of a destination register. The extracted
+// value is sign extended to fill the destination register.
+//   sbfx dst, src, #lsb, #width
+void Assembler::sbfx(Register dst,
+                     Register src,
+                     int lsb,
+                     int width,
+                     Condition cond) {
+  // v7 and above.
+  ASSERT(CpuFeatures::IsSupported(ARMv7));
+  ASSERT(!dst.is(pc) && !src.is(pc));
+  ASSERT((lsb >= 0) && (lsb <= 31));
+  ASSERT((width >= 1) && (width <= (32 - lsb)));
+  emit(cond | 0xf*B23 | B21 | (width - 1)*B16 | dst.code()*B12 |
+       lsb*B7 | B6 | B4 | src.code());
+}
+
+
+// Bit field clear.
+// Sets #width adjacent bits at position #lsb in the destination register
+// to zero, preserving the value of the other bits.
+//   bfc dst, #lsb, #width
+void Assembler::bfc(Register dst, int lsb, int width, Condition cond) {
+  // v7 and above.
+  ASSERT(CpuFeatures::IsSupported(ARMv7));
+  ASSERT(!dst.is(pc));
+  ASSERT((lsb >= 0) && (lsb <= 31));
+  ASSERT((width >= 1) && (width <= (32 - lsb)));
+  int msb = lsb + width - 1;
+  emit(cond | 0x1f*B22 | msb*B16 | dst.code()*B12 | lsb*B7 | B4 | 0xf);
+}
+
+
+// Bit field insert.
+// Inserts #width adjacent bits from the low bits of the source register
+// into position #lsb of the destination register.
+//   bfi dst, src, #lsb, #width
+void Assembler::bfi(Register dst,
+                    Register src,
+                    int lsb,
+                    int width,
+                    Condition cond) {
+  // v7 and above.
+  ASSERT(CpuFeatures::IsSupported(ARMv7));
+  ASSERT(!dst.is(pc) && !src.is(pc));
+  ASSERT((lsb >= 0) && (lsb <= 31));
+  ASSERT((width >= 1) && (width <= (32 - lsb)));
+  int msb = lsb + width - 1;
+  emit(cond | 0x1f*B22 | msb*B16 | dst.code()*B12 | lsb*B7 | B4 |
+       src.code());
+}
+
+
 // Status register access instructions.
 void Assembler::mrs(Register dst, SRegister s, Condition cond) {
   ASSERT(!dst.is(pc));
@@ -1071,7 +1339,7 @@ void Assembler::msr(SRegisterFieldMask fields, const Operand& src,
     // Immediate.
     uint32_t rotate_imm;
     uint32_t immed_8;
-    if (MustUseIp(src.rmode_) ||
+    if (MustUseConstantPool(src.rmode_) ||
         !fits_shifter(src.imm32_, &rotate_imm, &immed_8, NULL)) {
       // Immediate operand cannot be encoded, load it first to register ip.
       RecordRelocInfo(src.rmode_, src.imm32_);
@@ -1095,20 +1363,171 @@ void Assembler::ldr(Register dst, const MemOperand& src, Condition cond) {
   }
   addrmod2(cond | B26 | L, dst, src);
 
-  // Eliminate pattern: push(r), pop(r)
-  //   str(r, MemOperand(sp, 4, NegPreIndex), al)
-  //   ldr(r, MemOperand(sp, 4, PostIndex), al)
-  // Both instructions can be eliminated.
-  int pattern_size = 2 * kInstrSize;
-  if (FLAG_push_pop_elimination &&
-      last_bound_pos_ <= (pc_offset() - pattern_size) &&
-      reloc_info_writer.last_pc() <= (pc_ - pattern_size) &&
-      // Pattern.
-      instr_at(pc_ - 1 * kInstrSize) == (kPopRegPattern | dst.code() * B12) &&
-      instr_at(pc_ - 2 * kInstrSize) == (kPushRegPattern | dst.code() * B12)) {
-    pc_ -= 2 * kInstrSize;
-    if (FLAG_print_push_pop_elimination) {
-      PrintF("%x push/pop (same reg) eliminated\n", pc_offset());
+  // Eliminate pattern: push(ry), pop(rx)
+  //   str(ry, MemOperand(sp, 4, NegPreIndex), al)
+  //   ldr(rx, MemOperand(sp, 4, PostIndex), al)
+  // Both instructions can be eliminated if ry = rx.
+  // If ry != rx, a register copy from ry to rx is inserted
+  // after eliminating the push and the pop instructions.
+  if (can_peephole_optimize(2)) {
+    Instr push_instr = instr_at(pc_ - 2 * kInstrSize);
+    Instr pop_instr = instr_at(pc_ - 1 * kInstrSize);
+
+    if (IsPush(push_instr) && IsPop(pop_instr)) {
+      if ((pop_instr & kRdMask) != (push_instr & kRdMask)) {
+        // For consecutive push and pop on different registers,
+        // we delete both the push & pop and insert a register move.
+        // push ry, pop rx --> mov rx, ry
+        Register reg_pushed, reg_popped;
+        reg_pushed = GetRd(push_instr);
+        reg_popped = GetRd(pop_instr);
+        pc_ -= 2 * kInstrSize;
+        // Insert a mov instruction, which is better than a pair of push & pop
+        mov(reg_popped, reg_pushed);
+        if (FLAG_print_peephole_optimization) {
+          PrintF("%x push/pop (diff reg) replaced by a reg move\n",
+                 pc_offset());
+        }
+      } else {
+        // For consecutive push and pop on the same register,
+        // both the push and the pop can be deleted.
+        pc_ -= 2 * kInstrSize;
+        if (FLAG_print_peephole_optimization) {
+          PrintF("%x push/pop (same reg) eliminated\n", pc_offset());
+        }
+      }
+    }
+  }
+
+  if (can_peephole_optimize(2)) {
+    Instr str_instr = instr_at(pc_ - 2 * kInstrSize);
+    Instr ldr_instr = instr_at(pc_ - 1 * kInstrSize);
+
+    if ((IsStrRegFpOffset(str_instr) &&
+         IsLdrRegFpOffset(ldr_instr)) ||
+       (IsStrRegFpNegOffset(str_instr) &&
+         IsLdrRegFpNegOffset(ldr_instr))) {
+      if ((ldr_instr & kLdrStrInstrArgumentMask) ==
+            (str_instr & kLdrStrInstrArgumentMask)) {
+        // Pattern: Ldr/str same fp+offset, same register.
+        //
+        // The following:
+        // str rx, [fp, #-12]
+        // ldr rx, [fp, #-12]
+        //
+        // Becomes:
+        // str rx, [fp, #-12]
+
+        pc_ -= 1 * kInstrSize;
+        if (FLAG_print_peephole_optimization) {
+          PrintF("%x str/ldr (fp + same offset), same reg\n", pc_offset());
+        }
+      } else if ((ldr_instr & kLdrStrOffsetMask) ==
+                 (str_instr & kLdrStrOffsetMask)) {
+        // Pattern: Ldr/str same fp+offset, different register.
+        //
+        // The following:
+        // str rx, [fp, #-12]
+        // ldr ry, [fp, #-12]
+        //
+        // Becomes:
+        // str rx, [fp, #-12]
+        // mov ry, rx
+
+        Register reg_stored, reg_loaded;
+        reg_stored = GetRd(str_instr);
+        reg_loaded = GetRd(ldr_instr);
+        pc_ -= 1 * kInstrSize;
+        // Insert a mov instruction, which is better than ldr.
+        mov(reg_loaded, reg_stored);
+        if (FLAG_print_peephole_optimization) {
+          PrintF("%x str/ldr (fp + same offset), diff reg \n", pc_offset());
+        }
+      }
+    }
+  }
+
+  if (can_peephole_optimize(3)) {
+    Instr mem_write_instr = instr_at(pc_ - 3 * kInstrSize);
+    Instr ldr_instr = instr_at(pc_ - 2 * kInstrSize);
+    Instr mem_read_instr = instr_at(pc_ - 1 * kInstrSize);
+    if (IsPush(mem_write_instr) &&
+        IsPop(mem_read_instr)) {
+      if ((IsLdrRegFpOffset(ldr_instr) ||
+        IsLdrRegFpNegOffset(ldr_instr))) {
+        if ((mem_write_instr & kRdMask) ==
+              (mem_read_instr & kRdMask)) {
+          // Pattern: push & pop from/to same register,
+          // with a fp+offset ldr in between
+          //
+          // The following:
+          // str rx, [sp, #-4]!
+          // ldr rz, [fp, #-24]
+          // ldr rx, [sp], #+4
+          //
+          // Becomes:
+          // if(rx == rz)
+          //   delete all
+          // else
+          //   ldr rz, [fp, #-24]
+
+          if ((mem_write_instr & kRdMask) == (ldr_instr & kRdMask)) {
+            pc_ -= 3 * kInstrSize;
+          } else {
+            pc_ -= 3 * kInstrSize;
+            // Reinsert back the ldr rz.
+            emit(ldr_instr);
+          }
+          if (FLAG_print_peephole_optimization) {
+            PrintF("%x push/pop -dead ldr fp+offset in middle\n", pc_offset());
+          }
+        } else {
+          // Pattern: push & pop from/to different registers
+          // with a fp+offset ldr in between
+          //
+          // The following:
+          // str rx, [sp, #-4]!
+          // ldr rz, [fp, #-24]
+          // ldr ry, [sp], #+4
+          //
+          // Becomes:
+          // if(ry == rz)
+          //   mov ry, rx;
+          // else if(rx != rz)
+          //   ldr rz, [fp, #-24]
+          //   mov ry, rx
+          // else if((ry != rz) || (rx == rz)) becomes:
+          //   mov ry, rx
+          //   ldr rz, [fp, #-24]
+
+          Register reg_pushed, reg_popped;
+          if ((mem_read_instr & kRdMask) == (ldr_instr & kRdMask)) {
+            reg_pushed = GetRd(mem_write_instr);
+            reg_popped = GetRd(mem_read_instr);
+            pc_ -= 3 * kInstrSize;
+            mov(reg_popped, reg_pushed);
+          } else if ((mem_write_instr & kRdMask)
+                                != (ldr_instr & kRdMask)) {
+            reg_pushed = GetRd(mem_write_instr);
+            reg_popped = GetRd(mem_read_instr);
+            pc_ -= 3 * kInstrSize;
+            emit(ldr_instr);
+            mov(reg_popped, reg_pushed);
+          } else if (((mem_read_instr & kRdMask)
+                                     != (ldr_instr & kRdMask)) ||
+                    ((mem_write_instr & kRdMask)
+                                     == (ldr_instr & kRdMask)) ) {
+            reg_pushed = GetRd(mem_write_instr);
+            reg_popped = GetRd(mem_read_instr);
+            pc_ -= 3 * kInstrSize;
+            mov(reg_popped, reg_pushed);
+            emit(ldr_instr);
+          }
+          if (FLAG_print_peephole_optimization) {
+            PrintF("%x push/pop (ldr fp+off in middle)\n", pc_offset());
+          }
+        }
+      }
     }
   }
 }
@@ -1120,16 +1539,13 @@ void Assembler::str(Register src, const MemOperand& dst, Condition cond) {
   // Eliminate pattern: pop(), push(r)
   //     add sp, sp, #4 LeaveCC, al; str r, [sp, #-4], al
   // ->  str r, [sp, 0], al
-  int pattern_size = 2 * kInstrSize;
-  if (FLAG_push_pop_elimination &&
-     last_bound_pos_ <= (pc_offset() - pattern_size) &&
-     reloc_info_writer.last_pc() <= (pc_ - pattern_size) &&
+  if (can_peephole_optimize(2) &&
      // Pattern.
      instr_at(pc_ - 1 * kInstrSize) == (kPushRegPattern | src.code() * B12) &&
      instr_at(pc_ - 2 * kInstrSize) == kPopInstruction) {
     pc_ -= 2 * kInstrSize;
     emit(al | B26 | 0 | Offset | sp.code() * B16 | src.code() * B12);
-    if (FLAG_print_push_pop_elimination) {
+    if (FLAG_print_peephole_optimization) {
       PrintF("%x pop()/push(reg) eliminated\n", pc_offset());
     }
   }
@@ -1166,6 +1582,27 @@ void Assembler::ldrsh(Register dst, const MemOperand& src, Condition cond) {
 }
 
 
+void Assembler::ldrd(Register dst1, Register dst2,
+                     const MemOperand& src, Condition cond) {
+  ASSERT(CpuFeatures::IsEnabled(ARMv7));
+  ASSERT(src.rm().is(no_reg));
+  ASSERT(!dst1.is(lr));  // r14.
+  ASSERT_EQ(0, dst1.code() % 2);
+  ASSERT_EQ(dst1.code() + 1, dst2.code());
+  addrmod3(cond | B7 | B6 | B4, dst1, src);
+}
+
+
+void Assembler::strd(Register src1, Register src2,
+                     const MemOperand& dst, Condition cond) {
+  ASSERT(dst.rm().is(no_reg));
+  ASSERT(!src1.is(lr));  // r14.
+  ASSERT_EQ(0, src1.code() % 2);
+  ASSERT_EQ(src1.code() + 1, src2.code());
+  ASSERT(CpuFeatures::IsEnabled(ARMv7));
+  addrmod3(cond | B7 | B6 | B5 | B4, src1, dst);
+}
+
 // Load/Store multiple instructions.
 void Assembler::ldm(BlockAddrMode am,
                     Register base,
@@ -1193,26 +1630,6 @@ void Assembler::stm(BlockAddrMode am,
                     RegList src,
                     Condition cond) {
   addrmod4(cond | B27 | am, base, src);
-}
-
-
-// Semaphore instructions.
-void Assembler::swp(Register dst, Register src, Register base, Condition cond) {
-  ASSERT(!dst.is(pc) && !src.is(pc) && !base.is(pc));
-  ASSERT(!dst.is(base) && !src.is(base));
-  emit(cond | P | base.code()*B16 | dst.code()*B12 |
-       B7 | B4 | src.code());
-}
-
-
-void Assembler::swpb(Register dst,
-                     Register src,
-                     Register base,
-                     Condition cond) {
-  ASSERT(!dst.is(pc) && !src.is(pc) && !base.is(pc));
-  ASSERT(!dst.is(base) && !src.is(base));
-  emit(cond | P | B | base.code()*B16 | dst.code()*B12 |
-       B7 | B4 | src.code());
 }
 
 
@@ -1403,6 +1820,7 @@ void Assembler::vldr(const DwVfpRegister dst,
   ASSERT(CpuFeatures::IsEnabled(VFP3));
   ASSERT(offset % 4 == 0);
   ASSERT((offset / 4) < 256);
+  ASSERT(offset >= 0);
   emit(cond | 0xD9*B20 | base.code()*B16 | dst.code()*B12 |
        0xB*B8 | ((offset / 4) & 255));
 }
@@ -1419,6 +1837,7 @@ void Assembler::vldr(const SwVfpRegister dst,
   ASSERT(CpuFeatures::IsEnabled(VFP3));
   ASSERT(offset % 4 == 0);
   ASSERT((offset / 4) < 256);
+  ASSERT(offset >= 0);
   emit(cond | 0xD9*B20 | base.code()*B16 | dst.code()*B12 |
        0xA*B8 | ((offset / 4) & 255));
 }
@@ -1435,8 +1854,144 @@ void Assembler::vstr(const DwVfpRegister src,
   ASSERT(CpuFeatures::IsEnabled(VFP3));
   ASSERT(offset % 4 == 0);
   ASSERT((offset / 4) < 256);
+  ASSERT(offset >= 0);
   emit(cond | 0xD8*B20 | base.code()*B16 | src.code()*B12 |
        0xB*B8 | ((offset / 4) & 255));
+}
+
+
+void Assembler::vstr(const SwVfpRegister src,
+                     const Register base,
+                     int offset,
+                     const Condition cond) {
+  // MEM(Rbase + offset) = SSrc.
+  // Instruction details available in ARM DDI 0406A, A8-786.
+  // cond(31-28) | 1101(27-24)| 1000(23-20) | Rbase(19-16) |
+  // Vdst(15-12) | 1010(11-8) | (offset/4)
+  ASSERT(CpuFeatures::IsEnabled(VFP3));
+  ASSERT(offset % 4 == 0);
+  ASSERT((offset / 4) < 256);
+  ASSERT(offset >= 0);
+  emit(cond | 0xD8*B20 | base.code()*B16 | src.code()*B12 |
+       0xA*B8 | ((offset / 4) & 255));
+}
+
+
+static void DoubleAsTwoUInt32(double d, uint32_t* lo, uint32_t* hi) {
+  uint64_t i;
+  memcpy(&i, &d, 8);
+
+  *lo = i & 0xffffffff;
+  *hi = i >> 32;
+}
+
+// Only works for little endian floating point formats.
+// We don't support VFP on the mixed endian floating point platform.
+static bool FitsVMOVDoubleImmediate(double d, uint32_t *encoding) {
+  ASSERT(CpuFeatures::IsEnabled(VFP3));
+
+  // VMOV can accept an immediate of the form:
+  //
+  //  +/- m * 2^(-n) where 16 <= m <= 31 and 0 <= n <= 7
+  //
+  // The immediate is encoded using an 8-bit quantity, comprised of two
+  // 4-bit fields. For an 8-bit immediate of the form:
+  //
+  //  [abcdefgh]
+  //
+  // where a is the MSB and h is the LSB, an immediate 64-bit double can be
+  // created of the form:
+  //
+  //  [aBbbbbbb,bbcdefgh,00000000,00000000,
+  //      00000000,00000000,00000000,00000000]
+  //
+  // where B = ~b.
+  //
+
+  uint32_t lo, hi;
+  DoubleAsTwoUInt32(d, &lo, &hi);
+
+  // The most obvious constraint is the long block of zeroes.
+  if ((lo != 0) || ((hi & 0xffff) != 0)) {
+    return false;
+  }
+
+  // Bits 62:55 must be all clear or all set.
+  if (((hi & 0x3fc00000) != 0) && ((hi & 0x3fc00000) != 0x3fc00000)) {
+    return false;
+  }
+
+  // Bit 63 must be NOT bit 62.
+  if (((hi ^ (hi << 1)) & (0x40000000)) == 0) {
+    return false;
+  }
+
+  // Create the encoded immediate in the form:
+  //  [00000000,0000abcd,00000000,0000efgh]
+  *encoding  = (hi >> 16) & 0xf;      // Low nybble.
+  *encoding |= (hi >> 4) & 0x70000;   // Low three bits of the high nybble.
+  *encoding |= (hi >> 12) & 0x80000;  // Top bit of the high nybble.
+
+  return true;
+}
+
+
+void Assembler::vmov(const DwVfpRegister dst,
+                     double imm,
+                     const Condition cond) {
+  // Dd = immediate
+  // Instruction details available in ARM DDI 0406B, A8-640.
+  ASSERT(CpuFeatures::IsEnabled(VFP3));
+
+  uint32_t enc;
+  if (FitsVMOVDoubleImmediate(imm, &enc)) {
+    // The double can be encoded in the instruction.
+    emit(cond | 0xE*B24 | 0xB*B20 | dst.code()*B12 | 0xB*B8 | enc);
+  } else {
+    // Synthesise the double from ARM immediates. This could be implemented
+    // using vldr from a constant pool.
+    uint32_t lo, hi;
+    DoubleAsTwoUInt32(imm, &lo, &hi);
+
+    if (lo == hi) {
+      // If the lo and hi parts of the double are equal, the literal is easier
+      // to create. This is the case with 0.0.
+      mov(ip, Operand(lo));
+      vmov(dst, ip, ip);
+    } else {
+      // Move the low part of the double into the lower of the corresponsing S
+      // registers of D register dst.
+      mov(ip, Operand(lo));
+      vmov(dst.low(), ip, cond);
+
+      // Move the high part of the double into the higher of the corresponsing S
+      // registers of D register dst.
+      mov(ip, Operand(hi));
+      vmov(dst.high(), ip, cond);
+    }
+  }
+}
+
+
+void Assembler::vmov(const SwVfpRegister dst,
+                     const SwVfpRegister src,
+                     const Condition cond) {
+  // Sd = Sm
+  // Instruction details available in ARM DDI 0406B, A8-642.
+  ASSERT(CpuFeatures::IsEnabled(VFP3));
+  emit(cond | 0xE*B24 | 0xB*B20 |
+       dst.code()*B12 | 0x5*B9 | B6 | src.code());
+}
+
+
+void Assembler::vmov(const DwVfpRegister dst,
+                     const DwVfpRegister src,
+                     const Condition cond) {
+  // Dd = Dm
+  // Instruction details available in ARM DDI 0406B, A8-642.
+  ASSERT(CpuFeatures::IsEnabled(VFP3));
+  emit(cond | 0xE*B24 | 0xB*B20 |
+       dst.code()*B12 | 0x5*B9 | B8 | B6 | src.code());
 }
 
 
@@ -1741,6 +2296,21 @@ void Assembler::vcmp(const DwVfpRegister src1,
 }
 
 
+void Assembler::vcmp(const DwVfpRegister src1,
+                     const double src2,
+                     const SBit s,
+                     const Condition cond) {
+  // vcmp(Dd, Dm) double precision floating point comparison.
+  // Instruction details available in ARM DDI 0406A, A8-570.
+  // cond(31-28) | 11101 (27-23)| D=?(22) | 11 (21-20) | 0101 (19-16) |
+  // Vd(15-12) | 101(11-9) | sz(8)=1 | E(7)=? | 1(6) | M(5)=? | 0(4) | 0000(3-0)
+  ASSERT(CpuFeatures::IsEnabled(VFP3));
+  ASSERT(src2 == 0.0);
+  emit(cond | 0xE*B24 |B23 | 0x3*B20 | B18 | B16 |
+       src1.code()*B12 | 0x5*B9 | B8 | B6);
+}
+
+
 void Assembler::vmrs(Register dst, Condition cond) {
   // Instruction details available in ARM DDI 0406A, A8-652.
   // cond(31-28) | 1110 (27-24) | 1111(23-20)| 0001 (19-16) |
@@ -1751,39 +2321,23 @@ void Assembler::vmrs(Register dst, Condition cond) {
 }
 
 
+
+void Assembler::vsqrt(const DwVfpRegister dst,
+                      const DwVfpRegister src,
+                      const Condition cond) {
+  // cond(31-28) | 11101 (27-23)| D=?(22) | 11 (21-20) | 0001 (19-16) |
+  // Vd(15-12) | 101(11-9) | sz(8)=1 | 11 (7-6) | M(5)=? | 0(4) | Vm(3-0)
+  ASSERT(CpuFeatures::IsEnabled(VFP3));
+  emit(cond | 0xE*B24 | B23 | 0x3*B20 | B16 |
+       dst.code()*B12 | 0x5*B9 | B8 | 3*B6 | src.code());
+}
+
+
 // Pseudo instructions.
 void Assembler::nop(int type) {
   // This is mov rx, rx.
   ASSERT(0 <= type && type <= 14);  // mov pc, pc is not a nop.
   emit(al | 13*B21 | type*B12 | type);
-}
-
-
-void Assembler::lea(Register dst,
-                    const MemOperand& x,
-                    SBit s,
-                    Condition cond) {
-  int am = x.am_;
-  if (!x.rm_.is_valid()) {
-    // Immediate offset.
-    if ((am & P) == 0)  // post indexing
-      mov(dst, Operand(x.rn_), s, cond);
-    else if ((am & U) == 0)  // negative indexing
-      sub(dst, x.rn_, Operand(x.offset_), s, cond);
-    else
-      add(dst, x.rn_, Operand(x.offset_), s, cond);
-  } else {
-    // Register offset (shift_imm_ and shift_op_ are 0) or scaled
-    // register offset the constructors make sure than both shift_imm_
-    // and shift_op_ are initialized.
-    ASSERT(!x.rm_.is(pc));
-    if ((am & P) == 0)  // post indexing
-      mov(dst, Operand(x.rn_), s, cond);
-    else if ((am & U) == 0)  // negative indexing
-      sub(dst, x.rn_, Operand(x.rm_, x.shift_op_, x.shift_imm_), s, cond);
-    else
-      add(dst, x.rn_, Operand(x.rm_, x.shift_op_, x.shift_imm_), s, cond);
-  }
 }
 
 
@@ -1804,6 +2358,13 @@ void Assembler::RecordJSReturn() {
   WriteRecordedPositions();
   CheckBuffer();
   RecordRelocInfo(RelocInfo::JS_RETURN);
+}
+
+
+void Assembler::RecordDebugBreakSlot() {
+  WriteRecordedPositions();
+  CheckBuffer();
+  RecordRelocInfo(RelocInfo::DEBUG_BREAK_SLOT);
 }
 
 
@@ -1829,13 +2390,16 @@ void Assembler::RecordStatementPosition(int pos) {
 }
 
 
-void Assembler::WriteRecordedPositions() {
+bool Assembler::WriteRecordedPositions() {
+  bool written = false;
+
   // Write the statement position if it is different from what was written last
   // time.
   if (current_statement_position_ != written_statement_position_) {
     CheckBuffer();
     RecordRelocInfo(RelocInfo::STATEMENT_POSITION, current_statement_position_);
     written_statement_position_ = current_statement_position_;
+    written = true;
   }
 
   // Write the position if it is different from what was written last time and
@@ -1845,7 +2409,11 @@ void Assembler::WriteRecordedPositions() {
     CheckBuffer();
     RecordRelocInfo(RelocInfo::POSITION, current_position_);
     written_position_ = current_position_;
+    written = true;
   }
+
+  // Return whether something was written.
+  return written;
 }
 
 
@@ -1902,9 +2470,10 @@ void Assembler::GrowBuffer() {
 
 void Assembler::RecordRelocInfo(RelocInfo::Mode rmode, intptr_t data) {
   RelocInfo rinfo(pc_, rmode, data);  // we do not try to reuse pool constants
-  if (rmode >= RelocInfo::JS_RETURN && rmode <= RelocInfo::STATEMENT_POSITION) {
+  if (rmode >= RelocInfo::JS_RETURN && rmode <= RelocInfo::DEBUG_BREAK_SLOT) {
     // Adjust code for new modes.
-    ASSERT(RelocInfo::IsJSReturn(rmode)
+    ASSERT(RelocInfo::IsDebugBreakSlot(rmode)
+           || RelocInfo::IsJSReturn(rmode)
            || RelocInfo::IsComment(rmode)
            || RelocInfo::IsPosition(rmode));
     // These modes do not need an entry in the constant pool.
@@ -2042,3 +2611,5 @@ void Assembler::CheckConstPool(bool force_emit, bool require_jump) {
 
 
 } }  // namespace v8::internal
+
+#endif  // V8_TARGET_ARCH_ARM

@@ -27,6 +27,8 @@
 
 #include "v8.h"
 
+#if defined(V8_TARGET_ARCH_ARM)
+
 #include "constants-arm.h"
 
 
@@ -34,6 +36,26 @@ namespace assembler {
 namespace arm {
 
 namespace v8i = v8::internal;
+
+double Instr::DoubleImmedVmov() const {
+  // Reconstruct a double from the immediate encoded in the vmov instruction.
+  //
+  //   instruction: [xxxxxxxx,xxxxabcd,xxxxxxxx,xxxxefgh]
+  //   double: [aBbbbbbb,bbcdefgh,00000000,00000000,
+  //            00000000,00000000,00000000,00000000]
+  //
+  // where B = ~b. Only the high 16 bits are affected.
+  uint64_t high16;
+  high16  = (Bits(17, 16) << 4) | Bits(3, 0);   // xxxxxxxx,xxcdefgh.
+  high16 |= (0xff * Bit(18)) << 6;              // xxbbbbbb,bbxxxxxx.
+  high16 |= (Bit(18) ^ 1) << 14;                // xBxxxxxx,xxxxxxxx.
+  high16 |= Bit(19) << 15;                      // axxxxxxx,xxxxxxxx.
+
+  uint64_t imm = high16 << 48;
+  double d;
+  memcpy(&d, &imm, 8);
+  return d;
+}
 
 
 // These register names are defined in a way to match the native disassembler
@@ -83,7 +105,7 @@ const char* VFPRegisters::names_[kNumVFPRegisters] = {
 
 const char* VFPRegisters::Name(int reg, bool is_double) {
   ASSERT((0 <= reg) && (reg < kNumVFPRegisters));
-  return names_[reg + is_double ? kNumVFPSingleRegisters : 0];
+  return names_[reg + (is_double ? kNumVFPSingleRegisters : 0)];
 }
 
 
@@ -128,3 +150,5 @@ int Registers::Number(const char* name) {
 
 
 } }  // namespace assembler::arm
+
+#endif  // V8_TARGET_ARCH_ARM

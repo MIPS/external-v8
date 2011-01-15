@@ -669,3 +669,24 @@ intConversion();
 function shiftByZero(n) { return n << 0; }
 
 assertEquals(3, shiftByZero(3.1415));
+
+// Verify that the static type information of x >>> 32 is computed correctly.
+function LogicalShiftRightByMultipleOf32(x) {
+  x = x >>> 32;
+  return x + x;
+}
+
+assertEquals(4589934592, LogicalShiftRightByMultipleOf32(-2000000000));
+assertEquals(4589934592, LogicalShiftRightByMultipleOf32(-2000000000));
+
+// Verify that the shift amount is reduced modulo 32, not modulo 64.
+function LeftShiftThreeBy(x) {return 3 << x;}
+assertEquals(24, LeftShiftThreeBy(3));
+assertEquals(24, LeftShiftThreeBy(35));
+assertEquals(24, LeftShiftThreeBy(67));
+assertEquals(24, LeftShiftThreeBy(-29));
+
+// Regression test for a bug in the ARM code generator.  For some register
+// allocations we got the Smi overflow case wrong.
+function f(x, y) { return y +  ( 1 << (x & 31)); }
+assertEquals(-2147483647, f(31, 1));

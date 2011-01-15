@@ -34,6 +34,7 @@ Import('context object_files')
 
 SOURCES = {
   'all': [
+    'gay-fixed.cc',
     'gay-shortest.cc',
     'test-accessors.cc',
     'test-alloc.cc',
@@ -49,12 +50,14 @@ SOURCES = {
     'test-diy-fp.cc',
     'test-double.cc',
     'test-fast-dtoa.cc',
+    'test-fixed-dtoa.cc',
     'test-flags.cc',
     'test-func-name-inference.cc',
     'test-hashmap.cc',
     'test-heap.cc',
     'test-heap-profiler.cc',
     'test-list.cc',
+    'test-liveedit.cc',
     'test-lock.cc',
     'test-log.cc',
     'test-log-utils.cc',
@@ -66,8 +69,10 @@ SOURCES = {
     'test-sockets.cc',
     'test-spaces.cc',
     'test-strings.cc',
-    'test-threads.cc',
     'test-thread-termination.cc',
+    'test-threads.cc',
+    'test-type-info.cc',
+    'test-unbound-queue.cc',
     'test-utils.cc',
     'test-version.cc'
   ],

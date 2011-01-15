@@ -36,7 +36,7 @@ namespace internal {
 
 void VirtualFrame::Adjust(int count) {
   ASSERT(count >= 0);
-  element_count_ += count;
+  RaiseHeight(count, 0);
 }
 
 
@@ -45,5 +45,8 @@ Register VirtualFrame::SpillAnyRegister() {
   UNIMPLEMENTED();
   return no_reg;
 }
+
+
+InvalidVirtualFrameInitializer* kInvalidVirtualFrameInitializer = NULL;
 
 } }  // namespace v8::internal

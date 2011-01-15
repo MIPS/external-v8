@@ -323,6 +323,7 @@ TEST(Utf8Conversion) {
       0xE3, 0x81, 0x85, 0x00};
   // The number of bytes expected to be written for each length
   const int lengths[12] = {0, 0, 2, 3, 3, 3, 6, 7, 7, 7, 10, 11};
+  const int char_lengths[12] = {0, 0, 1, 2, 2, 2, 3, 4, 4, 4, 5, 5};
   v8::Handle<v8::String> mixed = v8::String::New(mixed_string, 5);
   CHECK_EQ(10, mixed->Utf8Length());
   // Try encoding the string with all capacities
@@ -332,8 +333,10 @@ TEST(Utf8Conversion) {
     // Clear the buffer before reusing it
     for (int j = 0; j < 11; j++)
       buffer[j] = kNoChar;
-    int written = mixed->WriteUtf8(buffer, i);
+    int chars_written;
+    int written = mixed->WriteUtf8(buffer, i, &chars_written);
     CHECK_EQ(lengths[i], written);
+    CHECK_EQ(char_lengths[i], chars_written);
     // Check that the contents are correct
     for (int j = 0; j < lengths[i]; j++)
       CHECK_EQ(as_utf8[j], static_cast<unsigned char>(buffer[j]));
@@ -429,4 +432,52 @@ TEST(ExternalShortStringAdd) {
     "test()";
   CHECK_EQ(0,
            v8::Script::Compile(v8::String::New(source))->Run()->Int32Value());
+}
+
+
+TEST(CachedHashOverflow) {
+  // We incorrectly allowed strings to be tagged as array indices even if their
+  // values didn't fit in the hash field.
+  // See http://code.google.com/p/v8/issues/detail?id=728
+  ZoneScope zone(DELETE_ON_EXIT);
+
+  InitializeVM();
+  v8::HandleScope handle_scope;
+  // Lines must be executed sequentially. Combining them into one script
+  // makes the bug go away.
+  const char* lines[] = {
+      "var x = [];",
+      "x[4] = 42;",
+      "var s = \"1073741828\";",
+      "x[s];",
+      "x[s] = 37;",
+      "x[4];",
+      "x[s];",
+      NULL
+  };
+
+  Handle<Smi> fortytwo(Smi::FromInt(42));
+  Handle<Smi> thirtyseven(Smi::FromInt(37));
+  Handle<Object> results[] = {
+      Factory::undefined_value(),
+      fortytwo,
+      Factory::undefined_value(),
+      Factory::undefined_value(),
+      thirtyseven,
+      fortytwo,
+      thirtyseven  // Bug yielded 42 here.
+  };
+
+  const char* line;
+  for (int i = 0; (line = lines[i]); i++) {
+    printf("%s\n", line);
+    v8::Local<v8::Value> result =
+        v8::Script::Compile(v8::String::New(line))->Run();
+    CHECK_EQ(results[i]->IsUndefined(), result->IsUndefined());
+    CHECK_EQ(results[i]->IsNumber(), result->IsNumber());
+    if (result->IsNumber()) {
+      CHECK_EQ(Smi::cast(results[i]->ToSmi())->value(),
+               result->ToInt32()->Value());
+    }
+  }
 }

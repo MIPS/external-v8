@@ -42,6 +42,9 @@ var COMPILATION_TYPE_JSON = 2;
 var kVowelSounds = 0;
 var kCapitalVowelSounds = 0;
 
+// Matches Messages::kNoLineNumberInfo from v8.h
+var kNoLineNumberInfo = 0;
+
 // If this object gets passed to an error constructor the error will
 // get an accessor for .message that constructs a descriptive error
 // message on access.
@@ -178,7 +181,6 @@ function FormatMessage(message) {
       // RangeError
       invalid_array_length:         "Invalid array length",
       stack_overflow:               "Maximum call stack size exceeded",
-      apply_overflow:               "Function.prototype.apply cannot support %0 arguments",
       // SyntaxError
       unable_to_parse:              "Parse error",
       duplicate_regexp_flag:        "Duplicate RegExp flag %0",
@@ -193,7 +195,9 @@ function FormatMessage(message) {
       circular_structure:           "Converting circular structure to JSON",
       obj_ctor_property_non_object: "Object.%0 called on non-object",
       array_indexof_not_defined:    "Array.getIndexOf: Argument undefined",
-      illegal_access:               "illegal access"
+      object_not_extensible:        "Can't add property %0, object is not extensible",
+      illegal_access:               "Illegal access",
+      invalid_preparser_data:       "Invalid preparser data for function %0"
     };
   }
   var format = kMessages[message.type];
@@ -203,9 +207,9 @@ function FormatMessage(message) {
 
 
 function GetLineNumber(message) {
-  if (message.startPos == -1) return -1;
+  if (message.startPos == -1) return kNoLineNumberInfo;
   var location = message.script.locationFromPosition(message.startPos, true);
-  if (location == null) return -1;
+  if (location == null) return kNoLineNumberInfo;
   return location.line + 1;
 }
 
@@ -596,18 +600,22 @@ function GetPositionInLine(message) {
 }
 
 
-function ErrorMessage(type, args, startPos, endPos, script, stackTrace) {
+function ErrorMessage(type, args, startPos, endPos, script, stackTrace,
+                      stackFrames) {
   this.startPos = startPos;
   this.endPos = endPos;
   this.type = type;
   this.args = args;
   this.script = script;
   this.stackTrace = stackTrace;
+  this.stackFrames = stackFrames;
 }
 
 
-function MakeMessage(type, args, startPos, endPos, script, stackTrace) {
-  return new ErrorMessage(type, args, startPos, endPos, script, stackTrace);
+function MakeMessage(type, args, startPos, endPos, script, stackTrace,
+                     stackFrames) {
+  return new ErrorMessage(type, args, startPos, endPos, script, stackTrace,
+                          stackFrames);
 }
 
 
@@ -699,14 +707,20 @@ CallSite.prototype.getMethodName = function () {
   // See if we can find a unique property on the receiver that holds
   // this function.
   var ownName = this.fun.name;
-  if (ownName && this.receiver && this.receiver[ownName] === this.fun)
+  if (ownName && this.receiver &&
+      (ObjectLookupGetter.call(this.receiver, ownName) === this.fun ||
+       ObjectLookupSetter.call(this.receiver, ownName) === this.fun ||
+       this.receiver[ownName] === this.fun)) {
     // To handle DontEnum properties we guess that the method has
     // the same name as the function.
     return ownName;
+  }
   var name = null;
   for (var prop in this.receiver) {
-    if (this.receiver[prop] === this.fun) {
-      // If we find more than one match bail out to avoid confusion
+    if (this.receiver.__lookupGetter__(prop) === this.fun ||
+        this.receiver.__lookupSetter__(prop) === this.fun ||
+        (!this.receiver.__lookupGetter__(prop) && this.receiver[prop] === this.fun)) {
+      // If we find more than one match bail out to avoid confusion.
       if (name)
         return null;
       name = prop;

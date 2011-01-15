@@ -46,11 +46,35 @@ namespace internal {
 #elif defined(__ARMEL__)
 #define V8_HOST_ARCH_ARM 1
 #define V8_HOST_ARCH_32_BIT 1
+// Some CPU-OS combinations allow unaligned access on ARM. We assume
+// that unaligned accesses are not allowed unless the build system
+// defines the CAN_USE_UNALIGNED_ACCESSES macro to be non-zero.
+#if CAN_USE_UNALIGNED_ACCESSES
+#define V8_HOST_CAN_READ_UNALIGNED 1
+#endif
 #elif defined(_MIPS_ARCH_MIPS32R2)
 #define V8_HOST_ARCH_MIPS 1
 #define V8_HOST_ARCH_32_BIT 1
 #else
 #error Host architecture was not detected as supported by v8
+#endif
+
+// Target architecture detection. This may be set externally. If not, detect
+// in the same way as the host architecture, that is, target the native
+// environment as presented by the compiler.
+#if !defined(V8_TARGET_ARCH_X64) && !defined(V8_TARGET_ARCH_IA32) && \
+    !defined(V8_TARGET_ARCH_ARM) && !defined(V8_TARGET_ARCH_MIPS)
+#if defined(_M_X64) || defined(__x86_64__)
+#define V8_TARGET_ARCH_X64 1
+#elif defined(_M_IX86) || defined(__i386__)
+#define V8_TARGET_ARCH_IA32 1
+#elif defined(__ARMEL__)
+#define V8_TARGET_ARCH_ARM 1
+#elif defined(_MIPS_ARCH_MIPS32R2)
+#define V8_TARGET_ARCH_MIPS 1
+#else
+#error Target architecture was not detected as supported by v8
+#endif
 #endif
 
 // Check for supported combinations of host and target architectures.
@@ -73,6 +97,12 @@ namespace internal {
 #if defined(V8_TARGET_ARCH_X64) || defined(V8_TARGET_ARCH_IA32)
 #define V8_TARGET_CAN_READ_UNALIGNED 1
 #elif V8_TARGET_ARCH_ARM
+// Some CPU-OS combinations allow unaligned access on ARM. We assume
+// that unaligned accesses are not allowed unless the build system
+// defines the CAN_USE_UNALIGNED_ACCESSES macro to be non-zero.
+#if CAN_USE_UNALIGNED_ACCESSES
+#define V8_TARGET_CAN_READ_UNALIGNED 1
+#endif
 #elif V8_TARGET_ARCH_MIPS
 #else
 #error Target architecture is not supported by v8
@@ -281,7 +311,6 @@ class HeapObject;
 class IC;
 class InterceptorInfo;
 class IterationStatement;
-class Array;
 class JSArray;
 class JSFunction;
 class JSObject;
@@ -305,6 +334,7 @@ class RegExpCompiler;
 class RegExpVisitor;
 class Scope;
 template<class Allocator = FreeStoreAllocationPolicy> class ScopeInfo;
+class SerializedScopeInfo;
 class Script;
 class Slot;
 class Smi;
@@ -324,7 +354,6 @@ class ObjectGroup;
 class TickSample;
 class VirtualMemory;
 class Mutex;
-class ZoneScopeInfo;
 
 typedef bool (*WeakSlotCallback)(Object** pointer);
 
@@ -442,6 +471,12 @@ enum CallFunctionFlags {
 };
 
 
+enum InlineCacheHolderFlag {
+  OWN_MAP,  // For fast properties objects.
+  PROTOTYPE_MAP  // For slow properties objects (except GlobalObjects).
+};
+
+
 // Type of properties.
 // Order of properties is significant.
 // Must fit in the BitField PropertyDetails::TypeField.
@@ -477,6 +512,31 @@ union DoubleRepresentation {
   double  value;
   int64_t bits;
   DoubleRepresentation(double x) { value = x; }
+};
+
+
+// Union used for customized checking of the IEEE double types
+// inlined within v8 runtime, rather than going to the underlying
+// platform headers and libraries
+union IeeeDoubleLittleEndianArchType {
+  double d;
+  struct {
+    unsigned int man_low  :32;
+    unsigned int man_high :20;
+    unsigned int exp      :11;
+    unsigned int sign     :1;
+  } bits;
+};
+
+
+union IeeeDoubleBigEndianArchType {
+  double d;
+  struct {
+    unsigned int sign     :1;
+    unsigned int exp      :11;
+    unsigned int man_high :20;
+    unsigned int man_low  :32;
+  } bits;
 };
 
 
@@ -522,16 +582,16 @@ enum StateTag {
 #define HAS_FAILURE_TAG(value) \
   ((reinterpret_cast<intptr_t>(value) & kFailureTagMask) == kFailureTag)
 
-// OBJECT_SIZE_ALIGN returns the value aligned HeapObject size
-#define OBJECT_SIZE_ALIGN(value)                                \
+// OBJECT_POINTER_ALIGN returns the value aligned as a HeapObject pointer
+#define OBJECT_POINTER_ALIGN(value)                             \
   (((value) + kObjectAlignmentMask) & ~kObjectAlignmentMask)
 
 // POINTER_SIZE_ALIGN returns the value aligned as a pointer.
 #define POINTER_SIZE_ALIGN(value)                               \
   (((value) + kPointerAlignmentMask) & ~kPointerAlignmentMask)
 
-// MAP_SIZE_ALIGN returns the value aligned as a map pointer.
-#define MAP_SIZE_ALIGN(value)                               \
+// MAP_POINTER_ALIGN returns the value aligned as a map pointer.
+#define MAP_POINTER_ALIGN(value)                                \
   (((value) + kMapAlignmentMask) & ~kMapAlignmentMask)
 
 // The expression OFFSET_OF(type, field) computes the byte-offset
@@ -616,17 +676,22 @@ F FUNCTION_CAST(Address addr) {
 #if defined(__GNUC__) && !defined(DEBUG)
 #if (__GNUC__ >= 4)
 #define INLINE(header) inline header  __attribute__((always_inline))
+#define NO_INLINE(header) header __attribute__((noinline))
 #else
 #define INLINE(header) inline __attribute__((always_inline)) header
+#define NO_INLINE(header) __attribute__((noinline)) header
 #endif
 #else
 #define INLINE(header) inline header
+#define NO_INLINE(header) header
 #endif
 
 // Feature flags bit positions. They are mostly based on the CPUID spec.
 // (We assign CPUID itself to one of the currently reserved bits --
 // feel free to change this if needed.)
-enum CpuFeature { SSE3 = 32,   // x86
+// On X86/X64, values below 32 are bits in EDX, values above 32 are bits in ECX.
+enum CpuFeature { SSE4_1 = 32 + 19,  // x86
+                  SSE3 = 32 + 0,     // x86
                   SSE2 = 26,   // x86
                   CMOV = 15,   // x86
                   RDTSC = 4,   // x86

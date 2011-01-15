@@ -193,7 +193,13 @@ void NormalizeProperties(Handle<JSObject> object,
 void NormalizeElements(Handle<JSObject> object);
 void TransformToFastProperties(Handle<JSObject> object,
                                int unused_property_fields);
+
+// Flattens a string.
 void FlattenString(Handle<String> str);
+
+// Flattens a string and returns the underlying external or sequential
+// string.
+Handle<String> FlattenGetString(Handle<String> str);
 
 Handle<Object> SetProperty(Handle<JSObject> object,
                            Handle<String> key,
@@ -261,6 +267,8 @@ Handle<Object> DeleteProperty(Handle<JSObject> obj, Handle<String> prop);
 Handle<Object> LookupSingleCharacterStringFromCode(uint32_t index);
 
 Handle<JSObject> Copy(Handle<JSObject> obj);
+
+Handle<Object> SetAccessor(Handle<JSObject> obj, Handle<AccessorInfo> info);
 
 Handle<FixedArray> AddKeysFromJSArray(Handle<FixedArray>,
                                       Handle<JSArray> array);
@@ -344,9 +352,6 @@ bool CompileLazy(Handle<JSFunction> function,
 bool CompileLazyInLoop(Handle<JSFunction> function,
                        Handle<Object> receiver,
                        ClearExceptionFlag flag);
-
-// Returns the lazy compilation stub for argc arguments.
-Handle<Code> ComputeLazyCompile(int argc);
 
 class NoHandleAllocation BASE_EMBEDDED {
  public:

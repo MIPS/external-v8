@@ -34,9 +34,17 @@
 
 
 #include "v8.h"
+
+#if defined(V8_TARGET_ARCH_MIPS)
+
 #include "mips/assembler-mips-inl.h"
 #include "serialize.h"
 
+#ifdef _MIPS_ARCH_MIPS32R2
+  #define mips32r2 1
+#else
+  #define mips32r2 0
+#endif
 
 namespace v8 {
 namespace internal {
@@ -265,6 +273,37 @@ MemOperand::MemOperand(Register rm, int16_t offset) : Operand(rm) {
 
 static const int kMinimalBufferSize = 4*KB;
 static byte* spare_buffer_ = NULL;
+static const int kNegOffset = 0x00008000;
+// addiu(sp, sp, 4) aka Pop() operation or part of Pop(r)
+// operations as post-increment of sp.
+static const Instr kPopInstruction = ADDIU | (sp.code() << kRsShift)
+      | (sp.code() << kRtShift) | (kPointerSize & kImm16Mask);
+// addiu(sp, sp, -4) part of Push(r) operation as pre-decrement of sp.
+static const Instr kPushInstruction = ADDIU | (sp.code() << kRsShift)
+      | (sp.code() << kRtShift) | (-kPointerSize & kImm16Mask);
+// sw(r, MemOperand(sp, 0))
+static const Instr kPushRegPattern = SW | (sp.code() << kRsShift)
+      |  (0 & kImm16Mask);
+//  lw(r, MemOperand(sp, 0))
+static const Instr kPopRegPattern = LW | (sp.code() << kRsShift)
+      |  (0 & kImm16Mask);
+
+static const Instr kLwRegFpOffsetPattern = LW | (s8_fp.code() << kRsShift)
+      |  (0 & kImm16Mask);
+
+static const Instr kSwRegFpOffsetPattern = SW | (s8_fp.code() << kRsShift)
+      |  (0 & kImm16Mask);
+
+static const Instr kLwRegFpNegOffsetPattern = LW | (s8_fp.code() << kRsShift)
+      |  (kNegOffset & kImm16Mask);
+
+static const Instr kSwRegFpNegOffsetPattern = SW | (s8_fp.code() << kRsShift)
+      |  (kNegOffset & kImm16Mask);
+// A mask for the Rt register for push, pop, lw, sw instructions.
+static const Instr kRtMask = kRtFieldMask;
+static const Instr kLwSwInstrTypeMask = 0xffe00000;
+static const Instr kLwSwInstrArgumentMask  = ~kLwSwInstrTypeMask;
+static const Instr kLwSwOffsetMask = kImm16Mask;
 
 Assembler::Assembler(void* buffer, int buffer_size) {
   if (buffer == NULL) {
@@ -304,6 +343,7 @@ Assembler::Assembler(void* buffer, int buffer_size) {
 
   last_trampoline_pool_end_ = 0;
   no_trampoline_pool_before_ = 0;
+  trampoline_pool_blocked_nesting_ = 0;
   next_buffer_check_ = kMaxBranchOffset - kTrampolineSize;
 }
 
@@ -326,6 +366,59 @@ void Assembler::GetCode(CodeDesc* desc) {
   desc->buffer_size = buffer_size_;
   desc->instr_size = pc_offset();
   desc->reloc_size = (buffer_ + buffer_size_) - reloc_info_writer.pos();
+}
+
+
+void Assembler::Align(int m) {
+  ASSERT(m >= 4 && IsPowerOf2(m));
+  while ((pc_offset() & (m - 1)) != 0) {
+    nop();
+  }
+}
+
+
+void Assembler::CodeTargetAlign() {
+  // No advantage to aligning branch/call targets to more than
+  // single instruction, that I am aware of.
+  Align(4);
+}
+
+
+Register Assembler::GetRt(Instr instr) {
+  Register rt;
+  rt.code_ = (instr & kRtMask) >> kRtShift;
+  return rt;
+}
+
+
+bool Assembler::IsPop(Instr instr) {
+  return (instr & ~kRtMask) == kPopRegPattern;
+}
+
+
+bool Assembler::IsPush(Instr instr) {
+  return (instr & ~kRtMask) == kPushRegPattern;
+}
+
+
+bool Assembler::IsSwRegFpOffset(Instr instr) {
+  return ((instr & kLwSwInstrTypeMask) == kSwRegFpOffsetPattern);
+}
+
+
+bool Assembler::IsLwRegFpOffset(Instr instr) {
+  return ((instr & kLwSwInstrTypeMask) == kLwRegFpOffsetPattern);
+}
+
+
+bool Assembler::IsSwRegFpNegOffset(Instr instr) {
+  return ((instr & (kLwSwInstrTypeMask | kNegOffset)) ==
+          kSwRegFpNegOffsetPattern);
+}
+
+bool Assembler::IsLwRegFpNegOffset(Instr instr) {
+  return ((instr & (kLwSwInstrTypeMask | kNegOffset)) ==
+          kLwRegFpNegOffsetPattern);
 }
 
 
@@ -410,6 +503,29 @@ Instr Assembler::set_lw_offset(Instr instr, int16_t offset) {
 
   return temp_instr;
 }
+
+
+bool Assembler::IsSw(Instr instr) {
+  return ((instr & kOpcodeMask) == SW);
+}
+
+
+Instr Assembler::SetSwOffset(Instr instr, int16_t offset) {
+  ASSERT(IsSw(instr));
+  return ((instr & ~kImm16Mask) | (offset & kImm16Mask));
+}
+
+
+bool Assembler::IsAddImmediate(Instr instr) {
+  return ((instr & kOpcodeMask) == ADDIU);
+}
+
+
+Instr Assembler::SetAddImmediateOffset(Instr instr, int16_t offset) {
+  ASSERT(IsAddImmediate(instr));
+  return ((instr & ~kImm16Mask) | (offset & kImm16Mask));
+}
+
 
 int Assembler::target_at(int32_t pos) {
   Instr instr = instr_at(pos);
@@ -660,10 +776,11 @@ void Assembler::GenInstrImmediate(Opcode opcode,
 // Registers are in the order of the instruction encoding, from left to right.
 void Assembler::GenInstrJump(Opcode opcode,
                               uint32_t address) {
-  BlockTrampolinePoolFor(2);
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   ASSERT(is_uint26(address));
   Instr instr = opcode | address;
   emit(instr);
+  BlockTrampolinePoolFor(1);
 }
 
 // Returns the next free label entry from the next trampoline pool.
@@ -812,52 +929,60 @@ void Assembler::bal(int16_t offset) {
 
 
 void Assembler::beq(Register rs, Register rt, int16_t offset) {
-  BlockTrampolinePoolFor(2);
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   GenInstrImmediate(BEQ, rs, rt, offset);
+  BlockTrampolinePoolFor(1);
 }
 
 
 void Assembler::bgez(Register rs, int16_t offset) {
-  BlockTrampolinePoolFor(2);
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   GenInstrImmediate(REGIMM, rs, BGEZ, offset);
+  BlockTrampolinePoolFor(1);
 }
 
 
 void Assembler::bgezal(Register rs, int16_t offset) {
-  BlockTrampolinePoolFor(2);
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   WriteRecordedPositions();
   GenInstrImmediate(REGIMM, rs, BGEZAL, offset);
+  BlockTrampolinePoolFor(1);
 }
 
 
 void Assembler::bgtz(Register rs, int16_t offset) {
-  BlockTrampolinePoolFor(2);
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   GenInstrImmediate(BGTZ, rs, zero_reg, offset);
+  BlockTrampolinePoolFor(1);
 }
 
 
 void Assembler::blez(Register rs, int16_t offset) {
-  BlockTrampolinePoolFor(2);
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   GenInstrImmediate(BLEZ, rs, zero_reg, offset);
+  BlockTrampolinePoolFor(1);
 }
 
 
 void Assembler::bltz(Register rs, int16_t offset) {
-  BlockTrampolinePoolFor(2);
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   GenInstrImmediate(REGIMM, rs, BLTZ, offset);
+  BlockTrampolinePoolFor(1);
 }
 
 
 void Assembler::bltzal(Register rs, int16_t offset) {
-  BlockTrampolinePoolFor(2);
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   WriteRecordedPositions();
   GenInstrImmediate(REGIMM, rs, BLTZAL, offset);
+  BlockTrampolinePoolFor(1);
 }
 
 
 void Assembler::bne(Register rs, Register rt, int16_t offset) {
-  BlockTrampolinePoolFor(2);
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   GenInstrImmediate(BNE, rs, rt, offset);
+  BlockTrampolinePoolFor(1);
 }
 
 
@@ -868,11 +993,12 @@ void Assembler::j(int32_t target) {
 
 
 void Assembler::jr(Register rs) {
-  BlockTrampolinePoolFor(2);
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   if (rs.is(ra)) {
     WriteRecordedPositions();
   }
   GenInstrRegister(SPECIAL, rs, zero_reg, zero_reg, 0, JR);
+  BlockTrampolinePoolFor(1);
 }
 
 
@@ -884,9 +1010,10 @@ void Assembler::jal(int32_t target) {
 
 
 void Assembler::jalr(Register rs, Register rd) {
-  BlockTrampolinePoolFor(2);
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   WriteRecordedPositions();
   GenInstrRegister(SPECIAL, rs, zero_reg, rd, 0, JALR);
+  BlockTrampolinePoolFor(1);
 }
 
 
@@ -901,6 +1028,157 @@ void Assembler::addu(Register rd, Register rs, Register rt) {
 
 void Assembler::addiu(Register rd, Register rs, int32_t j) {
   GenInstrImmediate(ADDIU, rs, rd, j);
+
+  // Eliminate pattern: push(r), pop()
+  //   addiu(sp, sp, Operand(-kPointerSize));
+  //   sw(src, MemOperand(sp, 0);
+  //   addiu(sp, sp, Operand(kPointerSize));
+  // Both instructions can be eliminated.
+  if (can_peephole_optimize(3) &&
+      // Pattern.
+      instr_at(pc_ - 1 * kInstrSize) == kPopInstruction &&
+      (instr_at(pc_ - 2 * kInstrSize) & ~kRtMask) == kPushRegPattern &&
+      (instr_at(pc_ - 3 * kInstrSize)) == kPushInstruction) {
+    pc_ -= 3 * kInstrSize;
+    if (FLAG_print_peephole_optimization) {
+      PrintF("%x push(reg)/pop() eliminated\n", pc_offset());
+    }
+  }
+
+  // Eliminate pattern: push(ry), pop(rx)
+  //   addiu(sp, sp, -kPointerSize)
+  //   sw(ry, MemOperand(sp, 0)
+  //   lw(rx, MemOperand(sp, 0)
+  //   addiu(sp, sp, kPointerSize);
+  // Both instructions can be eliminated if ry = rx.
+  // If ry != rx, a register copy from ry to rx is inserted
+  // after eliminating the push and the pop instructions.
+  if (can_peephole_optimize(4)) {
+    Instr pre_push_sp_set = instr_at(pc_ - 4 * kInstrSize);
+    Instr push_instr = instr_at(pc_ - 3 * kInstrSize);
+    Instr pop_instr = instr_at(pc_ - 2 * kInstrSize);
+    Instr post_pop_sp_set = instr_at(pc_ - 1 * kInstrSize);
+
+    if (IsPush(push_instr) &&
+        IsPop(pop_instr) && pre_push_sp_set == kPushInstruction &&
+        post_pop_sp_set == kPopInstruction) {
+      if ((pop_instr & kRtMask) != (push_instr & kRtMask)) {
+        // For consecutive push and pop on different registers,
+        // we delete both the push & pop and insert a register move.
+        // push ry, pop rx --> mov rx, ry
+        Register reg_pushed, reg_popped;
+        reg_pushed = GetRt(push_instr);
+        reg_popped = GetRt(pop_instr);
+        pc_ -= 4 * kInstrSize;
+        // Insert a mov instruction, which is better than a pair of push & pop
+        or_(reg_popped, reg_pushed, zero_reg);
+        if (FLAG_print_peephole_optimization) {
+          PrintF("%x push/pop (diff reg) replaced by a reg move\n",
+                 pc_offset());
+        }
+      } else {
+        // For consecutive push and pop on the same register,
+        // both the push and the pop can be deleted.
+        pc_ -= 4 * kInstrSize;
+        if (FLAG_print_peephole_optimization) {
+          PrintF("%x push/pop (same reg) eliminated\n", pc_offset());
+        }
+      }
+    }
+  }
+
+  if (can_peephole_optimize(5)) {
+    Instr pre_push_sp_set = instr_at(pc_ - 5 * kInstrSize);
+    Instr mem_write_instr = instr_at(pc_ - 4 * kInstrSize);
+    Instr lw_instr = instr_at(pc_ - 3 * kInstrSize);
+    Instr mem_read_instr = instr_at(pc_ - 2 * kInstrSize);
+    Instr post_pop_sp_set = instr_at(pc_ - 1 * kInstrSize);
+
+    if (IsPush(mem_write_instr) &&
+        pre_push_sp_set == kPushInstruction &&
+        IsPop(mem_read_instr) &&
+        post_pop_sp_set == kPopInstruction) {
+      if ((IsLwRegFpOffset(lw_instr) ||
+        IsLwRegFpNegOffset(lw_instr))) {
+        if ((mem_write_instr & kRtMask) ==
+              (mem_read_instr & kRtMask)) {
+          // Pattern: push & pop from/to same register,
+          // with a fp+offset lw in between
+          //
+          // The following:
+          // addiu sp, sp, -4
+          // sw rx, [sp, #0]!
+          // lw rz, [fp, #-24]
+          // lw rx, [sp, 0],
+          // addiu sp, sp, 4
+          //
+          // Becomes:
+          // if(rx == rz)
+          //   delete all
+          // else
+          //   lw rz, [fp, #-24]
+
+          if ((mem_write_instr & kRtMask) == (lw_instr & kRtMask)) {
+            pc_ -= 5 * kInstrSize;
+          } else {
+            pc_ -= 5 * kInstrSize;
+            // Reinsert back the lw rz.
+            emit(lw_instr);
+          }
+          if (FLAG_print_peephole_optimization) {
+            PrintF("%x push/pop -dead ldr fp+offset in middle\n", pc_offset());
+          }
+        } else {
+          // Pattern: push & pop from/to different registers
+          // with a fp+offset lw in between
+          //
+          // The following:
+          // addiu sp, sp ,-4
+          // sw rx, [sp, 0]
+          // lw rz, [fp, #-24]
+          // lw ry, [sp, 0]
+          // addiu sp, sp, 4
+          //
+          // Becomes:
+          // if(ry == rz)
+          //   mov ry, rx;
+          // else if(rx != rz)
+          //   lw rz, [fp, #-24]
+          //   mov ry, rx
+          // else if((ry != rz) || (rx == rz)) becomes:
+          //   mov ry, rx
+          //   lw rz, [fp, #-24]
+
+          Register reg_pushed, reg_popped;
+          if ((mem_read_instr & kRtMask) == (lw_instr & kRtMask)) {
+            reg_pushed = GetRt(mem_write_instr);
+            reg_popped = GetRt(mem_read_instr);
+            pc_ -= 5 * kInstrSize;
+            or_(reg_popped, reg_pushed, zero_reg);  // move instruction;
+          } else if ((mem_write_instr & kRtMask)
+                                != (lw_instr & kRtMask)) {
+            reg_pushed = GetRt(mem_write_instr);
+            reg_popped = GetRt(mem_read_instr);
+            pc_ -= 5 * kInstrSize;
+            emit(lw_instr);
+            or_(reg_popped, reg_pushed, zero_reg);  // move instruction
+          } else if (((mem_read_instr & kRtMask)
+                                     != (lw_instr & kRtMask)) ||
+                    ((mem_write_instr & kRtMask)
+                                     == (lw_instr & kRtMask)) ) {
+            reg_pushed = GetRt(mem_write_instr);
+            reg_popped = GetRt(mem_read_instr);
+            pc_ -= 5 * kInstrSize;
+            or_(reg_popped, reg_pushed, zero_reg);  // move instruction
+            emit(lw_instr);
+          }
+          if (FLAG_print_peephole_optimization) {
+            PrintF("%x push/pop (ldr fp+off in middle)\n", pc_offset());
+          }
+        }
+      }
+    }
+  }
 }
 
 
@@ -1003,16 +1281,26 @@ void Assembler::srav(Register rd, Register rt, Register rs) {
 
 void Assembler::rotr(Register rd, Register rt, uint16_t sa) {
   ASSERT(rd.is_valid() && rt.is_valid() && is_uint5(sa));
-  Instr instr = SPECIAL | (1 << kRsShift) | (rt.code() << kRtShift)
-      | (rd.code() << kRdShift) | (sa << kSaShift) | SRL;
-  emit(instr);
+  if (mips32r2) {
+    Instr instr = SPECIAL | (1 << kRsShift) | (rt.code() << kRtShift)
+        | (rd.code() << kRdShift) | (sa << kSaShift) | SRL;
+    emit(instr);
+  } else {
+    // Just in case. You should generally use this through MacroAssembler::Ror.
+    UNIMPLEMENTED_MIPS();
+  }
 }
 
 void Assembler::rotrv(Register rd, Register rt, Register rs) {
   ASSERT(rd.is_valid() && rt.is_valid() && rs.is_valid() );
-  Instr instr = SPECIAL | (rs.code() << kRsShift) | (rt.code() << kRtShift)
-      | (rd.code() << kRdShift) | (1 << kSaShift) | SRLV;
-  emit(instr);
+  if (mips32r2) {
+    Instr instr = SPECIAL | (rs.code() << kRsShift) | (rt.code() << kRtShift)
+        | (rd.code() << kRdShift) | (1 << kSaShift) | SRLV;
+    emit(instr);
+  } else {
+    // Just in case. You should generally use this through MacroAssembler::Ror.
+    UNIMPLEMENTED_MIPS();
+  }
 }
 
 //------------Memory-instructions-------------
@@ -1039,6 +1327,54 @@ void Assembler::lhu(Register rd, const MemOperand& rs) {
 
 void Assembler::lw(Register rd, const MemOperand& rs) {
   GenInstrImmediate(LW, rs.rm(), rd, rs.offset_);
+
+  if (can_peephole_optimize(2)) {
+    Instr sw_instr = instr_at(pc_ - 2 * kInstrSize);
+    Instr lw_instr = instr_at(pc_ - 1 * kInstrSize);
+
+    if ((IsSwRegFpOffset(sw_instr) &&
+         IsLwRegFpOffset(lw_instr)) ||
+       (IsSwRegFpNegOffset(sw_instr) &&
+         IsLwRegFpNegOffset(lw_instr))) {
+      if ((lw_instr & kLwSwInstrArgumentMask) ==
+            (sw_instr & kLwSwInstrArgumentMask)) {
+        // Pattern: Lw/sw same fp+offset, same register.
+        //
+        // The following:
+        // sw rx, [fp, #-12]
+        // lw rx, [fp, #-12]
+        //
+        // Becomes:
+        // sw rx, [fp, #-12]
+
+        pc_ -= 1 * kInstrSize;
+        if (FLAG_print_peephole_optimization) {
+          PrintF("%x sw/lw (fp + same offset), same reg\n", pc_offset());
+        }
+      } else if ((lw_instr & kLwSwOffsetMask) ==
+                 (sw_instr & kLwSwOffsetMask)) {
+        // Pattern: Lw/sw same fp+offset, different register.
+        //
+        // The following:
+        // sw rx, [fp, #-12]
+        // lw ry, [fp, #-12]
+        //
+        // Becomes:
+        // sw rx, [fp, #-12]
+        // mov ry, rx
+
+        Register reg_stored, reg_loaded;
+        reg_stored = GetRt(sw_instr);
+        reg_loaded = GetRt(lw_instr);
+        pc_ -= 1 * kInstrSize;
+        // Insert a mov instruction, which is better than lw.
+        or_(reg_loaded, reg_stored, zero_reg);  // move instruction.
+        if (FLAG_print_peephole_optimization) {
+          PrintF("%x sw/lw (fp + same offset), diff reg \n", pc_offset());
+        }
+      }
+    }
+  }
 }
 
 
@@ -1064,6 +1400,23 @@ void Assembler::sh(Register rd, const MemOperand& rs) {
 
 void Assembler::sw(Register rd, const MemOperand& rs) {
   GenInstrImmediate(SW, rs.rm(), rd, rs.offset_);
+
+  // Eliminate pattern: pop(), push(r)
+  //     addiu sp, sp, Operand(kPointerSize);
+  //     addiu sp, sp, Operand(-kPointerSize);
+  // ->  sw r, MemOpernad(sp, 0);
+  if (can_peephole_optimize(3) &&
+     // Pattern.
+     instr_at(pc_ - 1 * kInstrSize) ==
+       (kPushRegPattern | (rd.code() << kRtShift)) &&
+     instr_at(pc_ - 2 * kInstrSize) == kPushInstruction &&
+     instr_at(pc_ - 3 * kInstrSize) == kPopInstruction) {
+    pc_ -= 3 * kInstrSize;
+    GenInstrImmediate(SW, rs.rm(), rd, rs.offset_);
+    if (FLAG_print_peephole_optimization) {
+      PrintF("%x pop()/push(reg) eliminated\n", pc_offset());
+    }
+  }
 }
 
 
@@ -1182,6 +1535,18 @@ void Assembler::movn(Register rd, Register rs, Register rt) {
   GenInstrRegister(SPECIAL, rs, rt, rd, 0, MOVN);
 }
 
+void Assembler::movt(Register rd, Register rs, uint16_t cc) {
+  Register rt;
+  rt.code_ = (cc & 0x0003)<<2 | 1;
+  GenInstrRegister(SPECIAL, rs, rt, rd, 0, MOVCI);
+}
+
+void Assembler::movf(Register rd, Register rs, uint16_t cc) {
+  Register rt;
+  rt.code_ = (cc & 0x0003)<<2 | 0;
+  GenInstrRegister(SPECIAL, rs, rt, rd, 0, MOVCI);
+}
+
 // Bit twiddling.
 void Assembler::clz(Register rd, Register rs) {
   // Clz instr requires same GPR number in 'rd' and 'rt' fields.
@@ -1189,15 +1554,27 @@ void Assembler::clz(Register rd, Register rs) {
 }
 
 
-void Assembler::ins(Register rt, Register rs, uint16_t pos, uint16_t size) {
-  // Ins instr has 'rt' field as dest, and two uint5: msb, lsb
-  GenInstrRegister(SPECIAL3, rs, rt, pos + size - 1, pos, INS);
+void Assembler::ins_(Register rt, Register rs, uint16_t pos, uint16_t size) {
+  if (mips32r2) {
+    // Ins instr has 'rt' field as dest, and two uint5: msb, lsb
+    GenInstrRegister(SPECIAL3, rs, rt, pos + size - 1, pos, INS);
+  } else {
+    // Just in case. This instruction should
+    // be called through MacroAssembler::Ins.
+    UNIMPLEMENTED_MIPS();
+  }
 }
 
 
-void Assembler::ext(Register rt, Register rs, uint16_t pos, uint16_t size) {
-  // Ext instr has 'rt' field as dest, and two uint5: msb, lsb
-  GenInstrRegister(SPECIAL3, rs, rt, size - 1, pos, EXT);
+void Assembler::ext_(Register rt, Register rs, uint16_t pos, uint16_t size) {
+  if (mips32r2) {
+    // Ext instr has 'rt' field as dest, and two uint5: msb, lsb.
+    GenInstrRegister(SPECIAL3, rs, rt, size - 1, pos, EXT);
+  } else {
+    // Just in case. This instruction should
+    // be called through MacroAssembler::Ext.
+    UNIMPLEMENTED_MIPS();
+  }
 }
 
 
@@ -1278,6 +1655,10 @@ void Assembler::neg_d(FPURegister fd, FPURegister fs) {
   GenInstrRegister(COP1, D, f0, fs, fd, NEG_D);
 }
 
+void Assembler::sqrt_d(FPURegister fd, FPURegister fs) {
+  GenInstrRegister(COP1, D, f0, fs, fd, SQRT_D);
+}
+
 
 // Conversions.
 
@@ -1302,22 +1683,38 @@ void Assembler::trunc_w_d(FPURegister fd, FPURegister fs) {
 
 
 void Assembler::cvt_l_s(FPURegister fd, FPURegister fs) {
-  GenInstrRegister(COP1, S, f0, fs, fd, CVT_L_S);
+  if (mips32r2) {
+    GenInstrRegister(COP1, S, f0, fs, fd, CVT_L_S);
+  } else {
+    UNIMPLEMENTED_MIPS();
+  }
 }
 
 
 void Assembler::cvt_l_d(FPURegister fd, FPURegister fs) {
-  GenInstrRegister(COP1, D, f0, fs, fd, CVT_L_D);
+  if (mips32r2) {
+    GenInstrRegister(COP1, D, f0, fs, fd, CVT_L_D);
+  } else {
+    UNIMPLEMENTED_MIPS();
+  }
 }
 
 
 void Assembler::trunc_l_s(FPURegister fd, FPURegister fs) {
-  GenInstrRegister(COP1, S, f0, fs, fd, TRUNC_L_S);
+  if (mips32r2) {
+    GenInstrRegister(COP1, S, f0, fs, fd, TRUNC_L_S);
+  } else {
+    UNIMPLEMENTED_MIPS();
+  }
 }
 
 
 void Assembler::trunc_l_d(FPURegister fd, FPURegister fs) {
-  GenInstrRegister(COP1, D, f0, fs, fd, TRUNC_L_D);
+  if (mips32r2) {
+    GenInstrRegister(COP1, D, f0, fs, fd, TRUNC_L_D);
+  } else {
+    UNIMPLEMENTED_MIPS();
+  }
 }
 
 
@@ -1327,7 +1724,11 @@ void Assembler::cvt_s_w(FPURegister fd, FPURegister fs) {
 
 
 void Assembler::cvt_s_l(FPURegister fd, FPURegister fs) {
-  GenInstrRegister(COP1, L, f0, fs, fd, CVT_S_L);
+  if (mips32r2) {
+    GenInstrRegister(COP1, L, f0, fs, fd, CVT_S_L);
+  } else {
+    UNIMPLEMENTED_MIPS();
+  }
 }
 
 
@@ -1342,7 +1743,11 @@ void Assembler::cvt_d_w(FPURegister fd, FPURegister fs) {
 
 
 void Assembler::cvt_d_l(FPURegister fd, FPURegister fs) {
-  GenInstrRegister(COP1, L, f0, fs, fd, CVT_D_L);
+  if (mips32r2) {
+    GenInstrRegister(COP1, L, f0, fs, fd, CVT_D_L);
+  } else {
+    UNIMPLEMENTED_MIPS();
+  }
 }
 
 
@@ -1361,6 +1766,14 @@ void Assembler::c(FPUCondition cond, SecondaryField fmt,
   emit(instr);
 }
 
+void Assembler::fcmp(FPURegister src1, const double src2,
+      FPUCondition cond) {
+  ASSERT(CpuFeatures::IsSupported(FPU));
+  ASSERT(src2 == 0.0);
+  mtc1(zero_reg, f14);
+  cvt_d_w(f14, f14);
+  c(cond, D, src1, f14, 0);
+}
 
 void Assembler::bc1f(int16_t offset, uint16_t cc) {
   ASSERT(is_uint3(cc));
@@ -1381,6 +1794,13 @@ void Assembler::RecordJSReturn() {
   WriteRecordedPositions();
   CheckBuffer();
   RecordRelocInfo(RelocInfo::JS_RETURN);
+}
+
+
+void Assembler::RecordDebugBreakSlot() {
+  WriteRecordedPositions();
+  CheckBuffer();
+  RecordRelocInfo(RelocInfo::DEBUG_BREAK_SLOT);
 }
 
 
@@ -1406,13 +1826,16 @@ void Assembler::RecordStatementPosition(int pos) {
 }
 
 
-void Assembler::WriteRecordedPositions() {
+bool Assembler::WriteRecordedPositions() {
+  bool written = false;
+
   // Write the statement position if it is different from what was written last
   // time.
   if (current_statement_position_ != written_statement_position_) {
     CheckBuffer();
     RecordRelocInfo(RelocInfo::STATEMENT_POSITION, current_statement_position_);
     written_statement_position_ = current_statement_position_;
+    written = true;
   }
 
   // Write the position if it is different from what was written last time and
@@ -1422,7 +1845,11 @@ void Assembler::WriteRecordedPositions() {
     CheckBuffer();
     RecordRelocInfo(RelocInfo::POSITION, current_position_);
     written_position_ = current_position_;
+    written = true;
   }
+
+  // Return whether something was written.
+  return written;
 }
 
 
@@ -1472,9 +1899,10 @@ void Assembler::GrowBuffer() {
 
 void Assembler::RecordRelocInfo(RelocInfo::Mode rmode, intptr_t data) {
   RelocInfo rinfo(pc_, rmode, data);  // we do not try to reuse pool constants
-  if (rmode >= RelocInfo::JS_RETURN && rmode <= RelocInfo::STATEMENT_POSITION) {
+  if (rmode >= RelocInfo::JS_RETURN && rmode <= RelocInfo::DEBUG_BREAK_SLOT) {
     // Adjust code for new modes.
-    ASSERT(RelocInfo::IsJSReturn(rmode)
+    ASSERT(RelocInfo::IsDebugBreakSlot(rmode)
+           || RelocInfo::IsJSReturn(rmode)
            || RelocInfo::IsComment(rmode)
            || RelocInfo::IsPosition(rmode));
     // These modes do not need an entry in the constant pool.
@@ -1507,41 +1935,45 @@ void Assembler::CheckTrampolinePool() {
 
   // Some small sequences of instructions must not be broken up by the
   // insertion of a trampoline pool; such sequences are protected by setting
-  // no_trampoline_pool_before_, which is checked here. Recursive calls to
-  // CheckTrampolinePool are blocked by no_trampoline_pool_before_ as well.
-  if (pc_offset() < no_trampoline_pool_before_) {
+  // either trampoline_pool_blocked_nesting_ or no_trampoline_pool_before_,
+  // which are both checked here. Also, recursive calls to CheckTrampolinePool
+  // are blocked by trampoline_pool_blocked_nesting_.
+  if ((trampoline_pool_blocked_nesting_ > 0) ||
+      (pc_offset() < no_trampoline_pool_before_)) {
     // Emission is currently blocked; make sure we try again as soon as
     // possible.
-    next_buffer_check_ = no_trampoline_pool_before_;
+    if (trampoline_pool_blocked_nesting_ > 0) {
+      next_buffer_check_ = pc_offset() + kInstrSize;
+    } else {
+      next_buffer_check_ = no_trampoline_pool_before_;
+    }
     return;
   }
 
   // First we emit jump (2 instructions), then we emit trampoline pool.
-  BlockTrampolinePoolFor(2 + kSlotsPerTrampoline*2 + kLabelsPerTrampoline + 1);
-  // Don't bother to check for the emit calls below.
-  next_buffer_check_ = no_trampoline_pool_before_;
-
-  Label after_pool;
-  b(&after_pool);
-  nop();
-
-  int pool_start = pc_offset();
-  for (int i = 0; i < kSlotsPerTrampoline; i++) {
+  { BlockTrampolinePoolScope block_trampoline_pool(this);
+    Label after_pool;
     b(&after_pool);
     nop();
-  }
-  for (int i = 0; i < kLabelsPerTrampoline; i++) {
-    emit(0);
-  }
-  last_trampoline_pool_end_ = pc_offset() - kInstrSize;
-  bind(&after_pool);
-  trampolines_.Add(Trampoline(pool_start,
-                              kSlotsPerTrampoline,
-                              kLabelsPerTrampoline));
 
-  // Since a trampoline pool was just emitted, move the check offset forward by
-  // the standard interval.
-  next_buffer_check_ = last_trampoline_pool_end_ + kMaxDistBetweenPools;
+    int pool_start = pc_offset();
+    for (int i = 0; i < kSlotsPerTrampoline; i++) {
+      b(&after_pool);
+      nop();
+    }
+    for (int i = 0; i < kLabelsPerTrampoline; i++) {
+      emit(0);
+    }
+    last_trampoline_pool_end_ = pc_offset() - kInstrSize;
+    bind(&after_pool);
+    trampolines_.Add(Trampoline(pool_start,
+                                kSlotsPerTrampoline,
+                                kLabelsPerTrampoline));
+
+    // Since a trampoline pool was just emitted,
+    // move the check offset forward by the standard interval.
+    next_buffer_check_ = last_trampoline_pool_end_ + kMaxDistBetweenPools;
+  }
   return;
 }
 
@@ -1631,3 +2063,4 @@ void Assembler::set_target_address_at(Address pc, Address target) {
 
 } }  // namespace v8::internal
 
+#endif  // V8_TARGET_ARCH_MIPS

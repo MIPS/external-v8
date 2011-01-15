@@ -118,11 +118,10 @@ class RelocInfo BASE_EMBEDDED {
   enum Mode {
     // Please note the order is important (see IsCodeTarget, IsGCRelocMode).
     CONSTRUCT_CALL,  // code target that is a call to a JavaScript constructor.
-    CODE_TARGET_CONTEXT,  // code target used for contextual loads.
-    DEBUG_BREAK,
-    CODE_TARGET,         // code target which is not any of the above.
+    CODE_TARGET_CONTEXT,  // Code target used for contextual loads.
+    DEBUG_BREAK,  // Code target for the debugger statement.
+    CODE_TARGET,  // Code target which is not any of the above.
     EMBEDDED_OBJECT,
-    EMBEDDED_STRING,
 
     // Everything after runtime_entry (inclusive) is not GC'ed.
     RUNTIME_ENTRY,
@@ -130,6 +129,7 @@ class RelocInfo BASE_EMBEDDED {
     COMMENT,
     POSITION,  // See comment for kNoPosition above.
     STATEMENT_POSITION,  // See comment for kNoPosition above.
+    DEBUG_BREAK_SLOT,  // Additional code inserted for debug break slot.
     EXTERNAL_REFERENCE,  // The address of an external C++ function.
     INTERNAL_REFERENCE,  // An address inside the same function.
 
@@ -138,7 +138,7 @@ class RelocInfo BASE_EMBEDDED {
     NUMBER_OF_MODES,  // must be no greater than 14 - see RelocInfoWriter
     NONE,  // never recorded
     LAST_CODE_ENUM = CODE_TARGET,
-    LAST_GCED_ENUM = EMBEDDED_STRING
+    LAST_GCED_ENUM = EMBEDDED_OBJECT
   };
 
 
@@ -174,6 +174,9 @@ class RelocInfo BASE_EMBEDDED {
   }
   static inline bool IsInternalReference(Mode mode) {
     return mode == INTERNAL_REFERENCE;
+  }
+  static inline bool IsDebugBreakSlot(Mode mode) {
+    return mode == DEBUG_BREAK_SLOT;
   }
   static inline int ModeMask(Mode mode) { return 1 << mode; }
 
@@ -229,9 +232,10 @@ class RelocInfo BASE_EMBEDDED {
   INLINE(Address call_address());
   INLINE(void set_call_address(Address target));
   INLINE(Object* call_object());
-  INLINE(Object** call_object_address());
   INLINE(void set_call_object(Object* target));
+  INLINE(Object** call_object_address());
 
+  template<typename StaticVisitor> inline void Visit();
   inline void Visit(ObjectVisitor* v);
 
   // Patch the code with some other code.
@@ -243,6 +247,10 @@ class RelocInfo BASE_EMBEDDED {
   // Check whether this return sequence has been patched
   // with a call to the debugger.
   INLINE(bool IsPatchedReturnSequence());
+
+  // Check whether this debug break slot has been patched with a call to the
+  // debugger.
+  INLINE(bool IsPatchedDebugBreakSlotSequence());
 
 #ifdef ENABLE_DISASSEMBLER
   // Printing
@@ -476,9 +484,6 @@ class ExternalReference BASE_EMBEDDED {
   static ExternalReference handle_scope_limit_address();
 
   static ExternalReference scheduled_exception_address();
-
-  static ExternalReference compile_array_pop_call();
-  static ExternalReference compile_array_push_call();
 
   Address address() const {return reinterpret_cast<Address>(address_);}
 

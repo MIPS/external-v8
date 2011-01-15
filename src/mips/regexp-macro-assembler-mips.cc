@@ -26,6 +26,9 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "v8.h"
+
+#if defined(V8_TARGET_ARCH_MIPS)
+
 #include "unicode.h"
 #include "log.h"
 #include "ast.h"
@@ -792,7 +795,6 @@ Handle<Object> RegExpMacroAssemblerMIPS::GetCode(Handle<String> source) {
   CodeDesc code_desc;
   masm_->GetCode(&code_desc);
   Handle<Code> code = Factory::NewCode(code_desc,
-                                       NULL,
                                        Code::ComputeFlags(Code::REGEXP),
                                        masm_->CodeObject());
   LOG(RegExpCodeCreateEvent(*code, *source));
@@ -1171,3 +1173,5 @@ void RegExpMacroAssemblerMIPS::LoadCurrentCharacterUnchecked(int cp_offset,
 #endif  // V8_INTERPRETED_REGEXP
 
 }}  // namespace v8::internal
+
+#endif  // V8_TARGET_ARCH_MIPS

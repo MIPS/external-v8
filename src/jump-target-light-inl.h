@@ -33,9 +33,23 @@
 namespace v8 {
 namespace internal {
 
-void JumpTarget::InitializeEntryElement(int index, FrameElement* target) {
-  UNIMPLEMENTED();
+// Construct a jump target.
+JumpTarget::JumpTarget(Directionality direction)
+    : entry_frame_set_(false),
+      direction_(direction),
+      entry_frame_(kInvalidVirtualFrameInitializer) {
 }
+
+JumpTarget::JumpTarget()
+    : entry_frame_set_(false),
+      direction_(FORWARD_ONLY),
+      entry_frame_(kInvalidVirtualFrameInitializer) {
+}
+
+
+BreakTarget::BreakTarget() { }
+BreakTarget::BreakTarget(JumpTarget::Directionality direction)
+  : JumpTarget(direction) { }
 
 } }  // namespace v8::internal
 

@@ -28,6 +28,8 @@
 
 #include "v8.h"
 
+#if defined(V8_TARGET_ARCH_X64)
+
 #include "codegen-inl.h"
 #include "debug.h"
 
@@ -98,12 +100,11 @@ static void Generate_DebugBreakCallHelper(MacroAssembler* masm,
 
 
 void Debug::GenerateCallICDebugBreak(MacroAssembler* masm) {
-  // Register state for keyed IC call call (from ic-x64.cc)
+  // Register state for IC call call (from ic-x64.cc)
   // ----------- S t a t e -------------
-  //  -- rax: number of arguments
+  //  -- rcx: function name
   // -----------------------------------
-  // The number of arguments in rax is not smi encoded.
-  Generate_DebugBreakCallHelper(masm, 0, false);
+  Generate_DebugBreakCallHelper(masm, rcx.bit(), false);
 }
 
 
@@ -122,9 +123,10 @@ void Debug::GenerateConstructCallDebugBreak(MacroAssembler* masm) {
 void Debug::GenerateKeyedLoadICDebugBreak(MacroAssembler* masm) {
   // Register state for keyed IC load call (from ic-x64.cc).
   // ----------- S t a t e -------------
-  //  No registers used on entry.
+  //  -- rax     : key
+  //  -- rdx     : receiver
   // -----------------------------------
-  Generate_DebugBreakCallHelper(masm, 0, false);
+  Generate_DebugBreakCallHelper(masm, rax.bit() | rdx.bit(), false);
 }
 
 
@@ -132,19 +134,20 @@ void Debug::GenerateKeyedStoreICDebugBreak(MacroAssembler* masm) {
   // Register state for keyed IC load call (from ic-x64.cc).
   // ----------- S t a t e -------------
   //  -- rax    : value
+  //  -- rcx    : key
+  //  -- rdx    : receiver
   // -----------------------------------
-  // Register rax contains an object that needs to be pushed on the
-  // expression stack of the fake JS frame.
-  Generate_DebugBreakCallHelper(masm, rax.bit(), false);
+  Generate_DebugBreakCallHelper(masm, rax.bit() | rcx.bit() | rdx.bit(), false);
 }
 
 
 void Debug::GenerateLoadICDebugBreak(MacroAssembler* masm) {
   // Register state for IC load call (from ic-x64.cc).
   // ----------- S t a t e -------------
+  //  -- rax    : receiver
   //  -- rcx    : name
   // -----------------------------------
-  Generate_DebugBreakCallHelper(masm, rcx.bit(), false);
+  Generate_DebugBreakCallHelper(masm, rax.bit() | rcx.bit(), false);
 }
 
 
@@ -177,22 +180,60 @@ void Debug::GenerateStubNoRegistersDebugBreak(MacroAssembler* masm) {
 }
 
 
-void Debug::GeneratePlainReturnLiveEdit(MacroAssembler* masm) {
-  masm->Abort("LiveEdit frame dropping is not supported on x64");
+void Debug::GenerateSlot(MacroAssembler* masm) {
+  // Generate enough nop's to make space for a call instruction.
+  Label check_codesize;
+  __ bind(&check_codesize);
+  __ RecordDebugBreakSlot();
+  for (int i = 0; i < Assembler::kDebugBreakSlotLength; i++) {
+    __ nop();
+  }
+  ASSERT_EQ(Assembler::kDebugBreakSlotLength,
+            masm->SizeOfCodeGeneratedSince(&check_codesize));
 }
 
-void Debug::GenerateFrameDropperLiveEdit(MacroAssembler* masm) {
-  masm->Abort("LiveEdit frame dropping is not supported on x64");
+
+void Debug::GenerateSlotDebugBreak(MacroAssembler* masm) {
+  // In the places where a debug break slot is inserted no registers can contain
+  // object pointers.
+  Generate_DebugBreakCallHelper(masm, 0, true);
 }
+
+
+void Debug::GeneratePlainReturnLiveEdit(MacroAssembler* masm) {
+  masm->ret(0);
+}
+
+
+void Debug::GenerateFrameDropperLiveEdit(MacroAssembler* masm) {
+  ExternalReference restarter_frame_function_slot =
+      ExternalReference(Debug_Address::RestarterFrameFunctionPointer());
+  __ movq(rax, restarter_frame_function_slot);
+  __ movq(Operand(rax, 0), Immediate(0));
+
+  // We do not know our frame height, but set rsp based on rbp.
+  __ lea(rsp, Operand(rbp, -1 * kPointerSize));
+
+  __ pop(rdi);  // Function.
+  __ pop(rbp);
+
+  // Load context from the function.
+  __ movq(rsi, FieldOperand(rdi, JSFunction::kContextOffset));
+
+  // Get function code.
+  __ movq(rdx, FieldOperand(rdi, JSFunction::kSharedFunctionInfoOffset));
+  __ movq(rdx, FieldOperand(rdx, SharedFunctionInfo::kCodeOffset));
+  __ lea(rdx, FieldOperand(rdx, Code::kHeaderSize));
+
+  // Re-run JSFunction, rdi is function, rsi is context.
+  __ jmp(rdx);
+}
+
+const bool Debug::kFrameDropperSupported = true;
 
 #undef __
 
 
-void Debug::SetUpFrameDropperFrame(StackFrame* bottom_js_frame,
-                                   Handle<Code> code) {
-  UNREACHABLE();
-}
-const int Debug::kFrameDropperFrameSize = -1;
 
 
 void BreakLocationIterator::ClearDebugBreakAtReturn() {
@@ -213,6 +254,30 @@ void BreakLocationIterator::SetDebugBreakAtReturn()  {
       Assembler::kJSReturnSequenceLength - Assembler::kCallInstructionLength);
 }
 
+
+bool BreakLocationIterator::IsDebugBreakAtSlot() {
+  ASSERT(IsDebugBreakSlot());
+  // Check whether the debug break slot instructions have been patched.
+  return !Assembler::IsNop(rinfo()->pc());
+}
+
+
+void BreakLocationIterator::SetDebugBreakAtSlot() {
+  ASSERT(IsDebugBreakSlot());
+  rinfo()->PatchCodeWithCall(
+      Debug::debug_break_slot()->entry(),
+      Assembler::kDebugBreakSlotLength - Assembler::kCallInstructionLength);
+}
+
+
+void BreakLocationIterator::ClearDebugBreakAtSlot() {
+  ASSERT(IsDebugBreakSlot());
+  rinfo()->PatchCode(original_rinfo()->pc(), Assembler::kDebugBreakSlotLength);
+}
+
+
 #endif  // ENABLE_DEBUGGER_SUPPORT
 
 } }  // namespace v8::internal
+
+#endif  // V8_TARGET_ARCH_X64

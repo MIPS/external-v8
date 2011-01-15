@@ -90,7 +90,7 @@ class ScriptDataImpl : public ScriptData {
         last_entry_(0) { }
   virtual ~ScriptDataImpl();
   virtual int Length();
-  virtual unsigned* Data();
+  virtual const char* Data();
   virtual bool HasError();
   FunctionEntry GetFunctionEnd(int start);
   bool SanityCheck();
@@ -119,6 +119,9 @@ class ScriptDataImpl : public ScriptData {
   FunctionEntry nth(int n);
 
   Vector<unsigned> store_;
+
+  // Read strings written by ParserRecorder::WriteString.
+  static const char* ReadString(unsigned* start, int* chars);
 
   // The last entry returned.  This is used to make lookup faster:
   // the next entry to return is typically the next entry so lookup
@@ -174,6 +177,8 @@ class CompileTimeValue: public AllStatic {
   };
 
   static bool IsCompileTimeValue(Expression* expression);
+
+  static bool ArrayLiteralElementNeedsInitialization(Expression* value);
 
   // Get the value as a compile time value.
   static Handle<FixedArray> GetValue(Expression* expression);

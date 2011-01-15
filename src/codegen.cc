@@ -77,11 +77,20 @@ void CodeGenerator::ProcessDeferred() {
     // Generate the code.
     Comment cmnt(masm_, code->comment());
     masm_->bind(code->entry_label());
-    code->SaveRegisters();
+    if (code->AutoSaveAndRestore()) {
+      code->SaveRegisters();
+    }
     code->Generate();
-    code->RestoreRegisters();
-    masm_->jmp(code->exit_label());
+    if (code->AutoSaveAndRestore()) {
+      code->RestoreRegisters();
+      code->Exit();
+    }
   }
+}
+
+
+void DeferredCode::Exit() {
+  masm_->jmp(exit_label());
 }
 
 
@@ -162,9 +171,7 @@ Handle<Code> CodeGenerator::MakeCodeEpilogue(MacroAssembler* masm,
   // Allocate and install the code.
   CodeDesc desc;
   masm->GetCode(&desc);
-  ZoneScopeInfo sinfo(info->scope());
-  Handle<Code> code =
-      Factory::NewCode(desc, &sinfo, flags, masm->CodeObject());
+  Handle<Code> code = Factory::NewCode(desc, flags, masm->CodeObject());
 
 #ifdef ENABLE_DISASSEMBLER
   bool print_code = Bootstrapper::IsActive()
@@ -254,9 +261,27 @@ Handle<Code> CodeGenerator::ComputeCallInitialize(
     // that it needs so we need to ensure it is generated already.
     ComputeCallInitialize(argc, NOT_IN_LOOP);
   }
-  CALL_HEAP_FUNCTION(StubCache::ComputeCallInitialize(argc, in_loop), Code);
+  CALL_HEAP_FUNCTION(
+      StubCache::ComputeCallInitialize(argc, in_loop, Code::CALL_IC),
+      Code);
 }
 
+
+Handle<Code> CodeGenerator::ComputeKeyedCallInitialize(
+    int argc,
+    InLoopFlag in_loop) {
+  if (in_loop == IN_LOOP) {
+    // Force the creation of the corresponding stub outside loops,
+    // because it may be used when clearing the ICs later - it is
+    // possible for a series of IC transitions to lose the in-loop
+    // information, and the IC clearing code can't generate a stub
+    // that it needs so we need to ensure it is generated already.
+    ComputeKeyedCallInitialize(argc, NOT_IN_LOOP);
+  }
+  CALL_HEAP_FUNCTION(
+      StubCache::ComputeCallInitialize(argc, in_loop, Code::KEYED_CALL_IC),
+      Code);
+}
 
 void CodeGenerator::ProcessDeclarations(ZoneList<Declaration*>* declarations) {
   int length = declarations->length();
@@ -311,6 +336,11 @@ void CodeGenerator::ProcessDeclarations(ZoneList<Declaration*>* declarations) {
   // Invoke the platform-dependent code generator to do the actual
   // declaration the global variables and functions.
   DeclareGlobals(array);
+}
+
+
+void CodeGenerator::VisitIncrementOperation(IncrementOperation* expr) {
+  UNREACHABLE();
 }
 
 
@@ -397,31 +427,40 @@ CodeGenerator::ConditionAnalysis CodeGenerator::AnalyzeCondition(
 }
 
 
-void CodeGenerator::RecordPositions(MacroAssembler* masm, int pos) {
+bool CodeGenerator::RecordPositions(MacroAssembler* masm,
+                                    int pos,
+                                    bool right_here) {
   if (pos != RelocInfo::kNoPosition) {
     masm->RecordStatementPosition(pos);
     masm->RecordPosition(pos);
+    if (right_here) {
+      return masm->WriteRecordedPositions();
+    }
   }
+  return false;
 }
 
 
 void CodeGenerator::CodeForFunctionPosition(FunctionLiteral* fun) {
-  if (FLAG_debug_info) RecordPositions(masm(), fun->start_position());
+  if (FLAG_debug_info) RecordPositions(masm(), fun->start_position(), false);
 }
 
 
 void CodeGenerator::CodeForReturnPosition(FunctionLiteral* fun) {
-  if (FLAG_debug_info) RecordPositions(masm(), fun->end_position());
+  if (FLAG_debug_info) RecordPositions(masm(), fun->end_position() - 1, false);
 }
 
 
 void CodeGenerator::CodeForStatementPosition(Statement* stmt) {
-  if (FLAG_debug_info) RecordPositions(masm(), stmt->statement_pos());
+  if (FLAG_debug_info) RecordPositions(masm(), stmt->statement_pos(), false);
 }
 
+
 void CodeGenerator::CodeForDoWhileConditionPosition(DoWhileStatement* stmt) {
-  if (FLAG_debug_info) RecordPositions(masm(), stmt->condition_position());
+  if (FLAG_debug_info)
+    RecordPositions(masm(), stmt->condition_position(), false);
 }
+
 
 void CodeGenerator::CodeForSourcePosition(int pos) {
   if (FLAG_debug_info && pos != RelocInfo::kNoPosition) {
@@ -433,11 +472,17 @@ void CodeGenerator::CodeForSourcePosition(int pos) {
 const char* GenericUnaryOpStub::GetName() {
   switch (op_) {
     case Token::SUB:
-      return overwrite_
-          ? "GenericUnaryOpStub_SUB_Overwrite"
-          : "GenericUnaryOpStub_SUB_Alloc";
+      if (negative_zero_ == kStrictNegativeZero) {
+        return overwrite_ == UNARY_OVERWRITE
+            ? "GenericUnaryOpStub_SUB_Overwrite_Strict0"
+            : "GenericUnaryOpStub_SUB_Alloc_Strict0";
+      } else {
+        return overwrite_ == UNARY_OVERWRITE
+            ? "GenericUnaryOpStub_SUB_Overwrite_Ignore0"
+            : "GenericUnaryOpStub_SUB_Alloc_Ignore0";
+      }
     case Token::BIT_NOT:
-      return overwrite_
+      return overwrite_ == UNARY_OVERWRITE
           ? "GenericUnaryOpStub_BIT_NOT_Overwrite"
           : "GenericUnaryOpStub_BIT_NOT_Alloc";
     default:

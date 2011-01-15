@@ -221,6 +221,29 @@ int OS::ActivationFrameAlignment() {
 }
 
 
+#ifdef V8_TARGET_ARCH_ARM
+// 0xffff0fa0 is the hard coded address of a function provided by
+// the kernel which implements a memory barrier. On older
+// ARM architecture revisions (pre-v6) this may be implemented using
+// a syscall. This address is stable, and in active use (hard coded)
+// by at least glibc-2.7 and the Android C library.
+typedef void (*LinuxKernelMemoryBarrierFunc)(void);
+LinuxKernelMemoryBarrierFunc pLinuxKernelMemoryBarrier __attribute__((weak)) =
+    (LinuxKernelMemoryBarrierFunc) 0xffff0fa0;
+#endif
+
+void OS::ReleaseStore(volatile AtomicWord* ptr, AtomicWord value) {
+#if defined(V8_TARGET_ARCH_ARM) && defined(__arm__)
+  // Only use on ARM hardware.
+  pLinuxKernelMemoryBarrier();
+#else
+  __asm__ __volatile__("" : : : "memory");
+  // An x86 store acts as a release barrier.
+#endif
+  *ptr = value;
+}
+
+
 const char* OS::LocalTimezone(double time) {
   if (isnan(time)) return "";
   time_t tv = static_cast<time_t>(floor(time/msPerSecond));
@@ -269,6 +292,7 @@ size_t OS::AllocateAlignment() {
 void* OS::Allocate(const size_t requested,
                    size_t* allocated,
                    bool is_executable) {
+  // TODO(805): Port randomization of allocated executable memory to Linux.
   const size_t msize = RoundUp(requested, sysconf(_SC_PAGESIZE));
   int prot = PROT_READ | PROT_WRITE | (is_executable ? PROT_EXEC : 0);
   void* mbase = mmap(NULL, msize, prot, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -322,9 +346,10 @@ void OS::Abort() {
 void OS::DebugBreak() {
 // TODO(lrn): Introduce processor define for runtime system (!= V8_ARCH_x,
 //  which is the architecture of generated code).
-#if (defined(__arm__) || defined(__thumb__)) && \
-    defined(CAN_USE_ARMV5_INSTRUCTIONS)
+#if (defined(__arm__) || defined(__thumb__))
+# if defined(CAN_USE_ARMV5_INSTRUCTIONS)
   asm("bkpt 0");
+# endif
 #elif defined(__mips__)
   asm("break");
 #else
@@ -432,14 +457,12 @@ int OS::StackWalk(Vector<OS::StackFrame> frames) {
   // backtrace is a glibc extension.
 #ifdef __GLIBC__
   int frames_size = frames.length();
-  void** addresses = NewArray<void*>(frames_size);
+  ScopedVector<void*> addresses(frames_size);
 
-  int frames_count = backtrace(addresses, frames_size);
+  int frames_count = backtrace(addresses.start(), frames_size);
 
-  char** symbols;
-  symbols = backtrace_symbols(addresses, frames_count);
+  char** symbols = backtrace_symbols(addresses.start(), frames_count);
   if (symbols == NULL) {
-    DeleteArray(addresses);
     return kStackWalkError;
   }
 
@@ -454,7 +477,6 @@ int OS::StackWalk(Vector<OS::StackFrame> frames) {
     frames[i].text[kStackWalkMaxTextLen - 1] = '\0';
   }
 
-  DeleteArray(addresses);
   free(symbols);
 
   return frames_count;
