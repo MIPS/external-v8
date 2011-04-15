@@ -28,6 +28,8 @@
 #ifndef V8_TOKEN_H_
 #define V8_TOKEN_H_
 
+#include "checks.h"
+
 namespace v8 {
 namespace internal {
 
@@ -246,6 +248,10 @@ class Token {
 
   static bool IsCountOp(Value op) {
     return op == INC || op == DEC;
+  }
+
+  static bool IsShiftOp(Value op) {
+    return (SHL <= op) && (op <= SHR);
   }
 
   // Returns a string corresponding to the JS token string

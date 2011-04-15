@@ -300,9 +300,7 @@ enum ArgumentsAllocationMode {
 
 class CodeGenerator: public AstVisitor {
  public:
-  // Takes a function literal, generates code for it. This function should only
-  // be called by compiler.cc.
-  static Handle<Code> MakeCode(CompilationInfo* info);
+  static bool MakeCode(CompilationInfo* info);
 
   // Printing of AST, etc. as requested by flags.
   static void MakeCodePrologue(CompilationInfo* info);
@@ -345,10 +343,6 @@ class CodeGenerator: public AstVisitor {
   bool in_spilled_code() const { return in_spilled_code_; }
   void set_in_spilled_code(bool flag) { in_spilled_code_ = flag; }
 
-  // If the name is an inline runtime function call return the number of
-  // expected arguments. Otherwise return -1.
-  static int InlineRuntimeCallArgumentsCount(Handle<String> name);
-
   // Return a position of the element at |index_as_smi| + |additional_offset|
   // in FixedArray pointer to which is held in |array|.  |index_as_smi| is Smi.
   static Operand FixedArrayElementOperand(Register array,
@@ -358,11 +352,13 @@ class CodeGenerator: public AstVisitor {
     return FieldOperand(array, index_as_smi, times_half_pointer_size, offset);
   }
 
-  static Operand ContextOperand(Register context, int index) {
-    return Operand(context, Context::SlotOffset(index));
-  }
-
  private:
+  // Type of a member function that generates inline code for a native function.
+  typedef void (CodeGenerator::*InlineFunctionGenerator)
+      (ZoneList<Expression*>*);
+
+  static const InlineFunctionGenerator kInlineFunctionGenerators[];
+
   // Construction/Destruction
   explicit CodeGenerator(MacroAssembler* masm);
 
@@ -441,10 +437,6 @@ class CodeGenerator: public AstVisitor {
                                             JumpTarget* slow);
 
   // Expressions
-  static Operand GlobalObject() {
-    return ContextOperand(esi, Context::GLOBAL_INDEX);
-  }
-
   void LoadCondition(Expression* expr,
                      ControlDestination* destination,
                      bool force_control);
@@ -574,6 +566,11 @@ class CodeGenerator: public AstVisitor {
   void Int32BinaryOperation(BinaryOperation* node);
 
 
+  // Generate a stub call from the virtual frame.
+  Result GenerateGenericBinaryOpStubCall(GenericBinaryOpStub* stub,
+                                         Result* left,
+                                         Result* right);
+
   void Comparison(AstNode* node,
                   Condition cc,
                   bool strict,
@@ -619,30 +616,17 @@ class CodeGenerator: public AstVisitor {
 
   void CheckStack();
 
-  struct InlineRuntimeLUT {
-    void (CodeGenerator::*method)(ZoneList<Expression*>*);
-    const char* name;
-    int nargs;
-  };
-
-  static InlineRuntimeLUT* FindInlineRuntimeLUT(Handle<String> name);
   bool CheckForInlineRuntimeCall(CallRuntime* node);
-  static bool PatchInlineRuntimeEntry(Handle<String> name,
-                                      const InlineRuntimeLUT& new_entry,
-                                      InlineRuntimeLUT* old_entry);
 
   void ProcessDeclarations(ZoneList<Declaration*>* declarations);
-
-  static Handle<Code> ComputeCallInitialize(int argc, InLoopFlag in_loop);
-
-  static Handle<Code> ComputeKeyedCallInitialize(int argc, InLoopFlag in_loop);
 
   // Declare global variables and functions in the given array of
   // name/value pairs.
   void DeclareGlobals(Handle<FixedArray> pairs);
 
   // Instantiate the function based on the shared function info.
-  Result InstantiateFunction(Handle<SharedFunctionInfo> function_info);
+  Result InstantiateFunction(Handle<SharedFunctionInfo> function_info,
+                             bool pretenure);
 
   // Support for types.
   void GenerateIsSmi(ZoneList<Expression*>* args);
@@ -702,11 +686,6 @@ class CodeGenerator: public AstVisitor {
   // Construct a RegExp exec result with two in-object properties.
   void GenerateRegExpConstructResult(ZoneList<Expression*>* args);
 
-  // Clone the result of a regexp function.
-  // Must be an object created by GenerateRegExpConstructResult with
-  // no extra properties.
-  void GenerateRegExpCloneResult(ZoneList<Expression*>* args);
-
   // Support for fast native caches.
   void GenerateGetFromCache(ZoneList<Expression*>* args);
 
@@ -726,9 +705,14 @@ class CodeGenerator: public AstVisitor {
   void GenerateMathSin(ZoneList<Expression*>* args);
   void GenerateMathCos(ZoneList<Expression*>* args);
   void GenerateMathSqrt(ZoneList<Expression*>* args);
+  void GenerateMathLog(ZoneList<Expression*>* args);
 
-  // Check whether two RegExps are equivalent
+  // Check whether two RegExps are equivalent.
   void GenerateIsRegExpEquivalent(ZoneList<Expression*>* args);
+
+  void GenerateHasCachedArrayIndex(ZoneList<Expression*>* args);
+  void GenerateGetCachedArrayIndex(ZoneList<Expression*>* args);
+  void GenerateFastAsciiArrayJoin(ZoneList<Expression*>* args);
 
   // Simple condition analysis.
   enum ConditionAnalysis {
@@ -787,7 +771,10 @@ class CodeGenerator: public AstVisitor {
   // in a spilled state.
   bool in_spilled_code_;
 
-  static InlineRuntimeLUT kInlineRuntimeLUT[];
+  // A cookie that is used for JIT IMM32 Encoding.  Initialized to a
+  // random number when the command-line
+  // FLAG_mask_constants_with_cookie is true, zero otherwise.
+  int jit_cookie_;
 
   friend class VirtualFrame;
   friend class JumpTarget;

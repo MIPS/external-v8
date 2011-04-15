@@ -352,12 +352,8 @@ void RelocIterator::next() {
       Advance();
       // Check if we want source positions.
       if (mode_mask_ & RelocInfo::kPositionMask) {
-        // Check if we want this type of source position.
-        if (SetMode(DebugInfoModeFromTag(GetPositionTypeTag()))) {
-          // Finally read the data before returning.
-          ReadTaggedData();
-          return;
-        }
+        ReadTaggedData();
+        if (SetMode(DebugInfoModeFromTag(GetPositionTypeTag()))) return;
       }
     } else {
       ASSERT(tag == kDefaultTag);
@@ -467,7 +463,7 @@ const char* RelocInfo::RelocModeName(RelocInfo::Mode rmode) {
 void RelocInfo::Print() {
   PrintF("%p  %s", pc_, RelocModeName(rmode_));
   if (IsComment(rmode_)) {
-    PrintF("  (%s)", data_);
+    PrintF("  (%s)", reinterpret_cast<char*>(data_));
   } else if (rmode_ == EMBEDDED_OBJECT) {
     PrintF("  (");
     target_object()->ShortPrint();
@@ -481,7 +477,7 @@ void RelocInfo::Print() {
     Code* code = Code::GetCodeFromTargetAddress(target_address());
     PrintF(" (%s)  (%p)", Code::Kind2String(code->kind()), target_address());
   } else if (IsPosition(rmode_)) {
-    PrintF("  (%d)", data());
+    PrintF("  (%" V8_PTR_PREFIX "d)", data());
   }
 
   PrintF("\n");
@@ -585,6 +581,12 @@ ExternalReference ExternalReference::fill_heap_number_with_random_function() {
 }
 
 
+ExternalReference ExternalReference::delete_handle_scope_extensions() {
+  return ExternalReference(Redirect(FUNCTION_ADDR(
+                           HandleScope::DeleteExtensions)));
+}
+
+
 ExternalReference ExternalReference::random_uint32_function() {
   return ExternalReference(Redirect(FUNCTION_ADDR(V8::Random)));
 }
@@ -655,8 +657,8 @@ ExternalReference ExternalReference::new_space_allocation_limit_address() {
 }
 
 
-ExternalReference ExternalReference::handle_scope_extensions_address() {
-  return ExternalReference(HandleScope::current_extensions_address());
+ExternalReference ExternalReference::handle_scope_level_address() {
+  return ExternalReference(HandleScope::current_level_address());
 }
 
 
@@ -801,5 +803,47 @@ ExternalReference ExternalReference::debug_step_in_fp_address() {
   return ExternalReference(Debug::step_in_fp_addr());
 }
 #endif
+
+
+void PositionsRecorder::RecordPosition(int pos) {
+  ASSERT(pos != RelocInfo::kNoPosition);
+  ASSERT(pos >= 0);
+  state_.current_position = pos;
+}
+
+
+void PositionsRecorder::RecordStatementPosition(int pos) {
+  ASSERT(pos != RelocInfo::kNoPosition);
+  ASSERT(pos >= 0);
+  state_.current_statement_position = pos;
+}
+
+
+bool PositionsRecorder::WriteRecordedPositions() {
+  bool written = false;
+
+  // Write the statement position if it is different from what was written last
+  // time.
+  if (state_.current_statement_position != state_.written_statement_position) {
+    EnsureSpace ensure_space(assembler_);
+    assembler_->RecordRelocInfo(RelocInfo::STATEMENT_POSITION,
+                                state_.current_statement_position);
+    state_.written_statement_position = state_.current_statement_position;
+    written = true;
+  }
+
+  // Write the position if it is different from what was written last time and
+  // also different from the written statement position.
+  if (state_.current_position != state_.written_position &&
+      state_.current_position != state_.written_statement_position) {
+    EnsureSpace ensure_space(assembler_);
+    assembler_->RecordRelocInfo(RelocInfo::POSITION, state_.current_position);
+    state_.written_position = state_.current_position;
+    written = true;
+  }
+
+  // Return whether something was written.
+  return written;
+}
 
 } }  // namespace v8::internal

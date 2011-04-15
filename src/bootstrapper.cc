@@ -39,6 +39,8 @@
 #include "objects-visiting.h"
 #include "snapshot.h"
 #include "stub-cache.h"
+#include "extensions/externalize-string-extension.h"
+#include "extensions/gc-extension.h"
 
 namespace v8 {
 namespace internal {
@@ -137,6 +139,8 @@ Handle<String> Bootstrapper::NativesSourceLookup(int index) {
 
 void Bootstrapper::Initialize(bool create_heap_objects) {
   extensions_cache.Initialize(create_heap_objects);
+  GCExtension::Register();
+  ExternalizeStringExtension::Register();
 }
 
 
@@ -232,6 +236,7 @@ class Genesis BASE_EMBEDDED {
   bool InstallNatives();
   void InstallCustomCallGenerators();
   void InstallJSFunctionResultCaches();
+  void InitializeNormalizedMapCaches();
   // Used both for deserialized and from-scratch contexts to add the extensions
   // provided.
   static bool InstallExtensions(Handle<Context> global_context,
@@ -719,6 +724,8 @@ void Genesis::InitializeGlobal(Handle<GlobalObject> inner_global,
         InstallFunction(global, "String", JS_VALUE_TYPE, JSValue::kSize,
                         Top::initial_object_prototype(), Builtins::Illegal,
                         true);
+    string_fun->shared()->set_construct_stub(
+        Builtins::builtin(Builtins::StringConstructCode));
     global_context()->set_string_function(*string_fun);
     // Add 'length' property to strings.
     Handle<DescriptorArray> string_descriptors =
@@ -1006,11 +1013,10 @@ bool Genesis::CompileScriptCached(Vector<const char> name,
 }
 
 
-#define INSTALL_NATIVE(Type, name, var)                                  \
-  Handle<String> var##_name = Factory::LookupAsciiSymbol(name);          \
-  global_context()->set_##var(Type::cast(global_context()->              \
-                                           builtins()->                  \
-                                             GetProperty(*var##_name)));
+#define INSTALL_NATIVE(Type, name, var)                                     \
+  Handle<String> var##_name = Factory::LookupAsciiSymbol(name);             \
+  global_context()->set_##var(Type::cast(                                   \
+      global_context()->builtins()->GetPropertyNoExceptionThrown(*var##_name)));
 
 void Genesis::InstallNativeFunctions() {
   HandleScope scope;
@@ -1061,8 +1067,11 @@ bool Genesis::InstallNatives() {
   // global object.
   static const PropertyAttributes attributes =
       static_cast<PropertyAttributes>(READ_ONLY | DONT_DELETE);
-  SetProperty(builtins, Factory::LookupAsciiSymbol("global"),
-              Handle<Object>(global_context()->global()), attributes);
+  Handle<String> global_symbol = Factory::LookupAsciiSymbol("global");
+  SetProperty(builtins,
+              global_symbol,
+              Handle<Object>(global_context()->global()),
+              attributes);
 
   // Setup the reference from the global object to the builtins object.
   JSGlobalObject::cast(global_context()->global())->set_builtins(*builtins);
@@ -1341,23 +1350,42 @@ bool Genesis::InstallNatives() {
 }
 
 
-static void InstallCustomCallGenerator(Handle<JSFunction> holder_function,
+static Handle<JSObject> ResolveCustomCallGeneratorHolder(
+    Handle<Context> global_context,
+    const char* holder_expr) {
+  Handle<GlobalObject> global(global_context->global());
+  const char* period_pos = strchr(holder_expr, '.');
+  if (period_pos == NULL) {
+    return Handle<JSObject>::cast(
+        GetProperty(global, Factory::LookupAsciiSymbol(holder_expr)));
+  }
+  ASSERT_EQ(".prototype", period_pos);
+  Vector<const char> property(holder_expr,
+                              static_cast<int>(period_pos - holder_expr));
+  Handle<JSFunction> function = Handle<JSFunction>::cast(
+      GetProperty(global, Factory::LookupSymbol(property)));
+  return Handle<JSObject>(JSObject::cast(function->prototype()));
+}
+
+
+static void InstallCustomCallGenerator(Handle<JSObject> holder,
                                        const char* function_name,
                                        int id) {
-  Handle<JSObject> proto(JSObject::cast(holder_function->instance_prototype()));
   Handle<String> name = Factory::LookupAsciiSymbol(function_name);
-  Handle<JSFunction> function(JSFunction::cast(proto->GetProperty(*name)));
+  Object* function_object = holder->GetProperty(*name)->ToObjectUnchecked();
+  Handle<JSFunction> function(JSFunction::cast(function_object));
   function->shared()->set_function_data(Smi::FromInt(id));
 }
 
 
 void Genesis::InstallCustomCallGenerators() {
   HandleScope scope;
-#define INSTALL_CALL_GENERATOR(holder_fun, fun_name, name)                \
-  {                                                                       \
-    Handle<JSFunction> holder(global_context()->holder_fun##_function()); \
-    const int id = CallStubCompiler::k##name##CallGenerator;              \
-    InstallCustomCallGenerator(holder, #fun_name, id);                    \
+#define INSTALL_CALL_GENERATOR(holder_expr, fun_name, name)     \
+  {                                                             \
+    Handle<JSObject> holder = ResolveCustomCallGeneratorHolder( \
+        global_context(), #holder_expr);                        \
+    const int id = CallStubCompiler::k##name##CallGenerator;    \
+    InstallCustomCallGenerator(holder, #fun_name, id);          \
   }
   CUSTOM_CALL_IC_GENERATORS(INSTALL_CALL_GENERATOR)
 #undef INSTALL_CALL_GENERATOR
@@ -1392,11 +1420,24 @@ void Genesis::InstallJSFunctionResultCaches() {
   Handle<FixedArray> caches = Factory::NewFixedArray(kNumberOfCaches, TENURED);
 
   int index = 0;
-#define F(size, func) caches->set(index++, CreateCache(size, func));
-    JSFUNCTION_RESULT_CACHE_LIST(F)
+
+#define F(size, func) do {                           \
+    FixedArray* cache = CreateCache((size), (func)); \
+    caches->set(index++, cache);                     \
+  } while (false)
+
+  JSFUNCTION_RESULT_CACHE_LIST(F);
+
 #undef F
 
   global_context()->set_jsfunction_result_caches(*caches);
+}
+
+
+void Genesis::InitializeNormalizedMapCaches() {
+  Handle<FixedArray> array(
+      Factory::NewFixedArray(NormalizedMapCache::kEntries, TENURED));
+  global_context()->set_normalized_map_cache(NormalizedMapCache::cast(*array));
 }
 
 
@@ -1547,8 +1588,9 @@ bool Genesis::InstallJSBuiltins(Handle<JSBuiltinsObject> builtins) {
   for (int i = 0; i < Builtins::NumberOfJavaScriptBuiltins(); i++) {
     Builtins::JavaScript id = static_cast<Builtins::JavaScript>(i);
     Handle<String> name = Factory::LookupAsciiSymbol(Builtins::GetName(id));
+    Object* function_object = builtins->GetPropertyNoExceptionThrown(*name);
     Handle<JSFunction> function
-        = Handle<JSFunction>(JSFunction::cast(builtins->GetProperty(*name)));
+        = Handle<JSFunction>(JSFunction::cast(function_object));
     builtins->set_javascript_builtin(id, *function);
     Handle<SharedFunctionInfo> shared
         = Handle<SharedFunctionInfo>(function->shared());
@@ -1768,6 +1810,7 @@ Genesis::Genesis(Handle<Object> global_object,
     HookUpGlobalProxy(inner_global, global_proxy);
     InitializeGlobal(inner_global, empty_function);
     InstallJSFunctionResultCaches();
+    InitializeNormalizedMapCaches();
     if (!InstallNatives()) return;
 
     MakeFunctionInstancePrototypeWritable();
@@ -1775,6 +1818,11 @@ Genesis::Genesis(Handle<Object> global_object,
     if (!ConfigureGlobalObjects(global_template)) return;
     i::Counters::contexts_created_from_scratch.Increment();
   }
+
+  // Add this context to the weak list of global contexts.
+  (*global_context_)->set(Context::NEXT_CONTEXT_LINK,
+                          Heap::global_contexts_list());
+  Heap::set_global_contexts_list(*global_context_);
 
   result_ = global_context_;
 }

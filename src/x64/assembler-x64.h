@@ -92,13 +92,13 @@ struct Register {
     Register r = { code };
     return r;
   }
-  bool is_valid() const  { return 0 <= code_ && code_ < 16; }
-  bool is(Register reg) const  { return code_ == reg.code_; }
-  int code() const  {
+  bool is_valid() const { return 0 <= code_ && code_ < 16; }
+  bool is(Register reg) const { return code_ == reg.code_; }
+  int code() const {
     ASSERT(is_valid());
     return code_;
   }
-  int bit() const  {
+  int bit() const {
     return 1 << code_;
   }
 
@@ -138,8 +138,8 @@ const Register no_reg = { -1 };
 
 
 struct XMMRegister {
-  bool is_valid() const  { return 0 <= code_ && code_ < 16; }
-  int code() const  {
+  bool is_valid() const { return 0 <= code_ && code_ < 16; }
+  int code() const {
     ASSERT(is_valid());
     return code_;
   }
@@ -1005,6 +1005,7 @@ class Assembler : public Malloced {
   // but it may be bound only once.
 
   void bind(Label* L);  // binds an unbound label L to the current code position
+  void bind(NearLabel* L);
 
   // Calls
   // Call near relative 32-bit displacement, relative to next instruction.
@@ -1029,9 +1030,15 @@ class Assembler : public Malloced {
   // Jump near absolute indirect (m64)
   void jmp(const Operand& src);
 
+  // Short jump
+  void jmp(NearLabel* L);
+
   // Conditional jumps
   void j(Condition cc, Label* L);
   void j(Condition cc, Handle<Code> target, RelocInfo::Mode rmode);
+
+  // Conditional short jump
+  void j(Condition cc, NearLabel* L, Hint hint = no_hint);
 
   // Floating-point operations
   void fld(int i);
@@ -1039,6 +1046,7 @@ class Assembler : public Malloced {
   void fld1();
   void fldz();
   void fldpi();
+  void fldln2();
 
   void fld_s(const Operand& adr);
   void fld_d(const Operand& adr);
@@ -1093,6 +1101,7 @@ class Assembler : public Malloced {
 
   void fsin();
   void fcos();
+  void fyl2x();
 
   void frndint();
 
@@ -1167,13 +1176,9 @@ class Assembler : public Malloced {
   // Use --debug_code to enable.
   void RecordComment(const char* msg);
 
-  void RecordPosition(int pos);
-  void RecordStatementPosition(int pos);
-  bool WriteRecordedPositions();
+  int pc_offset() const { return static_cast<int>(pc_ - buffer_); }
 
-  int pc_offset() const  { return static_cast<int>(pc_ - buffer_); }
-  int current_statement_position() const { return current_statement_position_; }
-  int current_position() const  { return current_position_; }
+  PositionsRecorder* positions_recorder() { return &positions_recorder_; }
 
   // Check if there is less than kGap bytes available in the buffer.
   // If this is the case, we need to grow the buffer before emitting
@@ -1196,6 +1201,7 @@ class Assembler : public Malloced {
  private:
   byte* addr_at(int pos)  { return buffer_ + pos; }
   byte byte_at(int pos)  { return buffer_[pos]; }
+  void set_byte_at(int pos, byte value) { buffer_[pos] = value; }
   uint32_t long_at(int pos)  {
     return *reinterpret_cast<uint32_t*>(addr_at(pos));
   }
@@ -1371,7 +1377,6 @@ class Assembler : public Malloced {
   // labels
   // void print(Label* L);
   void bind_to(Label* L, int pos);
-  void link_to(Label* L, Label* appendix);
 
   // record reloc info for current pc_
   void RecordRelocInfo(RelocInfo::Mode rmode, intptr_t data = 0);
@@ -1397,11 +1402,8 @@ class Assembler : public Malloced {
   // push-pop elimination
   byte* last_pc_;
 
-  // source position information
-  int current_statement_position_;
-  int current_position_;
-  int written_statement_position_;
-  int written_position_;
+  PositionsRecorder positions_recorder_;
+  friend class PositionsRecorder;
 };
 
 

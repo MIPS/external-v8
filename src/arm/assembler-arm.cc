@@ -317,7 +317,8 @@ static const Instr kLdrStrOffsetMask = 0x00000fff;
 static const int kMinimalBufferSize = 4*KB;
 static byte* spare_buffer_ = NULL;
 
-Assembler::Assembler(void* buffer, int buffer_size) {
+Assembler::Assembler(void* buffer, int buffer_size)
+    : positions_recorder_(this) {
   if (buffer == NULL) {
     // Do our own buffer management.
     if (buffer_size <= kMinimalBufferSize) {
@@ -354,10 +355,6 @@ Assembler::Assembler(void* buffer, int buffer_size) {
   no_const_pool_before_ = 0;
   last_const_pool_end_ = 0;
   last_bound_pos_ = 0;
-  current_statement_position_ = RelocInfo::kNoPosition;
-  current_position_ = RelocInfo::kNoPosition;
-  written_statement_position_ = current_statement_position_;
-  written_position_ = current_position_;
 }
 
 
@@ -397,13 +394,6 @@ void Assembler::Align(int m) {
 void Assembler::CodeTargetAlign() {
   // Preferred alignment of jump targets on some ARM chips.
   Align(8);
-}
-
-
-bool Assembler::IsNop(Instr instr, int type) {
-  // Check for mov rx, rx.
-  ASSERT(0 <= type && type <= 14);  // mov pc, pc is not a nop.
-  return instr == (al | 13*B21 | type*B12 | type);
 }
 
 
@@ -510,6 +500,13 @@ bool Assembler::IsStrRegFpNegOffset(Instr instr) {
 
 bool Assembler::IsLdrRegFpNegOffset(Instr instr) {
   return ((instr & kLdrStrInstrTypeMask) == kLdrRegFpNegOffsetPattern);
+}
+
+
+bool Assembler::IsLdrPcImmediateOffset(Instr instr) {
+  // Check the instruction is indeed a
+  // ldr<cond> <Rd>, [pc +/- offset_12].
+  return (instr & 0x0f7f0000) == 0x051f0000;
 }
 
 
@@ -752,15 +749,15 @@ static bool fits_shifter(uint32_t imm32,
 // if they can be encoded in the ARM's 12 bits of immediate-offset instruction
 // space.  There is no guarantee that the relocated location can be similarly
 // encoded.
-static bool MustUseConstantPool(RelocInfo::Mode rmode) {
-  if (rmode == RelocInfo::EXTERNAL_REFERENCE) {
+bool Operand::must_use_constant_pool() const {
+  if (rmode_ == RelocInfo::EXTERNAL_REFERENCE) {
 #ifdef DEBUG
     if (!Serializer::enabled()) {
       Serializer::TooLateToEnableNow();
     }
 #endif  // def DEBUG
     return Serializer::enabled();
-  } else if (rmode == RelocInfo::NONE) {
+  } else if (rmode_ == RelocInfo::NONE) {
     return false;
   }
   return true;
@@ -769,7 +766,7 @@ static bool MustUseConstantPool(RelocInfo::Mode rmode) {
 
 bool Operand::is_single_instruction() const {
   if (rm_.is_valid()) return true;
-  if (MustUseConstantPool(rmode_)) return false;
+  if (must_use_constant_pool()) return false;
   uint32_t dummy1, dummy2;
   return fits_shifter(imm32_, &dummy1, &dummy2, NULL);
 }
@@ -785,7 +782,7 @@ void Assembler::addrmod1(Instr instr,
     // Immediate.
     uint32_t rotate_imm;
     uint32_t immed_8;
-    if (MustUseConstantPool(x.rmode_) ||
+    if (x.must_use_constant_pool() ||
         !fits_shifter(x.imm32_, &rotate_imm, &immed_8, &instr)) {
       // The immediate operand cannot be encoded as a shifter operand, so load
       // it first to register ip and change the original instruction to use ip.
@@ -794,8 +791,7 @@ void Assembler::addrmod1(Instr instr,
       CHECK(!rn.is(ip));  // rn should never be ip, or will be trashed
       Condition cond = static_cast<Condition>(instr & CondMask);
       if ((instr & ~CondMask) == 13*B21) {  // mov, S not set
-        if (MustUseConstantPool(x.rmode_) ||
-            !CpuFeatures::IsSupported(ARMv7)) {
+        if (x.must_use_constant_pool() || !CpuFeatures::IsSupported(ARMv7)) {
           RecordRelocInfo(x.rmode_, x.imm32_);
           ldr(rd, MemOperand(pc, 0), cond);
         } else {
@@ -806,7 +802,7 @@ void Assembler::addrmod1(Instr instr,
       } else {
         // If this is not a mov or mvn instruction we may still be able to avoid
         // a constant pool entry by using mvn or movw.
-        if (!MustUseConstantPool(x.rmode_) &&
+        if (!x.must_use_constant_pool() &&
             (instr & kMovMvnMask) != kMovMvnPattern) {
           mov(ip, x, LeaveCC, cond);
         } else {
@@ -999,24 +995,24 @@ void Assembler::bl(int branch_offset, Condition cond) {
 
 
 void Assembler::blx(int branch_offset) {  // v5 and above
-  WriteRecordedPositions();
+  positions_recorder()->WriteRecordedPositions();
   ASSERT((branch_offset & 1) == 0);
   int h = ((branch_offset & 2) >> 1)*B24;
   int imm24 = branch_offset >> 2;
   ASSERT(is_int24(imm24));
-  emit(15 << 28 | B27 | B25 | h | (imm24 & Imm24Mask));
+  emit(nv | B27 | B25 | h | (imm24 & Imm24Mask));
 }
 
 
 void Assembler::blx(Register target, Condition cond) {  // v5 and above
-  WriteRecordedPositions();
+  positions_recorder()->WriteRecordedPositions();
   ASSERT(!target.is(pc));
   emit(cond | B24 | B21 | 15*B16 | 15*B12 | 15*B8 | 3*B4 | target.code());
 }
 
 
 void Assembler::bx(Register target, Condition cond) {  // v5 and above, plus v4t
-  WriteRecordedPositions();
+  positions_recorder()->WriteRecordedPositions();
   ASSERT(!target.is(pc));  // use of pc is actually allowed, but discouraged
   emit(cond | B24 | B21 | 15*B16 | 15*B12 | 15*B8 | B4 | target.code());
 }
@@ -1114,11 +1110,11 @@ void Assembler::orr(Register dst, Register src1, const Operand& src2,
 
 void Assembler::mov(Register dst, const Operand& src, SBit s, Condition cond) {
   if (dst.is(pc)) {
-    WriteRecordedPositions();
+    positions_recorder()->WriteRecordedPositions();
   }
   // Don't allow nop instructions in the form mov rn, rn to be generated using
-  // the mov instruction. They must be generated using nop(int)
-  // pseudo instructions.
+  // the mov instruction. They must be generated using nop(int/NopMarkerTypes)
+  // or MarkCode(int/NopMarkerTypes) pseudo instructions.
   ASSERT(!(src.is_reg() && src.rm().is(dst) && s == LeaveCC && cond == al));
   addrmod1(cond | 13*B21 | s, r0, dst, src);
 }
@@ -1339,7 +1335,7 @@ void Assembler::msr(SRegisterFieldMask fields, const Operand& src,
     // Immediate.
     uint32_t rotate_imm;
     uint32_t immed_8;
-    if (MustUseConstantPool(src.rmode_) ||
+    if (src.must_use_constant_pool() ||
         !fits_shifter(src.imm32_, &rotate_imm, &immed_8, NULL)) {
       // Immediate operand cannot be encoded, load it first to register ip.
       RecordRelocInfo(src.rmode_, src.imm32_);
@@ -1359,7 +1355,7 @@ void Assembler::msr(SRegisterFieldMask fields, const Operand& src,
 // Load/Store instructions.
 void Assembler::ldr(Register dst, const MemOperand& src, Condition cond) {
   if (dst.is(pc)) {
-    WriteRecordedPositions();
+    positions_recorder()->WriteRecordedPositions();
   }
   addrmod2(cond | B26 | L, dst, src);
 
@@ -1634,15 +1630,29 @@ void Assembler::stm(BlockAddrMode am,
 
 
 // Exception-generating instructions and debugging support.
-void Assembler::stop(const char* msg) {
+// Stops with a non-negative code less than kNumOfWatchedStops support
+// enabling/disabling and a counter feature. See simulator-arm.h .
+void Assembler::stop(const char* msg, Condition cond, int32_t code) {
 #ifndef __arm__
-  // The simulator handles these special instructions and stops execution.
-  emit(15 << 28 | ((intptr_t) msg));
+  // See constants-arm.h SoftwareInterruptCodes. Unluckily the Assembler and
+  // Simulator do not share constants declaration.
+  ASSERT(code >= kDefaultStopCode);
+  static const uint32_t kStopInterruptCode = 1 << 23;
+  static const uint32_t kMaxStopCode = kStopInterruptCode - 1;
+  // The Simulator will handle the stop instruction and get the message address.
+  // It expects to find the address just after the svc instruction.
+  BlockConstPoolFor(2);
+  if (code >= 0) {
+    svc(kStopInterruptCode + code, cond);
+  } else {
+    svc(kStopInterruptCode + kMaxStopCode, cond);
+  }
+  emit(reinterpret_cast<Instr>(msg));
 #else  // def __arm__
 #ifdef CAN_USE_ARMV5_INSTRUCTIONS
   bkpt(0);
 #else  // ndef CAN_USE_ARMV5_INSTRUCTIONS
-  swi(0x9f0001);
+  svc(0x9f0001);
 #endif  // ndef CAN_USE_ARMV5_INSTRUCTIONS
 #endif  // def __arm__
 }
@@ -1654,7 +1664,7 @@ void Assembler::bkpt(uint32_t imm16) {  // v5 and above
 }
 
 
-void Assembler::swi(uint32_t imm24, Condition cond) {
+void Assembler::svc(uint32_t imm24, Condition cond) {
   ASSERT(is_uint24(imm24));
   emit(cond | 15*B24 | imm24);
 }
@@ -1809,6 +1819,7 @@ void Assembler::stc2(Coprocessor coproc,
 
 
 // Support for VFP.
+
 void Assembler::vldr(const DwVfpRegister dst,
                      const Register base,
                      int offset,
@@ -1838,7 +1849,9 @@ void Assembler::vldr(const SwVfpRegister dst,
   ASSERT(offset % 4 == 0);
   ASSERT((offset / 4) < 256);
   ASSERT(offset >= 0);
-  emit(cond | 0xD9*B20 | base.code()*B16 | dst.code()*B12 |
+  int sd, d;
+  dst.split_code(&sd, &d);
+  emit(cond | d*B22 | 0xD9*B20 | base.code()*B16 | sd*B12 |
        0xA*B8 | ((offset / 4) & 255));
 }
 
@@ -1872,7 +1885,9 @@ void Assembler::vstr(const SwVfpRegister src,
   ASSERT(offset % 4 == 0);
   ASSERT((offset / 4) < 256);
   ASSERT(offset >= 0);
-  emit(cond | 0xD8*B20 | base.code()*B16 | src.code()*B12 |
+  int sd, d;
+  src.split_code(&sd, &d);
+  emit(cond | d*B22 | 0xD8*B20 | base.code()*B16 | sd*B12 |
        0xA*B8 | ((offset / 4) & 255));
 }
 
@@ -1979,8 +1994,10 @@ void Assembler::vmov(const SwVfpRegister dst,
   // Sd = Sm
   // Instruction details available in ARM DDI 0406B, A8-642.
   ASSERT(CpuFeatures::IsEnabled(VFP3));
-  emit(cond | 0xE*B24 | 0xB*B20 |
-       dst.code()*B12 | 0x5*B9 | B6 | src.code());
+  int sd, d, sm, m;
+  dst.split_code(&sd, &d);
+  src.split_code(&sm, &m);
+  emit(cond | 0xE*B24 | d*B22 | 0xB*B20 | sd*B12 | 0xA*B8 | B6 | m*B5 | sm);
 }
 
 
@@ -2034,8 +2051,9 @@ void Assembler::vmov(const SwVfpRegister dst,
   // Rt(15-12) | 1010(11-8) | N(7)=0 | 00(6-5) | 1(4) | 0000(3-0)
   ASSERT(CpuFeatures::IsEnabled(VFP3));
   ASSERT(!src.is(pc));
-  emit(cond | 0xE*B24 | (dst.code() >> 1)*B16 |
-       src.code()*B12 | 0xA*B8 | (0x1 & dst.code())*B7 | B4);
+  int sn, n;
+  dst.split_code(&sn, &n);
+  emit(cond | 0xE*B24 | sn*B16 | src.code()*B12 | 0xA*B8 | n*B7 | B4);
 }
 
 
@@ -2048,8 +2066,9 @@ void Assembler::vmov(const Register dst,
   // Rt(15-12) | 1010(11-8) | N(7)=0 | 00(6-5) | 1(4) | 0000(3-0)
   ASSERT(CpuFeatures::IsEnabled(VFP3));
   ASSERT(!dst.is(pc));
-  emit(cond | 0xE*B24 | B20 | (src.code() >> 1)*B16 |
-       dst.code()*B12 | 0xA*B8 | (0x1 & src.code())*B7 | B4);
+  int sn, n;
+  src.split_code(&sn, &n);
+  emit(cond | 0xE*B24 | B20 | sn*B16 | dst.code()*B12 | 0xA*B8 | n*B7 | B4);
 }
 
 
@@ -2099,16 +2118,21 @@ static bool IsDoubleVFPType(VFPType type) {
 }
 
 
-// Depending on split_last_bit split binary representation of reg_code into Vm:M
-// or M:Vm form (where M is single bit).
-static void SplitRegCode(bool split_last_bit,
+// Split five bit reg_code based on size of reg_type.
+//  32-bit register codes are Vm:M
+//  64-bit register codes are M:Vm
+// where Vm is four bits, and M is a single bit.
+static void SplitRegCode(VFPType reg_type,
                          int reg_code,
                          int* vm,
                          int* m) {
-  if (split_last_bit) {
+  ASSERT((reg_code >= 0) && (reg_code <= 31));
+  if (IsIntegerVFPType(reg_type) || !IsDoubleVFPType(reg_type)) {
+    // 32 bit type.
     *m  = reg_code & 0x1;
     *vm = reg_code >> 1;
   } else {
+    // 64 bit type.
     *m  = (reg_code & 0x10) >> 4;
     *vm = reg_code & 0x0F;
   }
@@ -2120,7 +2144,13 @@ static Instr EncodeVCVT(const VFPType dst_type,
                         const int dst_code,
                         const VFPType src_type,
                         const int src_code,
+                        Assembler::ConversionMode mode,
                         const Condition cond) {
+  ASSERT(src_type != dst_type);
+  int D, Vd, M, Vm;
+  SplitRegCode(src_type, src_code, &Vm, &M);
+  SplitRegCode(dst_type, dst_code, &Vd, &D);
+
   if (IsIntegerVFPType(dst_type) || IsIntegerVFPType(src_type)) {
     // Conversion between IEEE floating point and 32-bit integer.
     // Instruction details available in ARM DDI 0406B, A8.6.295.
@@ -2128,22 +2158,17 @@ static Instr EncodeVCVT(const VFPType dst_type,
     // Vd(15-12) | 101(11-9) | sz(8) | op(7) | 1(6) | M(5) | 0(4) | Vm(3-0)
     ASSERT(!IsIntegerVFPType(dst_type) || !IsIntegerVFPType(src_type));
 
-    int sz, opc2, D, Vd, M, Vm, op;
+    int sz, opc2, op;
 
     if (IsIntegerVFPType(dst_type)) {
       opc2 = IsSignedVFPType(dst_type) ? 0x5 : 0x4;
       sz = IsDoubleVFPType(src_type) ? 0x1 : 0x0;
-      op = 1;  // round towards zero
-      SplitRegCode(!IsDoubleVFPType(src_type), src_code, &Vm, &M);
-      SplitRegCode(true, dst_code, &Vd, &D);
+      op = mode;
     } else {
       ASSERT(IsIntegerVFPType(src_type));
-
       opc2 = 0x0;
       sz = IsDoubleVFPType(dst_type) ? 0x1 : 0x0;
       op = IsSignedVFPType(src_type) ? 0x1 : 0x0;
-      SplitRegCode(true, src_code, &Vm, &M);
-      SplitRegCode(!IsDoubleVFPType(dst_type), dst_code, &Vd, &D);
     }
 
     return (cond | 0xE*B24 | B23 | D*B22 | 0x3*B20 | B19 | opc2*B16 |
@@ -2153,13 +2178,7 @@ static Instr EncodeVCVT(const VFPType dst_type,
     // Instruction details available in ARM DDI 0406B, A8.6.298.
     // cond(31-28) | 11101(27-23)| D(22) | 11(21-20) | 0111(19-16) |
     // Vd(15-12) | 101(11-9) | sz(8) | 1(7) | 1(6) | M(5) | 0(4) | Vm(3-0)
-    int sz, D, Vd, M, Vm;
-
-    ASSERT(IsDoubleVFPType(dst_type) != IsDoubleVFPType(src_type));
-    sz = IsDoubleVFPType(src_type) ? 0x1 : 0x0;
-    SplitRegCode(IsDoubleVFPType(src_type), dst_code, &Vd, &D);
-    SplitRegCode(!IsDoubleVFPType(src_type), src_code, &Vm, &M);
-
+    int sz = IsDoubleVFPType(src_type) ? 0x1 : 0x0;
     return (cond | 0xE*B24 | B23 | D*B22 | 0x3*B20 | 0x7*B16 |
             Vd*B12 | 0x5*B9 | sz*B8 | B7 | B6 | M*B5 | Vm);
   }
@@ -2168,57 +2187,64 @@ static Instr EncodeVCVT(const VFPType dst_type,
 
 void Assembler::vcvt_f64_s32(const DwVfpRegister dst,
                              const SwVfpRegister src,
+                             ConversionMode mode,
                              const Condition cond) {
   ASSERT(CpuFeatures::IsEnabled(VFP3));
-  emit(EncodeVCVT(F64, dst.code(), S32, src.code(), cond));
+  emit(EncodeVCVT(F64, dst.code(), S32, src.code(), mode, cond));
 }
 
 
 void Assembler::vcvt_f32_s32(const SwVfpRegister dst,
                              const SwVfpRegister src,
+                             ConversionMode mode,
                              const Condition cond) {
   ASSERT(CpuFeatures::IsEnabled(VFP3));
-  emit(EncodeVCVT(F32, dst.code(), S32, src.code(), cond));
+  emit(EncodeVCVT(F32, dst.code(), S32, src.code(), mode, cond));
 }
 
 
 void Assembler::vcvt_f64_u32(const DwVfpRegister dst,
                              const SwVfpRegister src,
+                             ConversionMode mode,
                              const Condition cond) {
   ASSERT(CpuFeatures::IsEnabled(VFP3));
-  emit(EncodeVCVT(F64, dst.code(), U32, src.code(), cond));
+  emit(EncodeVCVT(F64, dst.code(), U32, src.code(), mode, cond));
 }
 
 
 void Assembler::vcvt_s32_f64(const SwVfpRegister dst,
                              const DwVfpRegister src,
+                             ConversionMode mode,
                              const Condition cond) {
   ASSERT(CpuFeatures::IsEnabled(VFP3));
-  emit(EncodeVCVT(S32, dst.code(), F64, src.code(), cond));
+  emit(EncodeVCVT(S32, dst.code(), F64, src.code(), mode, cond));
 }
 
 
 void Assembler::vcvt_u32_f64(const SwVfpRegister dst,
                              const DwVfpRegister src,
+                             ConversionMode mode,
                              const Condition cond) {
   ASSERT(CpuFeatures::IsEnabled(VFP3));
-  emit(EncodeVCVT(U32, dst.code(), F64, src.code(), cond));
+  emit(EncodeVCVT(U32, dst.code(), F64, src.code(), mode, cond));
 }
 
 
 void Assembler::vcvt_f64_f32(const DwVfpRegister dst,
                              const SwVfpRegister src,
+                             ConversionMode mode,
                              const Condition cond) {
   ASSERT(CpuFeatures::IsEnabled(VFP3));
-  emit(EncodeVCVT(F64, dst.code(), F32, src.code(), cond));
+  emit(EncodeVCVT(F64, dst.code(), F32, src.code(), mode, cond));
 }
 
 
 void Assembler::vcvt_f32_f64(const SwVfpRegister dst,
                              const DwVfpRegister src,
+                             ConversionMode mode,
                              const Condition cond) {
   ASSERT(CpuFeatures::IsEnabled(VFP3));
-  emit(EncodeVCVT(F32, dst.code(), F64, src.code(), cond));
+  emit(EncodeVCVT(F32, dst.code(), F64, src.code(), mode, cond));
 }
 
 
@@ -2311,6 +2337,16 @@ void Assembler::vcmp(const DwVfpRegister src1,
 }
 
 
+void Assembler::vmsr(Register dst, Condition cond) {
+  // Instruction details available in ARM DDI 0406A, A8-652.
+  // cond(31-28) | 1110 (27-24) | 1110(23-20)| 0001 (19-16) |
+  // Rt(15-12) | 1010 (11-8) | 0(7) | 00 (6-5) | 1(4) | 0000(3-0)
+  ASSERT(CpuFeatures::IsEnabled(VFP3));
+  emit(cond | 0xE*B24 | 0xE*B20 |  B16 |
+       dst.code()*B12 | 0xA*B8 | B4);
+}
+
+
 void Assembler::vmrs(Register dst, Condition cond) {
   // Instruction details available in ARM DDI 0406A, A8-652.
   // cond(31-28) | 1110 (27-24) | 1111(23-20)| 0001 (19-16) |
@@ -2319,7 +2355,6 @@ void Assembler::vmrs(Register dst, Condition cond) {
   emit(cond | 0xE*B24 | 0xF*B20 |  B16 |
        dst.code()*B12 | 0xA*B8 | B4);
 }
-
 
 
 void Assembler::vsqrt(const DwVfpRegister dst,
@@ -2341,6 +2376,13 @@ void Assembler::nop(int type) {
 }
 
 
+bool Assembler::IsNop(Instr instr, int type) {
+  // Check for mov rx, rx.
+  ASSERT(0 <= type && type <= 14);  // mov pc, pc is not a nop.
+  return instr == (al | 13*B21 | type*B12 | type);
+}
+
+
 bool Assembler::ImmediateFitsAddrMode1Instruction(int32_t imm32) {
   uint32_t dummy1;
   uint32_t dummy2;
@@ -2355,14 +2397,14 @@ void Assembler::BlockConstPoolFor(int instructions) {
 
 // Debugging.
 void Assembler::RecordJSReturn() {
-  WriteRecordedPositions();
+  positions_recorder()->WriteRecordedPositions();
   CheckBuffer();
   RecordRelocInfo(RelocInfo::JS_RETURN);
 }
 
 
 void Assembler::RecordDebugBreakSlot() {
-  WriteRecordedPositions();
+  positions_recorder()->WriteRecordedPositions();
   CheckBuffer();
   RecordRelocInfo(RelocInfo::DEBUG_BREAK_SLOT);
 }
@@ -2373,47 +2415,6 @@ void Assembler::RecordComment(const char* msg) {
     CheckBuffer();
     RecordRelocInfo(RelocInfo::COMMENT, reinterpret_cast<intptr_t>(msg));
   }
-}
-
-
-void Assembler::RecordPosition(int pos) {
-  if (pos == RelocInfo::kNoPosition) return;
-  ASSERT(pos >= 0);
-  current_position_ = pos;
-}
-
-
-void Assembler::RecordStatementPosition(int pos) {
-  if (pos == RelocInfo::kNoPosition) return;
-  ASSERT(pos >= 0);
-  current_statement_position_ = pos;
-}
-
-
-bool Assembler::WriteRecordedPositions() {
-  bool written = false;
-
-  // Write the statement position if it is different from what was written last
-  // time.
-  if (current_statement_position_ != written_statement_position_) {
-    CheckBuffer();
-    RecordRelocInfo(RelocInfo::STATEMENT_POSITION, current_statement_position_);
-    written_statement_position_ = current_statement_position_;
-    written = true;
-  }
-
-  // Write the position if it is different from what was written last time and
-  // also different from the written statement position.
-  if (current_position_ != written_position_ &&
-      current_position_ != written_statement_position_) {
-    CheckBuffer();
-    RecordRelocInfo(RelocInfo::POSITION, current_position_);
-    written_position_ = current_position_;
-    written = true;
-  }
-
-  // Return whether something was written.
-  return written;
 }
 
 

@@ -33,7 +33,6 @@
 #include "ic-inl.h"
 #include "runtime.h"
 #include "stub-cache.h"
-#include "utils.h"
 
 namespace v8 {
 namespace internal {
@@ -519,31 +518,6 @@ static void GenerateKeyStringCheck(MacroAssembler* masm,
 }
 
 
-// Picks out an array index from the hash field.
-static void GenerateIndexFromHash(MacroAssembler* masm,
-                                  Register key,
-                                  Register hash) {
-  // Register use:
-  //   key - holds the overwritten key on exit.
-  //   hash - holds the key's hash. Clobbered.
-
-  // The assert checks that the constants for the maximum number of digits
-  // for an array index cached in the hash field and the number of bits
-  // reserved for it does not conflict.
-  ASSERT(TenToThe(String::kMaxCachedArrayIndexLength) <
-         (1 << String::kArrayIndexValueBits));
-  // We want the smi-tagged index in key.  kArrayIndexValueMask has zeros in
-  // the low kHashShift bits.
-  ASSERT(String::kHashShift >= kSmiTagSize);
-  __ and_(hash, String::kArrayIndexValueMask);
-  __ shr(hash, String::kHashShift - kSmiTagSize);
-  // Here we actually clobber the key which will be used if calling into
-  // runtime later. However as the new key is the numeric value of a string key
-  // there is no difference in using either key.
-  __ mov(key, hash);
-}
-
-
 void KeyedLoadIC::GenerateGeneric(MacroAssembler* masm) {
   // ----------- S t a t e -------------
   //  -- eax    : key
@@ -704,7 +678,7 @@ void KeyedLoadIC::GenerateGeneric(MacroAssembler* masm) {
   __ ret(0);
 
   __ bind(&index_string);
-  GenerateIndexFromHash(masm, eax, ebx);
+  __ IndexFromHash(ebx, eax);
   // Now jump to the place where smi keys are handled.
   __ jmp(&index_smi);
 }
@@ -717,7 +691,6 @@ void KeyedLoadIC::GenerateString(MacroAssembler* masm) {
   //  -- esp[0] : return address
   // -----------------------------------
   Label miss;
-  Label index_out_of_range;
 
   Register receiver = edx;
   Register index = eax;
@@ -732,17 +705,13 @@ void KeyedLoadIC::GenerateString(MacroAssembler* masm) {
                                           result,
                                           &miss,  // When not a string.
                                           &miss,  // When not a number.
-                                          &index_out_of_range,
+                                          &miss,  // When index out of range.
                                           STRING_INDEX_IS_ARRAY_INDEX);
   char_at_generator.GenerateFast(masm);
   __ ret(0);
 
   ICRuntimeCallHelper call_helper;
   char_at_generator.GenerateSlow(masm, call_helper);
-
-  __ bind(&index_out_of_range);
-  __ Set(eax, Immediate(Factory::undefined_value()));
-  __ ret(0);
 
   __ bind(&miss);
   GenerateMiss(masm);
@@ -915,8 +884,8 @@ void KeyedLoadIC::GenerateIndexedInterceptor(MacroAssembler* masm) {
   __ test(edx, Immediate(kSmiTagMask));
   __ j(zero, &slow, not_taken);
 
-  // Check that the key is a smi.
-  __ test(eax, Immediate(kSmiTagMask));
+  // Check that the key is an array index, that is Uint32.
+  __ test(eax, Immediate(kSmiTagMask | kSmiSignMask));
   __ j(not_zero, &slow, not_taken);
 
   // Get the map of the receiver.
@@ -1565,7 +1534,7 @@ void KeyedCallIC::GenerateMegamorphic(MacroAssembler* masm, int argc) {
   GenerateMiss(masm, argc);
 
   __ bind(&index_string);
-  GenerateIndexFromHash(masm, ecx, ebx);
+  __ IndexFromHash(ebx, ecx);
   // Now jump to the place where smi keys are handled.
   __ jmp(&index_smi);
 }
@@ -1687,6 +1656,58 @@ bool LoadIC::PatchInlinedLoad(Address address, Object* map, int offset) {
   Address offset_address =
       test_instruction_address + delta + kOffsetToLoadInstruction + 2;
   *reinterpret_cast<int*>(offset_address) = offset - kHeapObjectTag;
+  return true;
+}
+
+
+// One byte opcode for mov ecx,0xXXXXXXXX.
+// Marks inlined contextual loads using all kinds of cells. Generated
+// code has the hole check:
+//   mov reg, <cell>
+//   mov reg, (<cell>, value offset)
+//   cmp reg, <the hole>
+//   je  slow
+//   ;; use reg
+static const byte kMovEcxByte = 0xB9;
+
+// One byte opcode for mov edx,0xXXXXXXXX.
+// Marks inlined contextual loads using only "don't delete"
+// cells. Generated code doesn't have the hole check:
+//   mov reg, <cell>
+//   mov reg, (<cell>, value offset)
+//   ;; use reg
+static const byte kMovEdxByte = 0xBA;
+
+bool LoadIC::PatchInlinedContextualLoad(Address address,
+                                        Object* map,
+                                        Object* cell,
+                                        bool is_dont_delete) {
+  // The address of the instruction following the call.
+  Address mov_instruction_address =
+      address + Assembler::kCallTargetAddressOffset;
+  // If the instruction following the call is not a mov ecx/edx,
+  // nothing was inlined.
+  byte b = *mov_instruction_address;
+  if (b != kMovEcxByte && b != kMovEdxByte) return false;
+  // If we don't have the hole check generated, we can only support
+  // "don't delete" cells.
+  if (b == kMovEdxByte && !is_dont_delete) return false;
+
+  Address delta_address = mov_instruction_address + 1;
+  // The delta to the start of the map check instruction.
+  int delta = *reinterpret_cast<int*>(delta_address);
+
+  // The map address is the last 4 bytes of the 7-byte
+  // operand-immediate compare instruction, so we add 3 to get the
+  // offset to the last 4 bytes.
+  Address map_address = mov_instruction_address + delta + 3;
+  *(reinterpret_cast<Object**>(map_address)) = map;
+
+  // The cell is in the last 4 bytes of a five byte mov reg, imm32
+  // instruction, so we add 1 to get the offset to the last 4 bytes.
+  Address offset_address =
+      mov_instruction_address + delta + kOffsetToLoadInstruction + 1;
+  *reinterpret_cast<Object**>(offset_address) = cell;
   return true;
 }
 

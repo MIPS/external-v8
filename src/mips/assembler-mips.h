@@ -73,13 +73,13 @@ namespace internal {
 
 // Core register.
 struct Register {
-  bool is_valid() const  { return 0 <= code_ && code_ < kNumRegisters; }
-  bool is(Register reg) const  { return code_ == reg.code_; }
-  int code() const  {
+  bool is_valid() const { return 0 <= code_ && code_ < kNumRegisters; }
+  bool is(Register reg) const { return code_ == reg.code_; }
+  int code() const {
     ASSERT(is_valid());
     return code_;
   }
-  int bit() const  {
+  int bit() const {
     ASSERT(is_valid());
     return 1 << code_;
   }
@@ -129,13 +129,13 @@ Register ToRegister(int num);
 
 // Coprocessor register.
 struct FPURegister {
-  bool is_valid() const  { return 0 <= code_ && code_ < kNumFPURegisters ; }
-  bool is(FPURegister creg) const  { return code_ == creg.code_; }
-  int code() const  {
+  bool is_valid() const { return 0 <= code_ && code_ < kNumFPURegisters ; }
+  bool is(FPURegister creg) const { return code_ == creg.code_; }
+  int code() const {
     ASSERT(is_valid());
     return code_;
   }
-  int bit() const  {
+  int bit() const {
     ASSERT(is_valid());
     return 1 << code_;
   }
@@ -182,6 +182,33 @@ extern const FPURegister f29;
 extern const FPURegister f30;
 extern const FPURegister f31;
 
+// FPU (coprocessor 1) control registers.
+// Currently only FCSR (#31) is implemented.
+struct FPUControlRegister {
+  bool is_valid() const { return code_ == kFCSRRegister; }
+  bool is(FPUControlRegister creg) const { return code_ == creg.code_; }
+  int code() const {
+    ASSERT(is_valid());
+    return code_;
+  }
+  int bit() const {
+    ASSERT(is_valid());
+    return 1 << code_;
+  }
+  void setcode(int f) {
+    code_ = f;
+    ASSERT(is_valid());
+  }
+  // Unfortunately we can't make this private in a struct.
+  int code_;
+};
+
+extern const FPUControlRegister no_fpucreg;
+extern const FPUControlRegister FCSR;
+
+// FCSR constants.
+static const uint32_t kFCSRFlagMask = (1 << 6) - 1;
+static const uint32_t kFCSRFlagShift = 2;
 
 // Returns the equivalent of !cc.
 // Negation of the default no_condition (-1) results in a non-default
@@ -191,6 +218,7 @@ inline Condition NegateCondition(Condition cc) {
   ASSERT(cc != cc_always);
   return static_cast<Condition>(cc ^ 1);
 }
+
 
 inline Condition ReverseCondition(Condition cc) {
   switch (cc) {
@@ -264,10 +292,10 @@ class Operand BASE_EMBEDDED {
 class MemOperand : public Operand {
  public:
 
-  explicit MemOperand(Register rn, int16_t offset = 0);
+  explicit MemOperand(Register rn, int32_t offset = 0);
 
  private:
-  int16_t offset_;
+  int32_t offset_;
 
   friend class Assembler;
 };
@@ -396,10 +424,13 @@ class Assembler : public Malloced {
   static const int kBranchPCOffset = 4;
 
   // Here we are patching the address in the LUI/ORI instruction pair.
-  // I can't tell if these are right or wrong. We have not used the
-  // serialization yet (as of 11/18/2010). Good luck.
-  static const int kCallTargetSize = 2 * kInstrSize;
-  static const int kExternalTargetSize = 4 * kInstrSize;
+  // These values are used in serialization process and must be zero for
+  // MIPS platform, as Code, Embedded Object or External-reference pointers
+  // are split across two consequtive instructions and don't exist separately
+  // in the code, so the serializer should not step forwards in memory after
+  // a target is resolved and written.
+  static const int kCallTargetSize = 0 * kInstrSize;
+  static const int kExternalTargetSize = 0 * kInstrSize;
 
   // Distance between the instruction referring to the address of the call
   // target and the return address.
@@ -435,12 +466,24 @@ class Assembler : public Malloced {
   // Aligns code to something that's optimal for a jump target for the platform.
   void CodeTargetAlign();
 
-  // Generic nop instruction. You should generally use nop().
-  // nop(1) is used in the property load inline patcher.
-  // Other nops are not currently used.
+  // Different nop operations are used by the code generator to detect certain
+  // states of the generated code.
+  enum NopMarkerTypes {
+    NON_MARKING_NOP = 0,
+    DEBUG_BREAK_NOP,
+    // IC markers.
+    PROPERTY_ACCESS_INLINED,
+    PROPERTY_ACCESS_INLINED_CONTEXT,
+    PROPERTY_ACCESS_INLINED_CONTEXT_DONT_DELETE,
+    // Helper values.
+    LAST_CODE_MARKER,
+    FIRST_IC_MARKER = PROPERTY_ACCESS_INLINED
+  };
+
+  // type == 0 is the default non-marking type.
   void nop(unsigned int type = 0) {
     ASSERT(type < 32);
-    sll(zero_reg, zero_reg, type);
+    sll(zero_reg, zero_reg, type, true);
   }
 
 
@@ -502,9 +545,9 @@ class Assembler : public Malloced {
 
   // Shifts.
   // Please note: sll(zero_reg, zero_reg, x) instructions are reserved as nop
-  // and may cause problems in normal code (currently only if x == 1).
-
-  void sll(Register rd, Register rt, uint16_t sa);
+  // and may cause problems in normal code. coming_from_nop makes sure this
+  // doesn't happen.
+  void sll(Register rd, Register rt, uint16_t sa, bool coming_from_nop = false);
   void sllv(Register rd, Register rt, Register rs);
   void srl(Register rd, Register rt, uint16_t sa);
   void srlv(Register rd, Register rt, Register rs);
@@ -574,6 +617,9 @@ class Assembler : public Malloced {
   void mtc1(Register rt, FPURegister fs);
   void mfc1(Register rt, FPURegister fs);
 
+  void ctc1(Register rt, FPUControlRegister fs);
+  void cfc1(Register rt, FPUControlRegister fs);
+
   // Arithmetic.
   void add_d(FPURegister fd, FPURegister fs, FPURegister ft);
   void sub_d(FPURegister fd, FPURegister fs, FPURegister ft);
@@ -589,11 +635,23 @@ class Assembler : public Malloced {
   void cvt_w_d(FPURegister fd, FPURegister fs);
   void trunc_w_s(FPURegister fd, FPURegister fs);
   void trunc_w_d(FPURegister fd, FPURegister fs);
+  void round_w_s(FPURegister fd, FPURegister fs);
+  void round_w_d(FPURegister fd, FPURegister fs);
+  void floor_w_s(FPURegister fd, FPURegister fs);
+  void floor_w_d(FPURegister fd, FPURegister fs);
+  void ceil_w_s(FPURegister fd, FPURegister fs);
+  void ceil_w_d(FPURegister fd, FPURegister fs);
 
   void cvt_l_s(FPURegister fd, FPURegister fs);
   void cvt_l_d(FPURegister fd, FPURegister fs);
   void trunc_l_s(FPURegister fd, FPURegister fs);
   void trunc_l_d(FPURegister fd, FPURegister fs);
+  void round_l_s(FPURegister fd, FPURegister fs);
+  void round_l_d(FPURegister fd, FPURegister fs);
+  void floor_l_s(FPURegister fd, FPURegister fs);
+  void floor_l_d(FPURegister fd, FPURegister fs);
+  void ceil_l_s(FPURegister fd, FPURegister fs);
+  void ceil_l_d(FPURegister fd, FPURegister fs);
 
   void cvt_s_w(FPURegister fd, FPURegister fs);
   void cvt_s_l(FPURegister fd, FPURegister fs);
@@ -646,15 +704,9 @@ class Assembler : public Malloced {
   // Use --debug_code to enable.
   void RecordComment(const char* msg);
 
-  void RecordPosition(int pos);
-  void RecordStatementPosition(int pos);
-  bool WriteRecordedPositions();
-
   int32_t pc_offset() const { return pc_ - buffer_; }
-  int32_t current_position() const { return current_position_; }
-  int32_t current_statement_position() const {
-    return current_statement_position_;
-  }
+
+  PositionsRecorder* positions_recorder() { return &positions_recorder_; }
 
   bool can_peephole_optimize(int instructions) {
     if (!FLAG_peephole_optimization) return false;
@@ -706,6 +758,10 @@ class Assembler : public Malloced {
   static Instr SetSwOffset(Instr instr, int16_t offset);
   static bool IsAddImmediate(Instr instr);
   static Instr SetAddImmediateOffset(Instr instr, int16_t offset);
+
+  bool has_exception() const {
+    return internal_trampoline_exception_;
+  }
 
  protected:
   int32_t buffer_space() const { return reloc_info_writer.pos() - pc_; }
@@ -783,12 +839,6 @@ class Assembler : public Malloced {
   // The bound position, before this we cannot do instruction elimination.
   int last_bound_pos_;
 
-  // Source position information.
-  int current_position_;
-  int current_statement_position_;
-  int written_position_;
-  int written_statement_position_;
-
   // Code emission.
   inline void CheckBuffer();
   void GrowBuffer();
@@ -830,6 +880,12 @@ class Assembler : public Malloced {
                         Register rt,
                         FPURegister fs,
                         FPURegister fd,
+                        SecondaryField func = NULLSF);
+
+  void GenInstrRegister(Opcode opcode,
+                        SecondaryField fmt,
+                        Register rt,
+                        FPUControlRegister fs,
                         SecondaryField func = NULLSF);
 
 
@@ -885,10 +941,18 @@ class Assembler : public Malloced {
       return end_;
     }
     int take_slot() {
-      int trampoline_slot = next_slot_;
-      ASSERT(free_slot_count_ > 0);
-      free_slot_count_--;
-      next_slot_ += 2*kInstrSize;
+      int trampoline_slot = kInvalidSlotPos;
+      if (free_slot_count_ <= 0) {
+        // We have run out of space on trampolines.
+        // Make sure we fail in debug mode, so we become aware of each case
+        // when this happens.
+        ASSERT(0);
+        // Internal exception will be caught.
+      } else {
+        trampoline_slot = next_slot_;
+        free_slot_count_--;
+        next_slot_ += 2*kInstrSize;
+      }
       return trampoline_slot;
     }
     int take_label() {
@@ -913,20 +977,34 @@ class Assembler : public Malloced {
   static const int kSlotsPerTrampoline = 2304;
   static const int kLabelsPerTrampoline = 8;
   static const int kTrampolineInst =
-                                  2*kSlotsPerTrampoline + kLabelsPerTrampoline;
-  static const int kTrampolineSize = kTrampolineInst*kInstrSize;
-  static const int kMaxBranchOffset = (1 << (18-1)) - 1;
-  static const int kMaxDistBetweenPools = kMaxBranchOffset - 2*kTrampolineSize;
+      2 * kSlotsPerTrampoline + kLabelsPerTrampoline;
+  static const int kTrampolineSize = kTrampolineInst * kInstrSize;
+  static const int kMaxBranchOffset = (1 << (18 - 1)) - 1;
+  static const int kMaxDistBetweenPools =
+      kMaxBranchOffset - 2 * kTrampolineSize;
+  static const int kInvalidSlotPos = -1;
 
   List<Trampoline> trampolines_;
+  bool internal_trampoline_exception_;
 
   friend class RegExpMacroAssemblerMIPS;
   friend class RelocInfo;
   friend class CodePatcher;
   friend class BlockTrampolinePoolScope;
+
+  PositionsRecorder positions_recorder_;
+  friend class PositionsRecorder;
+  friend class EnsureSpace;
+};
+
+
+class EnsureSpace BASE_EMBEDDED {
+ public:
+  explicit EnsureSpace(Assembler* assembler) {
+    assembler->CheckBuffer();
+  }
 };
 
 } }  // namespace v8::internal
 
 #endif  // V8_ARM_ASSEMBLER_MIPS_H_
-

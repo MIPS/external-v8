@@ -67,12 +67,12 @@ class List {
   // Returns a reference to the element at index i.  This reference is
   // not safe to use after operations that can change the list's
   // backing store (eg, Add).
-  inline T& operator[](int i) const  {
+  inline T& operator[](int i) const {
     ASSERT(0 <= i);
     ASSERT(i < length_);
     return data_[i];
   }
-  inline T& at(int i) const  { return operator[](i); }
+  inline T& at(int i) const { return operator[](i); }
   inline T& last() const { return at(length_ - 1); }
   inline T& first() const { return at(0); }
 
@@ -147,14 +147,6 @@ class List {
 
   DISALLOW_COPY_AND_ASSIGN(List);
 };
-
-class FrameElement;
-
-// Add() is inlined, ResizeAdd() called by Add() is inlined except for
-// Lists of FrameElements, and ResizeAddInternal() is inlined in ResizeAdd().
-template <>
-void List<FrameElement,
-          FreeStoreAllocationPolicy>::ResizeAdd(const FrameElement& element);
 
 } }  // namespace v8::internal
 

@@ -176,7 +176,10 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
 
   // Emit code to discard a non-negative number of pointer-sized elements
   // from the stack, clobbering only the sp register.
-  void Drop(int count, Condition cond = cc_always);
+  void Drop(int count,
+            Condition cond = cc_always,
+            Register reg = no_reg,
+            const Operand& op = Operand(no_reg));
 
   // Swap two registers.  If the scratch register is omitted then a slightly
   // less efficient form using xor instead of mov is emitted.
@@ -261,6 +264,42 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   void CheckAccessGlobalProxy(Register holder_reg,
                               Register scratch,
                               Label* miss);
+
+  inline void MarkCode(NopMarkerTypes type) {
+    nop(type);
+  }
+
+  // Check if the given instruction is a 'type' marker.
+  // ie. check if is is a sll zero_reg, zero_reg, <type> (referenced as
+  // nop(type)). These instructions are generated to mark special location in
+  // the code, like some special IC code.
+  static inline bool IsMarkedCode(Instr instr, int type) {
+    ASSERT((FIRST_IC_MARKER <= type) && (type < LAST_CODE_MARKER));
+    return is_nop(instr, type);
+  }
+
+
+  static inline int GetCodeMarker(Instr instr) {
+    uint32_t opcode = ((instr & kOpcodeMask));
+    uint32_t rt = ((instr & kRtFieldMask) >> kRtShift);
+    uint32_t rs = ((instr & kRsFieldMask) >> kRsShift);
+    uint32_t sa = ((instr & kSaFieldMask) >> kSaShift);
+
+    // Return <n> if we have a sll zero_reg, zero_reg, n
+    // else return -1.
+    bool sllzz = (opcode == SLL &&
+                  rt == static_cast<uint32_t>(ToNumber(zero_reg)) &&
+                  rs == static_cast<uint32_t>(ToNumber(zero_reg)));
+    int type = (sllzz &&
+                FIRST_IC_MARKER <= sa &&
+                sa < LAST_CODE_MARKER)
+                  ? sa
+                  : -1;
+    ASSERT((type == -1) ||
+           ((FIRST_IC_MARKER <= type) && (type < LAST_CODE_MARKER)));
+    return type;
+  }
+
 
 
   // ---------------------------------------------------------------------------
@@ -465,6 +504,15 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   void Trunc_uw_d(FPURegister fd, FPURegister fs);
   void Trunc_uw_d(FPURegister fd, Register rs);
 
+  // Convert the HeapNumber pointed to by source to a 32bits signed integer
+  // dest. If the HeapNumber does not fit into a 32bits signed integer branch
+  // to not_int32 label.
+  void ConvertToInt32(Register source,
+                      Register dest,
+                      Register scratch,
+                      Register scratch2,
+                      Label *not_int32);
+
   // -------------------------------------------------------------------------
   // Activation frames
 
@@ -474,23 +522,32 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   void EnterConstructFrame() { EnterFrame(StackFrame::CONSTRUCT); }
   void LeaveConstructFrame() { LeaveFrame(StackFrame::CONSTRUCT); }
 
-  // Enter specific kind of exit frame; either EXIT or
-  // EXIT_DEBUG. Expects the number of arguments in register a0 and
+  // Enter exit frame.
+  // Expects the number of arguments in register a0 and
   // the builtin function to call in register a1.
   // On output hold_argc, hold_function, and hold_argv are setup.
-  void EnterExitFrame(ExitFrame::Mode mode,
-                      Register hold_argc,
+  void EnterExitFrame(Register hold_argc,
                       Register hold_argv,
                       Register hold_function);
 
   // Leave the current exit frame. Expects the return value in v0.
-  void LeaveExitFrame(ExitFrame::Mode mode);
+  void LeaveExitFrame();
 
   // Align the stack by optionally pushing a Smi zero.
   void AlignStack(int offset);    // TODO(REBASE) : remove this function.
 
   // Get the actual activation frame alignment for target environment.
   static int ActivationFrameAlignment();
+
+  void LoadContext(Register dst, int context_chain_length);
+
+  void LoadGlobalFunction(int index, Register function);
+
+  // Load the initial map from the global function. The registers
+  // function and map can be the same, function is then overwritten.
+  void LoadGlobalFunctionInitialMap(Register function,
+                                    Register map,
+                                    Register scratch);
 
   // -------------------------------------------------------------------------
   // JavaScript invokes
@@ -522,12 +579,6 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   // -------------------------------------------------------------------------
   // Debugger Support
 
-  void SaveRegistersToMemory(RegList regs);
-  void RestoreRegistersFromMemory(RegList regs);
-  void CopyRegistersFromMemoryToStack(Register base, RegList regs);
-  void CopyRegistersFromStackToMemory(Register base,
-                                      Register scratch,
-                                      RegList regs);
   void DebugBreak();
 #endif
 
@@ -606,6 +657,12 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   // occurred.
   void IllegalOperation(int num_arguments);
 
+  // Picks out an array index from the hash field.
+  // Register use:
+  //   hash - holds the index's hash. Clobbered.
+  //   index - holds the overwritten index on exit.
+  void IndexFromHash(Register hash, Register index);
+
   // Load the value of a number object into a FPU double register. If the
   // object is not a number a jump to the label not_number is performed
   // and the FPU double register is unchanged.
@@ -636,9 +693,6 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   void TailCallStub(CodeStub* stub);
 
   void CallJSExitStub(CodeStub* stub);
-
-  // Return from a code stub after popping its arguments.
-  void StubReturn(int argc);
 
   // Call a runtime routine.
   void CallRuntime(Runtime::Function* f, int num_arguments);
@@ -873,6 +927,16 @@ class CodePatcher {
 
 // -----------------------------------------------------------------------------
 // Static helper functions.
+
+static MemOperand ContextOperand(Register context, int index) {
+  return MemOperand(context, Context::SlotOffset(index));
+}
+
+
+static inline MemOperand GlobalObjectOperand()  {
+  return ContextOperand(cp, Context::GLOBAL_INDEX);
+}
+
 
 // Generate a MemOperand for loading a field from an object.
 static inline MemOperand FieldMemOperand(Register object, int offset) {

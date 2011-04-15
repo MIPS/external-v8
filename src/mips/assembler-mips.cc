@@ -150,6 +150,9 @@ const FPURegister f29 = { 29 };
 const FPURegister f30 = { 30 };
 const FPURegister f31 = { 31 };
 
+const FPUControlRegister no_fpucreg = { -1 };
+const FPUControlRegister FCSR = { kFCSRRegister };
+
 int ToNumber(Register reg) {
   ASSERT(reg.is_valid());
   const int kNumbers[] = {
@@ -188,6 +191,7 @@ int ToNumber(Register reg) {
   };
   return kNumbers[reg.code()];
 }
+
 
 Register ToRegister(int num) {
   ASSERT(num >= 0 && num < kNumRegisters);
@@ -263,7 +267,8 @@ Operand::Operand(Handle<Object> handle) {
   }
 }
 
-MemOperand::MemOperand(Register rm, int16_t offset) : Operand(rm) {
+
+MemOperand::MemOperand(Register rm, int32_t offset) : Operand(rm) {
   offset_ = offset;
 }
 
@@ -305,7 +310,8 @@ static const Instr kLwSwInstrTypeMask = 0xffe00000;
 static const Instr kLwSwInstrArgumentMask  = ~kLwSwInstrTypeMask;
 static const Instr kLwSwOffsetMask = kImm16Mask;
 
-Assembler::Assembler(void* buffer, int buffer_size) {
+Assembler::Assembler(void* buffer, int buffer_size)
+    : positions_recorder_(this) {
   if (buffer == NULL) {
     // Do our own buffer management.
     if (buffer_size <= kMinimalBufferSize) {
@@ -336,15 +342,12 @@ Assembler::Assembler(void* buffer, int buffer_size) {
   ASSERT(buffer_ != NULL);
   pc_ = buffer_;
   reloc_info_writer.Reposition(buffer_ + buffer_size, pc_);
-  current_statement_position_ = RelocInfo::kNoPosition;
-  current_position_ = RelocInfo::kNoPosition;
-  written_statement_position_ = current_statement_position_;
-  written_position_ = current_position_;
 
   last_trampoline_pool_end_ = 0;
   no_trampoline_pool_before_ = 0;
   trampoline_pool_blocked_nesting_ = 0;
   next_buffer_check_ = kMaxBranchOffset - kTrampolineSize;
+  internal_trampoline_exception_ = false;
 }
 
 
@@ -416,6 +419,7 @@ bool Assembler::IsSwRegFpNegOffset(Instr instr) {
           kSwRegFpNegOffsetPattern);
 }
 
+
 bool Assembler::IsLwRegFpNegOffset(Instr instr) {
   return ((instr & (kLwSwInstrTypeMask | kNegOffset)) ==
           kLwRegFpNegOffsetPattern);
@@ -436,7 +440,9 @@ bool Assembler::IsLwRegFpNegOffset(Instr instr) {
 // which is an otherwise illegal value (branch -1 is inf loop).
 // The instruction 16-bit offset field addresses 32-bit words, but in
 // code is conv to an 18-bit value addressing bytes, hence the -4 value.
+
 const int kEndOfChain = -4;
+
 
 bool Assembler::is_branch(Instr instr) {
   uint32_t opcode   = ((instr & kOpcodeMask));
@@ -458,10 +464,11 @@ bool Assembler::is_branch(Instr instr) {
       label_constant == 0;  // Emitted label const in reg-exp engine.
 }
 
+
 bool Assembler::is_nop(Instr instr, unsigned int type) {
   // See Assembler::nop(type).
   ASSERT(type < 32);
-  uint32_t opcode   = ((instr & kOpcodeMask));
+  uint32_t opcode = ((instr & kOpcodeMask));
   uint32_t rt = ((instr & kRtFieldMask) >> kRtShift);
   uint32_t rs = ((instr & kRsFieldMask) >> kRsShift);
   uint32_t sa = ((instr & kSaFieldMask) >> kSaShift);
@@ -478,19 +485,23 @@ bool Assembler::is_nop(Instr instr, unsigned int type) {
   return ret;
 }
 
+
 int32_t Assembler::get_branch_offset(Instr instr) {
   ASSERT(is_branch(instr));
   return ((int16_t)(instr & kImm16Mask)) << 2;
 }
 
+
 bool Assembler::is_lw(Instr instr) {
   return ((instr & kOpcodeMask) == LW);
 }
+
 
 int16_t Assembler::get_lw_offset(Instr instr) {
   ASSERT(is_lw(instr));
   return ((instr & kImm16Mask));
 }
+
 
 Instr Assembler::set_lw_offset(Instr instr, int16_t offset) {
   ASSERT(is_lw(instr));
@@ -609,6 +620,10 @@ void Assembler::bind_to(Label* L, int pos) {
     if (dist > kMaxBranchOffset) {
       do {
         int32_t trampoline_pos = get_trampoline_entry(fixup_pos);
+        if (kInvalidSlotPos == trampoline_pos) {
+          // Internal error.
+          return;
+        }
         ASSERT((trampoline_pos - fixup_pos) <= kMaxBranchOffset);
         target_at_put(fixup_pos, trampoline_pos);
         fixup_pos = trampoline_pos;
@@ -617,6 +632,10 @@ void Assembler::bind_to(Label* L, int pos) {
     } else if (dist < -kMaxBranchOffset) {
       do {
         int32_t trampoline_pos = get_trampoline_entry(fixup_pos, false);
+        if (kInvalidSlotPos == trampoline_pos) {
+          // Internal error.
+          return;
+        }
         ASSERT((trampoline_pos - fixup_pos) >= -kMaxBranchOffset);
         target_at_put(fixup_pos, trampoline_pos);
         fixup_pos = trampoline_pos;
@@ -738,6 +757,16 @@ void Assembler::GenInstrRegister(Opcode opcode,
   emit(instr);
 }
 
+void Assembler::GenInstrRegister(Opcode opcode,
+                                 SecondaryField fmt,
+                                 Register rt,
+                                 FPUControlRegister fs,
+                                 SecondaryField func) {
+  ASSERT(fs.is_valid() && rt.is_valid());
+  Instr instr = opcode | fmt | (rt.code() << kRtShift)
+      | (fs.code() << kFsShift) | func;
+  emit(instr);
+}
 
 // Instructions with immediate value.
 // Registers are in the order of the instruction encoding, from left to right.
@@ -783,6 +812,7 @@ void Assembler::GenInstrJump(Opcode opcode,
   BlockTrampolinePoolFor(1);
 }
 
+
 // Returns the next free label entry from the next trampoline pool.
 int32_t Assembler::get_label_entry(int32_t pos, bool next_pool) {
   int trampoline_count = trampolines_.length();
@@ -807,29 +837,37 @@ int32_t Assembler::get_label_entry(int32_t pos, bool next_pool) {
   return label_entry;
 }
 
+
 // Returns the next free trampoline entry from the next trampoline pool.
 int32_t Assembler::get_trampoline_entry(int32_t pos, bool next_pool) {
   int trampoline_count = trampolines_.length();
-  int32_t trampoline_entry = 0;
+  int32_t trampoline_entry = kInvalidSlotPos;
   ASSERT(trampoline_count > 0);
 
-  if (next_pool) {
-    for (int i = 0; i < trampoline_count; i++) {
-      if (trampolines_[i].start() > pos) {
-       trampoline_entry = trampolines_[i].take_slot();
-       break;
+  if (!internal_trampoline_exception_) {
+    if (next_pool) {
+      for (int i = 0; i < trampoline_count; i++) {
+        if (trampolines_[i].start() > pos) {
+         trampoline_entry = trampolines_[i].take_slot();
+         break;
+        }
+      }
+    } else {  //  Caller needs a trampoline entry from the previous pool.
+      for (int i = trampoline_count-1; i >= 0; i--) {
+        if (trampolines_[i].end() < pos) {
+         trampoline_entry = trampolines_[i].take_slot();
+         break;
+        }
       }
     }
-  } else {  //  Caller needs a trampoline entry from the previous pool.
-    for (int i = trampoline_count-1; i >= 0; i--) {
-      if (trampolines_[i].end() < pos) {
-       trampoline_entry = trampolines_[i].take_slot();
-       break;
-      }
+    if (kInvalidSlotPos == trampoline_entry) {
+      internal_trampoline_exception_ = true;
     }
   }
+
   return trampoline_entry;
 }
+
 
 int32_t Assembler::branch_offset(Label* L, bool jump_elimination_allowed) {
   int32_t target_pos;
@@ -841,6 +879,10 @@ int32_t Assembler::branch_offset(Label* L, bool jump_elimination_allowed) {
     if (dist > kMaxBranchOffset) {
       do {
         int32_t trampoline_pos = get_trampoline_entry(target_pos);
+        if (kInvalidSlotPos == trampoline_pos) {
+          // Internal error.
+          return 0;
+        }
         ASSERT((trampoline_pos - target_pos) > 0);
         ASSERT((trampoline_pos - target_pos) <= kMaxBranchOffset);
         target_at_put(trampoline_pos, target_pos);
@@ -850,6 +892,10 @@ int32_t Assembler::branch_offset(Label* L, bool jump_elimination_allowed) {
     } else if (dist < -kMaxBranchOffset) {
       do {
         int32_t trampoline_pos = get_trampoline_entry(target_pos, false);
+        if (kInvalidSlotPos == trampoline_pos) {
+          // Internal error.
+          return 0;
+        }
         ASSERT((target_pos - trampoline_pos) > 0);
         ASSERT((target_pos - trampoline_pos) <= kMaxBranchOffset);
         target_at_put(trampoline_pos, target_pos);
@@ -923,7 +969,7 @@ void Assembler::b(int16_t offset) {
 
 
 void Assembler::bal(int16_t offset) {
-  WriteRecordedPositions();
+  positions_recorder()->WriteRecordedPositions();
   bgezal(zero_reg, offset);
 }
 
@@ -944,7 +990,7 @@ void Assembler::bgez(Register rs, int16_t offset) {
 
 void Assembler::bgezal(Register rs, int16_t offset) {
   BlockTrampolinePoolScope block_trampoline_pool(this);
-  WriteRecordedPositions();
+  positions_recorder()->WriteRecordedPositions();
   GenInstrImmediate(REGIMM, rs, BGEZAL, offset);
   BlockTrampolinePoolFor(1);
 }
@@ -973,7 +1019,7 @@ void Assembler::bltz(Register rs, int16_t offset) {
 
 void Assembler::bltzal(Register rs, int16_t offset) {
   BlockTrampolinePoolScope block_trampoline_pool(this);
-  WriteRecordedPositions();
+  positions_recorder()->WriteRecordedPositions();
   GenInstrImmediate(REGIMM, rs, BLTZAL, offset);
   BlockTrampolinePoolFor(1);
 }
@@ -995,7 +1041,7 @@ void Assembler::j(int32_t target) {
 void Assembler::jr(Register rs) {
   BlockTrampolinePoolScope block_trampoline_pool(this);
   if (rs.is(ra)) {
-    WriteRecordedPositions();
+    positions_recorder()->WriteRecordedPositions();
   }
   GenInstrRegister(SPECIAL, rs, zero_reg, zero_reg, 0, JR);
   BlockTrampolinePoolFor(1);
@@ -1003,7 +1049,7 @@ void Assembler::jr(Register rs) {
 
 
 void Assembler::jal(int32_t target) {
-  WriteRecordedPositions();
+  positions_recorder()->WriteRecordedPositions();
   ASSERT(is_uint28(target) && ((target & 3) == 0));
   GenInstrJump(JAL, target >> 2);
 }
@@ -1011,7 +1057,7 @@ void Assembler::jal(int32_t target) {
 
 void Assembler::jalr(Register rs, Register rd) {
   BlockTrampolinePoolScope block_trampoline_pool(this);
-  WriteRecordedPositions();
+  positions_recorder()->WriteRecordedPositions();
   GenInstrRegister(SPECIAL, rs, zero_reg, rd, 0, JALR);
   BlockTrampolinePoolFor(1);
 }
@@ -1250,7 +1296,15 @@ void Assembler::nor(Register rd, Register rs, Register rt) {
 
 
 // Shifts.
-void Assembler::sll(Register rd, Register rt, uint16_t sa) {
+void Assembler::sll(Register rd,
+                    Register rt,
+                    uint16_t sa,
+                    bool coming_from_nop) {
+  // Don't allow nop instructions in the form sll zero_reg, zero_reg to be
+  // generated using the sll instruction. They must be generated using
+  // nop(int/NopMarkerTypes) or MarkCode(int/NopMarkerTypes) pseudo
+  // instructions.
+  ASSERT(coming_from_nop || !(rd.is(zero_reg) && rt.is(zero_reg)));
   GenInstrRegister(SPECIAL, zero_reg, rt, rd, sa, SLL);
 }
 
@@ -1279,6 +1333,7 @@ void Assembler::srav(Register rd, Register rt, Register rs) {
   GenInstrRegister(SPECIAL, rs, rt, rd, 0, SRAV);
 }
 
+
 void Assembler::rotr(Register rd, Register rt, uint16_t sa) {
   ASSERT(rd.is_valid() && rt.is_valid() && is_uint5(sa));
   if (mips32r2) {
@@ -1290,6 +1345,7 @@ void Assembler::rotr(Register rd, Register rt, uint16_t sa) {
     UNIMPLEMENTED_MIPS();
   }
 }
+
 
 void Assembler::rotrv(Register rd, Register rt, Register rs) {
   ASSERT(rd.is_valid() && rt.is_valid() && rs.is_valid() );
@@ -1303,30 +1359,71 @@ void Assembler::rotrv(Register rd, Register rt, Register rs) {
   }
 }
 
+
 //------------Memory-instructions-------------
 
 void Assembler::lb(Register rd, const MemOperand& rs) {
-  GenInstrImmediate(LB, rs.rm(), rd, rs.offset_);
+  if (is_int16(rs.offset_)) {
+    GenInstrImmediate(LB, rs.rm(), rd, rs.offset_);
+  } else {  // Offset > 16 bits, use multiple instructions to load.
+    ASSERT(!rs.rm().is(at));
+    lui(at, rs.offset_ >> 16);
+    ori(at, at, rs.offset_ & 0xffff);
+    addu(at, at, rs.rm());
+    GenInstrImmediate(LB, at, rd, 0);  // Equiv to lb(rd, MemOperand(at, 0));
+  }
 }
 
 
 void Assembler::lbu(Register rd, const MemOperand& rs) {
-  GenInstrImmediate(LBU, rs.rm(), rd, rs.offset_);
+  if (is_int16(rs.offset_)) {
+    GenInstrImmediate(LBU, rs.rm(), rd, rs.offset_);
+  } else {  // Offset > 16 bits, use multiple instructions to load.
+    ASSERT(!rs.rm().is(at));
+    lui(at, rs.offset_ >> 16);
+    ori(at, at, rs.offset_ & 0xffff);
+    addu(at, at, rs.rm());
+    GenInstrImmediate(LBU, at, rd, 0);  // Equiv to lbu(rd, MemOperand(at, 0));
+  }
 }
 
 
 void Assembler::lh(Register rd, const MemOperand& rs) {
-  GenInstrImmediate(LH, rs.rm(), rd, rs.offset_);
+  if (is_int16(rs.offset_)) {
+    GenInstrImmediate(LH, rs.rm(), rd, rs.offset_);
+  } else {  // Offset > 16 bits, use multiple instructions to load.
+    ASSERT(!rs.rm().is(at));
+    lui(at, rs.offset_ >> 16);
+    ori(at, at, rs.offset_ & 0xffff);
+    addu(at, at, rs.rm());
+    GenInstrImmediate(LH, at, rd, 0);  // Equiv to lh(rd, MemOperand(at, 0));
+  }
 }
 
 
 void Assembler::lhu(Register rd, const MemOperand& rs) {
-  GenInstrImmediate(LHU, rs.rm(), rd, rs.offset_);
+  if (is_int16(rs.offset_)) {
+    GenInstrImmediate(LHU, rs.rm(), rd, rs.offset_);
+  } else {  // Offset > 16 bits, use multiple instructions to load.
+    ASSERT(!rs.rm().is(at));
+    lui(at, rs.offset_ >> 16);
+    ori(at, at, rs.offset_ & 0xffff);
+    addu(at, at, rs.rm());
+    GenInstrImmediate(LHU, at, rd, 0);  // Equiv to lhu(rd, MemOperand(at, 0));
+  }
 }
 
 
 void Assembler::lw(Register rd, const MemOperand& rs) {
-  GenInstrImmediate(LW, rs.rm(), rd, rs.offset_);
+  if (is_int16(rs.offset_)) {
+    GenInstrImmediate(LW, rs.rm(), rd, rs.offset_);
+  } else {  // Offset > 16 bits, use multiple instructions to load.
+    ASSERT(!rs.rm().is(at));
+    lui(at, rs.offset_ >> 16);
+    ori(at, at, rs.offset_ & 0xffff);
+    addu(at, at, rs.rm());
+    GenInstrImmediate(LW, at, rd, 0);  // Equiv to lw(rd, MemOperand(at, 0));
+  }
 
   if (can_peephole_optimize(2)) {
     Instr sw_instr = instr_at(pc_ - 2 * kInstrSize);
@@ -1389,17 +1486,41 @@ void Assembler::lwr(Register rd, const MemOperand& rs) {
 
 
 void Assembler::sb(Register rd, const MemOperand& rs) {
-  GenInstrImmediate(SB, rs.rm(), rd, rs.offset_);
+  if (is_int16(rs.offset_)) {
+    GenInstrImmediate(SB, rs.rm(), rd, rs.offset_);
+  } else {  // Offset > 16 bits, use multiple instructions to store.
+    ASSERT(!rs.rm().is(at));
+    lui(at, rs.offset_ >> 16);
+    ori(at, at, rs.offset_ & 0xffff);
+    addu(at, at, rs.rm());
+    GenInstrImmediate(SB, at, rd, 0);  // Equiv to sb(rd, MemOperand(at, 0));
+  }
 }
 
 
 void Assembler::sh(Register rd, const MemOperand& rs) {
-  GenInstrImmediate(SH, rs.rm(), rd, rs.offset_);
+  if (is_int16(rs.offset_)) {
+    GenInstrImmediate(SH, rs.rm(), rd, rs.offset_);
+  } else {  // Offset > 16 bits, use multiple instructions to store.
+    ASSERT(!rs.rm().is(at));
+    lui(at, rs.offset_ >> 16);
+    ori(at, at, rs.offset_ & 0xffff);
+    addu(at, at, rs.rm());
+    GenInstrImmediate(SH, at, rd, 0);  // Equiv to sh(rd, MemOperand(at, 0));
+  }
 }
 
 
 void Assembler::sw(Register rd, const MemOperand& rs) {
-  GenInstrImmediate(SW, rs.rm(), rd, rs.offset_);
+  if (is_int16(rs.offset_)) {
+    GenInstrImmediate(SW, rs.rm(), rd, rs.offset_);
+  } else {  // Offset > 16 bits, use multiple instructions to store.
+    ASSERT(!rs.rm().is(at));
+    lui(at, rs.offset_ >> 16);
+    ori(at, at, rs.offset_ & 0xffff);
+    addu(at, at, rs.rm());
+    GenInstrImmediate(SW, at, rd, 0);  // Equiv to sw(rd, MemOperand(at, 0));
+  }
 
   // Eliminate pattern: pop(), push(r)
   //     addiu sp, sp, Operand(kPointerSize);
@@ -1525,6 +1646,7 @@ void Assembler::sltiu(Register rt, Register rs, int32_t j) {
   GenInstrImmediate(SLTIU, rs, rt, j);
 }
 
+
 // Conditional move.
 void Assembler::movz(Register rd, Register rs, Register rt) {
   GenInstrRegister(SPECIAL, rs, rt, rd, 0, MOVZ);
@@ -1535,17 +1657,20 @@ void Assembler::movn(Register rd, Register rs, Register rt) {
   GenInstrRegister(SPECIAL, rs, rt, rd, 0, MOVN);
 }
 
+
 void Assembler::movt(Register rd, Register rs, uint16_t cc) {
   Register rt;
   rt.code_ = (cc & 0x0003)<<2 | 1;
   GenInstrRegister(SPECIAL, rs, rt, rd, 0, MOVCI);
 }
 
+
 void Assembler::movf(Register rd, Register rs, uint16_t cc) {
   Register rt;
   rt.code_ = (cc & 0x0003)<<2 | 0;
   GenInstrRegister(SPECIAL, rs, rt, rd, 0, MOVCI);
 }
+
 
 // Bit twiddling.
 void Assembler::clz(Register rd, Register rs) {
@@ -1624,6 +1749,14 @@ void Assembler::mfc1(Register rt, FPURegister fs) {
   GenInstrRegister(COP1, MFC1, rt, fs, f0);
 }
 
+void Assembler::ctc1(Register rt, FPUControlRegister fs) {
+  GenInstrRegister(COP1, CTC1, rt, fs);
+}
+
+
+void Assembler::cfc1(Register rt, FPUControlRegister fs) {
+  GenInstrRegister(COP1, CFC1, rt, fs);
+}
 
 // Arithmetic.
 
@@ -1631,29 +1764,36 @@ void Assembler::add_d(FPURegister fd, FPURegister fs, FPURegister ft) {
   GenInstrRegister(COP1, D, ft, fs, fd, ADD_D);
 }
 
+
 void Assembler::sub_d(FPURegister fd, FPURegister fs, FPURegister ft) {
   GenInstrRegister(COP1, D, ft, fs, fd, SUB_D);
 }
+
 
 void Assembler::mul_d(FPURegister fd, FPURegister fs, FPURegister ft) {
   GenInstrRegister(COP1, D, ft, fs, fd, MUL_D);
 }
 
+
 void Assembler::div_d(FPURegister fd, FPURegister fs, FPURegister ft) {
   GenInstrRegister(COP1, D, ft, fs, fd, DIV_D);
 }
+
 
 void Assembler::abs_d(FPURegister fd, FPURegister fs) {
   GenInstrRegister(COP1, D, f0, fs, fd, ABS_D);
 }
 
+
 void Assembler::mov_d(FPURegister fd, FPURegister fs) {
   GenInstrRegister(COP1, D, f0, fs, fd, MOV_D);
 }
 
+
 void Assembler::neg_d(FPURegister fd, FPURegister fs) {
   GenInstrRegister(COP1, D, f0, fs, fd, NEG_D);
 }
+
 
 void Assembler::sqrt_d(FPURegister fd, FPURegister fs) {
   GenInstrRegister(COP1, D, f0, fs, fd, SQRT_D);
@@ -1681,6 +1821,29 @@ void Assembler::trunc_w_d(FPURegister fd, FPURegister fs) {
   GenInstrRegister(COP1, D, f0, fs, fd, TRUNC_W_D);
 }
 
+void Assembler::round_w_s(FPURegister fd, FPURegister fs) {
+  GenInstrRegister(COP1, S, f0, fs, fd, ROUND_W_S);
+}
+
+void Assembler::round_w_d(FPURegister fd, FPURegister fs) {
+  GenInstrRegister(COP1, D, f0, fs, fd, ROUND_W_D);
+}
+
+void Assembler::floor_w_s(FPURegister fd, FPURegister fs) {
+  GenInstrRegister(COP1, S, f0, fs, fd, FLOOR_W_S);
+}
+
+void Assembler::floor_w_d(FPURegister fd, FPURegister fs) {
+  GenInstrRegister(COP1, D, f0, fs, fd, FLOOR_W_D);
+}
+
+void Assembler::ceil_w_s(FPURegister fd, FPURegister fs) {
+  GenInstrRegister(COP1, S, f0, fs, fd, CEIL_W_S);
+}
+
+void Assembler::ceil_w_d(FPURegister fd, FPURegister fs) {
+  GenInstrRegister(COP1, D, f0, fs, fd, CEIL_W_D);
+}
 
 void Assembler::cvt_l_s(FPURegister fd, FPURegister fs) {
   if (mips32r2) {
@@ -1715,6 +1878,30 @@ void Assembler::trunc_l_d(FPURegister fd, FPURegister fs) {
   } else {
     UNIMPLEMENTED_MIPS();
   }
+}
+
+void Assembler::round_l_s(FPURegister fd, FPURegister fs) {
+  GenInstrRegister(COP1, S, f0, fs, fd, ROUND_L_S);
+}
+
+void Assembler::round_l_d(FPURegister fd, FPURegister fs) {
+  GenInstrRegister(COP1, D, f0, fs, fd, ROUND_L_D);
+}
+
+void Assembler::floor_l_s(FPURegister fd, FPURegister fs) {
+  GenInstrRegister(COP1, S, f0, fs, fd, FLOOR_L_S);
+}
+
+void Assembler::floor_l_d(FPURegister fd, FPURegister fs) {
+  GenInstrRegister(COP1, D, f0, fs, fd, FLOOR_L_D);
+}
+
+void Assembler::ceil_l_s(FPURegister fd, FPURegister fs) {
+  GenInstrRegister(COP1, S, f0, fs, fd, CEIL_L_S);
+}
+
+void Assembler::ceil_l_d(FPURegister fd, FPURegister fs) {
+  GenInstrRegister(COP1, D, f0, fs, fd, CEIL_L_D);
 }
 
 
@@ -1766,6 +1953,7 @@ void Assembler::c(FPUCondition cond, SecondaryField fmt,
   emit(instr);
 }
 
+
 void Assembler::fcmp(FPURegister src1, const double src2,
       FPUCondition cond) {
   ASSERT(CpuFeatures::IsSupported(FPU));
@@ -1774,6 +1962,7 @@ void Assembler::fcmp(FPURegister src1, const double src2,
   cvt_d_w(f14, f14);
   c(cond, D, src1, f14, 0);
 }
+
 
 void Assembler::bc1f(int16_t offset, uint16_t cc) {
   ASSERT(is_uint3(cc));
@@ -1791,14 +1980,14 @@ void Assembler::bc1t(int16_t offset, uint16_t cc) {
 
 // Debugging.
 void Assembler::RecordJSReturn() {
-  WriteRecordedPositions();
+  positions_recorder()->WriteRecordedPositions();
   CheckBuffer();
   RecordRelocInfo(RelocInfo::JS_RETURN);
 }
 
 
 void Assembler::RecordDebugBreakSlot() {
-  WriteRecordedPositions();
+  positions_recorder()->WriteRecordedPositions();
   CheckBuffer();
   RecordRelocInfo(RelocInfo::DEBUG_BREAK_SLOT);
 }
@@ -1809,47 +1998,6 @@ void Assembler::RecordComment(const char* msg) {
     CheckBuffer();
     RecordRelocInfo(RelocInfo::COMMENT, reinterpret_cast<intptr_t>(msg));
   }
-}
-
-
-void Assembler::RecordPosition(int pos) {
-  if (pos == RelocInfo::kNoPosition) return;
-  ASSERT(pos >= 0);
-  current_position_ = pos;
-}
-
-
-void Assembler::RecordStatementPosition(int pos) {
-  if (pos == RelocInfo::kNoPosition) return;
-  ASSERT(pos >= 0);
-  current_statement_position_ = pos;
-}
-
-
-bool Assembler::WriteRecordedPositions() {
-  bool written = false;
-
-  // Write the statement position if it is different from what was written last
-  // time.
-  if (current_statement_position_ != written_statement_position_) {
-    CheckBuffer();
-    RecordRelocInfo(RelocInfo::STATEMENT_POSITION, current_statement_position_);
-    written_statement_position_ = current_statement_position_;
-    written = true;
-  }
-
-  // Write the position if it is different from what was written last time and
-  // also different from the written statement position.
-  if (current_position_ != written_position_ &&
-      current_position_ != written_statement_position_) {
-    CheckBuffer();
-    RecordRelocInfo(RelocInfo::POSITION, current_position_);
-    written_position_ = current_position_;
-    written = true;
-  }
-
-  // Return whether something was written.
-  return written;
 }
 
 
@@ -1919,9 +2067,11 @@ void Assembler::RecordRelocInfo(RelocInfo::Mode rmode, intptr_t data) {
   }
 }
 
+
 void Assembler::BlockTrampolinePoolFor(int instructions) {
   BlockTrampolinePoolBefore(pc_offset() + instructions * kInstrSize);
 }
+
 
 void Assembler::CheckTrampolinePool() {
   // Calculate the offset of the next check.
@@ -1976,6 +2126,7 @@ void Assembler::CheckTrampolinePool() {
   }
   return;
 }
+
 
 Address Assembler::target_address_at(Address pc) {
   Instr instr1 = instr_at(pc);

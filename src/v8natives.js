@@ -111,13 +111,20 @@ function GlobalParseInt(string, radix) {
     if (!(radix == 0 || (2 <= radix && radix <= 36)))
       return $NaN;
   }
-  return %StringParseInt(ToString(string), radix);
+  string = TO_STRING_INLINE(string);
+  if (%_HasCachedArrayIndex(string) &&
+      (radix == 0 || radix == 10)) {
+    return %_GetCachedArrayIndex(string);
+  }
+  return %StringParseInt(string, radix);
 }
 
 
 // ECMA-262 - 15.1.2.3
 function GlobalParseFloat(string) {
-  return %StringParseFloat(ToString(string));
+  string = TO_STRING_INLINE(string);
+  if (%_HasCachedArrayIndex(string)) return %_GetCachedArrayIndex(string);
+  return %StringParseFloat(string);
 }
 
 
@@ -133,7 +140,7 @@ function GlobalEval(x) {
                          'be the global object from which eval originated');
   }
 
-  var f = %CompileString(x, false);
+  var f = %CompileString(x);
   if (!IS_FUNCTION(f)) return f;
 
   return f.call(this);
@@ -144,7 +151,7 @@ function GlobalEval(x) {
 function GlobalExecScript(expr, lang) {
   // NOTE: We don't care about the character casing.
   if (!lang || /javascript/i.test(lang)) {
-    var f = %CompileString(ToString(expr), false);
+    var f = %CompileString(ToString(expr));
     f.call(%GlobalReceiver(global));
   }
   return null;
@@ -540,11 +547,11 @@ function DefineOwnProperty(obj, p, desc, should_throw) {
 
   if (!IS_UNDEFINED(current) && !current.isConfigurable()) {
     // Step 5 and 6
-    if ((!desc.hasEnumerable() || 
+    if ((!desc.hasEnumerable() ||
          SameValue(desc.isEnumerable() && current.isEnumerable())) &&
-        (!desc.hasConfigurable() || 
+        (!desc.hasConfigurable() ||
          SameValue(desc.isConfigurable(), current.isConfigurable())) &&
-        (!desc.hasWritable() || 
+        (!desc.hasWritable() ||
          SameValue(desc.isWritable(), current.isWritable())) &&
         (!desc.hasValue() ||
          SameValue(desc.getValue(), current.getValue())) &&
@@ -743,12 +750,12 @@ function ObjectSeal(obj) {
     throw MakeTypeError("obj_ctor_property_non_object", ["seal"]);
   }
   var names = ObjectGetOwnPropertyNames(obj);
-  for (var key in names) {
-    var name = names[key];
+  for (var i = 0; i < names.length; i++) {
+    var name = names[i];
     var desc = GetOwnProperty(obj, name);
     if (desc.isConfigurable()) desc.setConfigurable(false);
     DefineOwnProperty(obj, name, desc, true);
-  }  
+  }
   return ObjectPreventExtension(obj);
 }
 
@@ -759,13 +766,13 @@ function ObjectFreeze(obj) {
     throw MakeTypeError("obj_ctor_property_non_object", ["freeze"]);
   }
   var names = ObjectGetOwnPropertyNames(obj);
-  for (var key in names) {
-    var name = names[key];
+  for (var i = 0; i < names.length; i++) {
+    var name = names[i];
     var desc = GetOwnProperty(obj, name);
     if (IsDataDescriptor(desc)) desc.setWritable(false);
     if (desc.isConfigurable()) desc.setConfigurable(false);
     DefineOwnProperty(obj, name, desc, true);
-  }  
+  }
   return ObjectPreventExtension(obj);
 }
 
@@ -786,8 +793,8 @@ function ObjectIsSealed(obj) {
     throw MakeTypeError("obj_ctor_property_non_object", ["isSealed"]);
   }
   var names = ObjectGetOwnPropertyNames(obj);
-  for (var key in names) {
-    var name = names[key];
+  for (var i = 0; i < names.length; i++) {
+    var name = names[i];
     var desc = GetOwnProperty(obj, name);
     if (desc.isConfigurable()) return false;
   }
@@ -804,8 +811,8 @@ function ObjectIsFrozen(obj) {
     throw MakeTypeError("obj_ctor_property_non_object", ["isFrozen"]);
   }
   var names = ObjectGetOwnPropertyNames(obj);
-  for (var key in names) {
-    var name = names[key];
+  for (var i = 0; i < names.length; i++) {
+    var name = names[i];
     var desc = GetOwnProperty(obj, name);
     if (IsDataDescriptor(desc) && desc.isWritable()) return false;
     if (desc.isConfigurable()) return false;
@@ -836,6 +843,7 @@ function ObjectIsExtensible(obj) {
   }
 });
 
+%SetExpectedNumberOfProperties($Object, 4);
 
 // ----------------------------------------------------------------------------
 
@@ -1110,12 +1118,12 @@ function FunctionBind(this_arg) { // Length is 1.
     var bound_args = new $Array(argc_bound);
     for(var i = 0; i < argc_bound; i++) {
       bound_args[i] = %_Arguments(i+1);
-    }  
+    }
   }
   var fn = this;
   var result = function() {
     // Combine the args we got from the bind call with the args
-    // given as argument to the invocation. 
+    // given as argument to the invocation.
     var argc = %_ArgumentsLength();
     var args = new $Array(argc + argc_bound);
     // Add bound arguments.
@@ -1124,7 +1132,7 @@ function FunctionBind(this_arg) { // Length is 1.
     }
     // Add arguments from call.
     for (var i = 0; i < argc; i++) {
-      args[argc_bound + i] = %_Arguments(i); 
+      args[argc_bound + i] = %_Arguments(i);
     }
     // If this is a construct call we use a special runtime method
     // to generate the actual object using the bound function.
@@ -1139,7 +1147,7 @@ function FunctionBind(this_arg) { // Length is 1.
   // try to redefine these as defined by the spec. The spec says
   // that bind should make these throw a TypeError if get or set
   // is called and make them non-enumerable and non-configurable.
-  // To be consistent with our normal functions we leave this as it is. 
+  // To be consistent with our normal functions we leave this as it is.
 
   // Set the correct length.
   var length = (this.length - argc_bound) > 0 ? this.length - argc_bound : 0;
@@ -1169,7 +1177,7 @@ function NewFunction(arg1) {  // length == 1
 
   // The call to SetNewFunctionAttributes will ensure the prototype
   // property of the resulting function is enumerable (ECMA262, 15.3.5.2).
-  var f = %CompileString(source, false)();
+  var f = %CompileString(source)();
   %FunctionSetName(f, "anonymous");
   return %SetNewFunctionAttributes(f);
 }
