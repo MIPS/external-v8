@@ -40,16 +40,17 @@ namespace internal {
 static const int kNumRegs = 32;
 
 static const RegList kJSCallerSaved =
+  1 << 2 |  // v0
   1 << 4 |  // a0
   1 << 5 |  // a1
   1 << 6 |  // a2
   1 << 7;   // a3
 
-static const int kNumJSCallerSaved = 4;
+static const int kNumJSCallerSaved = 5;
 
 
 // Return the code of the n-th caller-saved register available to JavaScript
-// e.g. JSCallerSavedReg(0) returns r0.code() == 0.
+// e.g. JSCallerSavedReg(0) returns a0.code() == 4.
 int JSCallerSavedCode(int n);
 
 
@@ -88,13 +89,10 @@ class EntryFrameConstants : public AllStatic {
 
 class ExitFrameConstants : public AllStatic {
  public:
-  // Exit frames have a debug marker on the stack.
-  static const int kSPDisplacement = -1 * kPointerSize;
-
-  // The debug marker is just above the frame pointer.
   static const int kDebugMarkOffset = -1 * kPointerSize;
   // Must be the same as kDebugMarkOffset. Alias introduced when upgrading.
   static const int kCodeOffset = -1 * kPointerSize;
+  static const int kSPOffset = -1 * kPointerSize;
 
   static const int kSavedRegistersOffset = 0 * kPointerSize;
 

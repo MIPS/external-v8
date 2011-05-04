@@ -29,13 +29,15 @@
 #include "v8.h"
 
 #include "liveedit.h"
+
 #include "compiler.h"
-#include "oprofile-agent.h"
-#include "scopes.h"
-#include "scopeinfo.h"
-#include "global-handles.h"
 #include "debug.h"
+#include "global-handles.h"
 #include "memory.h"
+#include "oprofile-agent.h"
+#include "parser.h"
+#include "scopeinfo.h"
+#include "scopes.h"
 
 namespace v8 {
 namespace internal {
@@ -396,44 +398,30 @@ Handle<JSArray> LiveEdit::CompareStringsLinewise(Handle<String> s1,
 
 
 static void CompileScriptForTracker(Handle<Script> script) {
-  const bool is_eval = false;
-  const bool is_global = true;
   // TODO(635): support extensions.
-  Extension* extension = NULL;
-
   PostponeInterruptsScope postpone;
 
-  // Only allow non-global compiles for eval.
-  ASSERT(is_eval || is_global);
-
   // Build AST.
-  ScriptDataImpl* pre_data = NULL;
-  FunctionLiteral* lit = MakeAST(is_global, script, extension, pre_data);
-
-  // Check for parse errors.
-  if (lit == NULL) {
-    ASSERT(Top::has_pending_exception());
-    return;
+  CompilationInfo info(script);
+  info.MarkAsGlobal();
+  if (ParserApi::Parse(&info)) {
+    // Compile the code.
+    LiveEditFunctionTracker tracker(info.function());
+    if (Compiler::MakeCodeForLiveEdit(&info)) {
+      ASSERT(!info.code().is_null());
+      tracker.RecordRootFunctionInfo(info.code());
+    } else {
+      Top::StackOverflow();
+    }
   }
-
-  // Compile the code.
-  CompilationInfo info(lit, script, is_eval);
-
-  LiveEditFunctionTracker tracker(lit);
-  Handle<Code> code = MakeCodeForLiveEdit(&info);
-
-  // Check for stack-overflow exceptions.
-  if (code.is_null()) {
-    Top::StackOverflow();
-    return;
-  }
-  tracker.RecordRootFunctionInfo(code);
 }
+
 
 // Unwraps JSValue object, returning its field "value"
 static Handle<Object> UnwrapJSValue(Handle<JSValue> jsValue) {
   return Handle<Object>(jsValue->value());
 }
+
 
 // Wraps any object into a OpaqueReference, that will hide the object
 // from JavaScript.
@@ -444,6 +432,7 @@ static Handle<JSValue> WrapInJSValue(Object* object) {
   result->set_value(object);
   return result;
 }
+
 
 // Simple helper class that creates more or less typed structures over
 // JSArray object. This is an adhoc method of passing structures from C++
@@ -465,6 +454,7 @@ class JSArrayBasedStruct {
   Handle<JSArray> GetJSArray() {
     return array_;
   }
+
  protected:
   void SetField(int field_position, Handle<Object> value) {
     SetElement(array_, field_position, value);
@@ -473,12 +463,13 @@ class JSArrayBasedStruct {
     SetElement(array_, field_position, Handle<Smi>(Smi::FromInt(value)));
   }
   Object* GetField(int field_position) {
-    return array_->GetElement(field_position);
+    return array_->GetElementNoExceptionThrown(field_position);
   }
   int GetSmiValueField(int field_position) {
     Object* res = GetField(field_position);
     return Smi::cast(res)->value();
   }
+
  private:
   Handle<JSArray> array_;
 };
@@ -551,6 +542,7 @@ class FunctionInfoWrapper : public JSArrayBasedStruct<FunctionInfoWrapper> {
   friend class JSArrayBasedStruct<FunctionInfoWrapper>;
 };
 
+
 // Wraps SharedFunctionInfo along with some of its fields for passing it
 // back to JavaScript. SharedFunctionInfo object itself is additionally
 // wrapped into BlindReference for sanitizing reasons.
@@ -558,7 +550,7 @@ class SharedInfoWrapper : public JSArrayBasedStruct<SharedInfoWrapper> {
  public:
   static bool IsInstance(Handle<JSArray> array) {
     return array->length() == Smi::FromInt(kSize_) &&
-        array->GetElement(kSharedInfoOffset_)->IsJSValue();
+        array->GetElementNoExceptionThrown(kSharedInfoOffset_)->IsJSValue();
   }
 
   explicit SharedInfoWrapper(Handle<JSArray> array)
@@ -591,6 +583,7 @@ class SharedInfoWrapper : public JSArrayBasedStruct<SharedInfoWrapper> {
   friend class JSArrayBasedStruct<SharedInfoWrapper>;
 };
 
+
 class FunctionInfoListener {
  public:
   FunctionInfoListener() {
@@ -612,14 +605,40 @@ class FunctionInfoListener {
 
   void FunctionDone() {
     HandleScope scope;
-    FunctionInfoWrapper info =
-        FunctionInfoWrapper::cast(result_->GetElement(current_parent_index_));
+    Object* element =
+        result_->GetElementNoExceptionThrown(current_parent_index_);
+    FunctionInfoWrapper info = FunctionInfoWrapper::cast(element);
     current_parent_index_ = info.GetParentIndex();
   }
 
-// TODO(LiveEdit): Move private method below.
-//     This private section was created here to avoid moving the function
-//      to keep already complex diff simpler.
+  // Saves only function code, because for a script function we
+  // may never create a SharedFunctionInfo object.
+  void FunctionCode(Handle<Code> function_code) {
+    Object* element =
+        result_->GetElementNoExceptionThrown(current_parent_index_);
+    FunctionInfoWrapper info = FunctionInfoWrapper::cast(element);
+    info.SetFunctionCode(function_code, Handle<Object>(Heap::null_value()));
+  }
+
+  // Saves full information about a function: its code, its scope info
+  // and a SharedFunctionInfo object.
+  void FunctionInfo(Handle<SharedFunctionInfo> shared, Scope* scope) {
+    if (!shared->IsSharedFunctionInfo()) {
+      return;
+    }
+    Object* element =
+        result_->GetElementNoExceptionThrown(current_parent_index_);
+    FunctionInfoWrapper info = FunctionInfoWrapper::cast(element);
+    info.SetFunctionCode(Handle<Code>(shared->code()),
+        Handle<Object>(shared->scope_info()));
+    info.SetSharedFunctionInfo(shared);
+
+    Handle<Object> scope_info_list(SerializeFunctionScope(scope));
+    info.SetOuterScopeInfo(scope_info_list);
+  }
+
+  Handle<JSArray> GetResult() { return result_; }
+
  private:
   Object* SerializeFunctionScope(Scope* scope) {
     HandleScope handle_scope;
@@ -640,7 +659,7 @@ class FunctionInfoListener {
       int j = 0;
       for (int i = 0; i < list.length(); i++) {
         Variable* var1 = list[i];
-        Slot* slot = var1->slot();
+        Slot* slot = var1->AsSlot();
         if (slot != NULL && slot->type() == Slot::CONTEXT) {
           if (j != i) {
             list[j] = var1;
@@ -653,7 +672,7 @@ class FunctionInfoListener {
       for (int k = 1; k < j; k++) {
         int l = k;
         for (int m = k + 1; m < j; m++) {
-          if (list[l]->slot()->index() > list[m]->slot()->index()) {
+          if (list[l]->AsSlot()->index() > list[m]->AsSlot()->index()) {
             l = m;
           }
         }
@@ -663,7 +682,7 @@ class FunctionInfoListener {
         SetElement(scope_info_list, scope_info_length, list[i]->name());
         scope_info_length++;
         SetElement(scope_info_list, scope_info_length,
-                   Handle<Smi>(Smi::FromInt(list[i]->slot()->index())));
+                   Handle<Smi>(Smi::FromInt(list[i]->AsSlot()->index())));
         scope_info_length++;
       }
       SetElement(scope_info_list, scope_info_length,
@@ -676,40 +695,11 @@ class FunctionInfoListener {
     return *scope_info_list;
   }
 
- public:
-  // Saves only function code, because for a script function we
-  // may never create a SharedFunctionInfo object.
-  void FunctionCode(Handle<Code> function_code) {
-    FunctionInfoWrapper info =
-        FunctionInfoWrapper::cast(result_->GetElement(current_parent_index_));
-    info.SetFunctionCode(function_code, Handle<Object>(Heap::null_value()));
-  }
-
-  // Saves full information about a function: its code, its scope info
-  // and a SharedFunctionInfo object.
-  void FunctionInfo(Handle<SharedFunctionInfo> shared, Scope* scope) {
-    if (!shared->IsSharedFunctionInfo()) {
-      return;
-    }
-    FunctionInfoWrapper info =
-        FunctionInfoWrapper::cast(result_->GetElement(current_parent_index_));
-    info.SetFunctionCode(Handle<Code>(shared->code()),
-        Handle<Object>(shared->scope_info()));
-    info.SetSharedFunctionInfo(shared);
-
-    Handle<Object> scope_info_list(SerializeFunctionScope(scope));
-    info.SetOuterScopeInfo(scope_info_list);
-  }
-
-  Handle<JSArray> GetResult() {
-    return result_;
-  }
-
- private:
   Handle<JSArray> result_;
   int len_;
   int current_parent_index_;
 };
+
 
 static FunctionInfoListener* active_function_info_listener = NULL;
 
@@ -734,12 +724,12 @@ void LiveEdit::WrapSharedFunctionInfos(Handle<JSArray> array) {
   int len = Smi::cast(array->length())->value();
   for (int i = 0; i < len; i++) {
     Handle<SharedFunctionInfo> info(
-        SharedFunctionInfo::cast(array->GetElement(i)));
+        SharedFunctionInfo::cast(array->GetElementNoExceptionThrown(i)));
     SharedInfoWrapper info_wrapper = SharedInfoWrapper::Create();
     Handle<String> name_handle(String::cast(info->name()));
     info_wrapper.SetProperties(name_handle, info->start_position(),
                                info->end_position(), info);
-    array->SetElement(i, *(info_wrapper.GetJSArray()));
+    SetElement(array, i, info_wrapper.GetJSArray());
   }
 }
 
@@ -802,25 +792,6 @@ class ReferenceCollectorVisitor : public ObjectVisitor {
 };
 
 
-class FrameCookingThreadVisitor : public ThreadVisitor {
- public:
-  void VisitThread(ThreadLocalTop* top) {
-    StackFrame::CookFramesForThread(top);
-  }
-};
-
-class FrameUncookingThreadVisitor : public ThreadVisitor {
- public:
-  void VisitThread(ThreadLocalTop* top) {
-    StackFrame::UncookFramesForThread(top);
-  }
-};
-
-static void IterateAllThreads(ThreadVisitor* visitor) {
-  Top::IterateThread(visitor);
-  ThreadManager::IterateArchivedThreads(visitor);
-}
-
 // Finds all references to original and replaces them with substitution.
 static void ReplaceCodeObject(Code* original, Code* substitution) {
   ASSERT(!Heap::InNewSpace(substitution));
@@ -836,13 +807,7 @@ static void ReplaceCodeObject(Code* original, Code* substitution) {
   // so temporary replace the pointers with offset numbers
   // in prologue/epilogue.
   {
-    FrameCookingThreadVisitor cooking_visitor;
-    IterateAllThreads(&cooking_visitor);
-
     Heap::IterateStrongRoots(&visitor, VISIT_ALL);
-
-    FrameUncookingThreadVisitor uncooking_visitor;
-    IterateAllThreads(&uncooking_visitor);
   }
 
   // Now iterate over all pointers of all objects, including code_target
@@ -863,8 +828,9 @@ static bool IsJSFunctionCode(Code* code) {
 }
 
 
-Object* LiveEdit::ReplaceFunctionCode(Handle<JSArray> new_compile_info_array,
-                                      Handle<JSArray> shared_info_array) {
+MaybeObject* LiveEdit::ReplaceFunctionCode(
+    Handle<JSArray> new_compile_info_array,
+    Handle<JSArray> shared_info_array) {
   HandleScope scope;
 
   if (!SharedInfoWrapper::IsInstance(shared_info_array)) {
@@ -927,17 +893,17 @@ static int TranslatePosition(int original_position,
   int array_len = Smi::cast(position_change_array->length())->value();
   // TODO(635): binary search may be used here
   for (int i = 0; i < array_len; i += 3) {
-    int chunk_start =
-        Smi::cast(position_change_array->GetElement(i))->value();
+    Object* element = position_change_array->GetElementNoExceptionThrown(i);
+    int chunk_start = Smi::cast(element)->value();
     if (original_position < chunk_start) {
       break;
     }
-    int chunk_end =
-        Smi::cast(position_change_array->GetElement(i + 1))->value();
+    element = position_change_array->GetElementNoExceptionThrown(i + 1);
+    int chunk_end = Smi::cast(element)->value();
     // Position mustn't be inside a chunk.
     ASSERT(original_position >= chunk_end);
-    int chunk_changed_end =
-        Smi::cast(position_change_array->GetElement(i + 2))->value();
+    element = position_change_array->GetElementNoExceptionThrown(i + 2);
+    int chunk_changed_end = Smi::cast(element)->value();
     position_diff = chunk_changed_end - chunk_end;
   }
 
@@ -1062,7 +1028,7 @@ static Handle<Code> PatchPositionsInCode(Handle<Code> code,
 }
 
 
-Object* LiveEdit::PatchFunctionPositions(
+MaybeObject* LiveEdit::PatchFunctionPositions(
     Handle<JSArray> shared_info_array, Handle<JSArray> position_change_array) {
 
   if (!SharedInfoWrapper::IsInstance(shared_info_array)) {
@@ -1176,7 +1142,8 @@ static bool CheckActivation(Handle<JSArray> shared_info_array,
   }
   int len = Smi::cast(shared_info_array->length())->value();
   for (int i = 0; i < len; i++) {
-    JSValue* wrapper = JSValue::cast(shared_info_array->GetElement(i));
+    JSValue* wrapper =
+        JSValue::cast(shared_info_array->GetElementNoExceptionThrown(i));
     Handle<SharedFunctionInfo> shared(
         SharedFunctionInfo::cast(wrapper->value()));
 
@@ -1384,8 +1351,9 @@ static const char* DropActivationsInActiveThread(
   for (int i = 0; i < array_len; i++) {
     if (result->GetElement(i) ==
         Smi::FromInt(LiveEdit::FUNCTION_BLOCKED_ON_ACTIVE_STACK)) {
-      result->SetElement(i, Smi::FromInt(
-          LiveEdit::FUNCTION_REPLACED_ON_ACTIVE_STACK));
+      Handle<Object> replaced(
+          Smi::FromInt(LiveEdit::FUNCTION_REPLACED_ON_ACTIVE_STACK));
+      SetElement(result, i, replaced);
     }
   }
   return NULL;

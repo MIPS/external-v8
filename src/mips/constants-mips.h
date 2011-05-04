@@ -69,6 +69,11 @@ static const int kPCRegister = 34;
 static const int kNumFPURegisters = 32;
 static const int kInvalidFPURegister = -1;
 
+// FPU (coprocessor 1) control registers. Currently only FCSR is implemented.
+static const int kFCSRRegister = 31;
+static const int kInvalidFPUControlRegister = -1;
+static const uint32_t kFPUInvalidResult = (uint32_t)(1 << 31) - 1;
+
 // Helper functions for converting between register numbers and names.
 class Registers {
  public:
@@ -289,8 +294,10 @@ enum SecondaryField {
 
   // COP1 Encoding of rs Field.
   MFC1      =   ((0 << 3) + 0) << 21,
+  CFC1      =   ((0 << 3) + 2) << 21,
   MFHC1     =   ((0 << 3) + 3) << 21,
   MTC1      =   ((0 << 3) + 4) << 21,
+  CTC1      =   ((0 << 3) + 6) << 21,
   MTHC1     =   ((0 << 3) + 7) << 21,
   BC1       =   ((1 << 3) + 0) << 21,
   S         =   ((2 << 3) + 0) << 21,
@@ -299,8 +306,14 @@ enum SecondaryField {
   L         =   ((2 << 3) + 5) << 21,
   PS        =   ((2 << 3) + 6) << 21,
   // COP1 Encoding of Function Field When rs=S.
+  ROUND_L_S =   ((1 << 3) + 0),
   TRUNC_L_S =   ((1 << 3) + 1),
+  CEIL_L_S  =   ((1 << 3) + 2),
+  FLOOR_L_S =   ((1 << 3) + 3),
+  ROUND_W_S =   ((1 << 3) + 4),
   TRUNC_W_S =   ((1 << 3) + 5),
+  CEIL_W_S  =   ((1 << 3) + 6),
+  FLOOR_W_S =   ((1 << 3) + 7),
   CVT_D_S   =   ((4 << 3) + 1),
   CVT_W_S   =   ((4 << 3) + 4),
   CVT_L_S   =   ((4 << 3) + 5),
@@ -314,8 +327,14 @@ enum SecondaryField {
   ABS_D     =   ((0 << 3) + 5),
   MOV_D     =   ((0 << 3) + 6),
   NEG_D     =   ((0 << 3) + 7),
+  ROUND_L_D =   ((1 << 3) + 0),
   TRUNC_L_D =   ((1 << 3) + 1),
+  CEIL_L_D  =   ((1 << 3) + 2),
+  FLOOR_L_D =   ((1 << 3) + 3),
+  ROUND_W_D =   ((1 << 3) + 4),
   TRUNC_W_D =   ((1 << 3) + 5),
+  CEIL_W_D  =   ((1 << 3) + 6),
+  FLOOR_W_D =   ((1 << 3) + 7),
   CVT_S_D   =   ((4 << 3) + 0),
   CVT_W_D   =   ((4 << 3) + 4),
   CVT_L_D   =   ((4 << 3) + 5),

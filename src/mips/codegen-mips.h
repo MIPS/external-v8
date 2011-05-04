@@ -29,8 +29,10 @@
 #ifndef V8_MIPS_CODEGEN_MIPS_H_
 #define V8_MIPS_CODEGEN_MIPS_H_
 
-#include "ic-inl.h"
+
 #include "ast.h"
+#include "code-stubs-mips.h"
+#include "ic-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -219,14 +221,6 @@ enum ArgumentsAllocationMode {
 };
 
 
-// Different nop operations are used by the code generator to detect certain
-// states of the generated code.
-enum NopMarkerTypes {
-  NON_MARKING_NOP = 0,
-  PROPERTY_ACCESS_INLINED
-};
-
-
 // -----------------------------------------------------------------------------
 // CodeGenerator
 
@@ -241,9 +235,7 @@ class CodeGenerator: public AstVisitor {
     SECONDARY
   };
 
-  // Takes a function literal, generates code for it. This function should only
-  // be called by compiler.cc.
-  static Handle<Code> MakeCode(CompilationInfo* info);
+  static bool MakeCode(CompilationInfo* info);
 
   // Printing of AST, etc. as requested by flags.
   static void MakeCodePrologue(CompilationInfo* info);
@@ -304,12 +296,6 @@ class CodeGenerator: public AstVisitor {
   }
   void AddDeferred(DeferredCode* code) { deferred_.Add(code); }
 
-  static const int kUnknownIntValue = -1;
-
-  // If the name is an inline runtime function call return the number of
-  // expected arguments. Otherwise return -1.
-  static int InlineRuntimeCallArgumentsCount(Handle<String> name);
-
   // Constants related to patching of inlined load/store.
   static int GetInlinedKeyedLoadInstructionsAfterPatch() {
     // This is in correlation with the padding in MacroAssembler::Abort.
@@ -323,11 +309,14 @@ class CodeGenerator: public AstVisitor {
     return inlined_write_barrier_size_ + 5;
   }
 
-  static MemOperand ContextOperand(Register context, int index) {
-    return MemOperand(context, Context::SlotOffset(index));
-  }
-
  private:
+  // Type of a member function that generates inline code for a native function.
+  typedef void (CodeGenerator::*InlineFunctionGenerator)
+      (ZoneList<Expression*>*);
+
+  static const InlineFunctionGenerator kInlineFunctionGenerators[];
+
+
   // Construction/Destruction.
   explicit CodeGenerator(MacroAssembler* masm);
 
@@ -342,10 +331,10 @@ class CodeGenerator: public AstVisitor {
 
   int NumberOfSlot(Slot* slot);
   // State
-  bool has_cc() const  { return cc_reg_ != cc_always; }
+  bool has_cc() const { return cc_reg_ != cc_always; }
 
-  JumpTarget* true_target() const  { return state_->true_target(); }
-  JumpTarget* false_target() const  { return state_->false_target(); }
+  JumpTarget* true_target() const { return state_->true_target(); }
+  JumpTarget* false_target() const { return state_->false_target(); }
 
   // Track loop nesting level.
   int loop_nesting() const { return loop_nesting_; }
@@ -385,11 +374,6 @@ class CodeGenerator: public AstVisitor {
                                                Register tmp,
                                                Register tmp2,
                                                JumpTarget* slow);
-
-  // Expressions
-  MemOperand GlobalObject() const  {
-    return ContextOperand(cp, Context::GLOBAL_INDEX);
-  }
 
   void LoadCondition(Expression* x,
                      JumpTarget* true_target,
@@ -457,11 +441,13 @@ class CodeGenerator: public AstVisitor {
   void GenericBinaryOperation(Token::Value op,
                               OverwriteMode overwrite_mode,
                               GenerateInlineSmi inline_smi,
-                              int known_rhs = kUnknownIntValue);
+                              int known_rhs =
+                                GenericBinaryOpStub::kUnknownIntValue);
 
   void VirtualFrameBinaryOperation(Token::Value op,
                                    OverwriteMode overwrite_mode,
-                                   int known_rhs = kUnknownIntValue);
+                                   int known_rhs =
+                                      GenericBinaryOpStub::kUnknownIntValue);
 
   void SmiOperation(Token::Value op,
                     Handle<Object> value,
@@ -489,31 +475,18 @@ class CodeGenerator: public AstVisitor {
   void Branch(bool if_true, JumpTarget* target);
   void CheckStack();
 
-  struct InlineRuntimeLUT {
-    void (CodeGenerator::*method)(ZoneList<Expression*>*);
-    const char* name;
-    int nargs;
-  };
-
-  static InlineRuntimeLUT* FindInlineRuntimeLUT(Handle<String> name);
   bool CheckForInlineRuntimeCall(CallRuntime* node);
-  static bool PatchInlineRuntimeEntry(Handle<String> name,
-                                      const InlineRuntimeLUT& new_entry,
-                                      InlineRuntimeLUT* old_entry);
 
   static Handle<Code> ComputeLazyCompile(int argc);
   void ProcessDeclarations(ZoneList<Declaration*>* declarations);
-
-  Handle<Code> ComputeCallInitialize(int argc, InLoopFlag in_loop);
-
-  static Handle<Code> ComputeKeyedCallInitialize(int argc, InLoopFlag in_loop);
 
   // Declare global variables and functions in the given array of
   // name/value pairs.
   void DeclareGlobals(Handle<FixedArray> pairs);
 
   // Instantiate the function based on the shared function info.
-  void InstantiateFunction(Handle<SharedFunctionInfo> function_info);
+  void InstantiateFunction(Handle<SharedFunctionInfo> function_info,
+                           bool pretenure);
 
   // Support for type checks.
   void GenerateIsSmi(ZoneList<Expression*>* args);
@@ -565,8 +538,6 @@ class CodeGenerator: public AstVisitor {
 
   void GenerateRegExpConstructResult(ZoneList<Expression*>* args);
 
-  void GenerateRegExpCloneResult(ZoneList<Expression*>* args);
-
   // Support for fast native caches.
   void GenerateGetFromCache(ZoneList<Expression*>* args);
 
@@ -584,8 +555,13 @@ class CodeGenerator: public AstVisitor {
   void GenerateMathSin(ZoneList<Expression*>* args);
   void GenerateMathCos(ZoneList<Expression*>* args);
   void GenerateMathSqrt(ZoneList<Expression*>* args);
+  void GenerateMathLog(ZoneList<Expression*>* args);
 
   void GenerateIsRegExpEquivalent(ZoneList<Expression*>* args);
+
+  void GenerateHasCachedArrayIndex(ZoneList<Expression*>* args);
+  void GenerateGetCachedArrayIndex(ZoneList<Expression*>* args);
+  void GenerateFastAsciiArrayJoin(ZoneList<Expression*>* args);
 
   // Simple condition analysis.
   enum ConditionAnalysis {
@@ -609,9 +585,6 @@ class CodeGenerator: public AstVisitor {
   bool HasValidEntryRegisters();
 #endif
 
-  bool is_eval_;  // Tells whether code is generated for eval.
-
-  Handle<Script> script_;
   List<DeferredCode*> deferred_;
 
   // Assembler
@@ -637,8 +610,6 @@ class CodeGenerator: public AstVisitor {
 
   // Size of inlined write barriers generated by EmitNamedStore.
   static int inlined_write_barrier_size_;
-
-  static InlineRuntimeLUT kInlineRuntimeLUT[];
 
   friend class VirtualFrame;
   friend class JumpTarget;

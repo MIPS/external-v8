@@ -31,13 +31,13 @@
 #include "api.h"
 #include "arguments.h"
 #include "bootstrapper.h"
-#include "codegen.h"
 #include "compiler.h"
 #include "debug.h"
 #include "execution.h"
 #include "global-handles.h"
 #include "natives.h"
 #include "runtime.h"
+#include "string-search.h"
 #include "stub-cache.h"
 
 namespace v8 {
@@ -45,7 +45,7 @@ namespace internal {
 
 
 v8::ImplementationUtilities::HandleScopeData HandleScope::current_ =
-    { -1, NULL, NULL };
+    { NULL, NULL, 0 };
 
 
 int HandleScope::NumberOfHandles() {
@@ -62,7 +62,7 @@ Object** HandleScope::Extend() {
   ASSERT(result == current_.limit);
   // Make sure there's at least one scope on the stack and that the
   // top of the scope stack isn't a barrier.
-  if (current_.extensions < 0) {
+  if (current_.level == 0) {
     Utils::ReportApiFailure("v8::HandleScope::CreateHandle()",
                             "Cannot create a handle without a HandleScope");
     return NULL;
@@ -74,6 +74,7 @@ Object** HandleScope::Extend() {
     Object** limit = &impl->blocks()->last()[kHandleBlockSize];
     if (current_.limit != limit) {
       current_.limit = limit;
+      ASSERT(limit - current_.next < kHandleBlockSize);
     }
   }
 
@@ -85,7 +86,6 @@ Object** HandleScope::Extend() {
     // Add the extension to the global list of blocks, but count the
     // extension as part of the current scope.
     impl->blocks()->Add(result);
-    current_.extensions++;
     current_.limit = &result[kHandleBlockSize];
   }
 
@@ -94,21 +94,20 @@ Object** HandleScope::Extend() {
 
 
 void HandleScope::DeleteExtensions() {
-  ASSERT(current_.extensions != 0);
-  HandleScopeImplementer::instance()->DeleteExtensions(current_.extensions);
+  HandleScopeImplementer::instance()->DeleteExtensions(current_.limit);
 }
 
 
 void HandleScope::ZapRange(Object** start, Object** end) {
-  if (start == NULL) return;
-  for (Object** p = start; p < end; p++) {
+  ASSERT(end - start <= kHandleBlockSize);
+  for (Object** p = start; p != end; p++) {
     *reinterpret_cast<Address*>(p) = v8::internal::kHandleZapValue;
   }
 }
 
 
-Address HandleScope::current_extensions_address() {
-  return reinterpret_cast<Address>(&current_.extensions);
+Address HandleScope::current_level_address() {
+  return reinterpret_cast<Address>(&current_.level);
 }
 
 
@@ -143,6 +142,13 @@ Handle<JSGlobalProxy> ReinitializeJSGlobalProxy(
 
 
 void SetExpectedNofProperties(Handle<JSFunction> func, int nof) {
+  // If objects constructed from this function exist then changing
+  // 'estimated_nof_properties' is dangerous since the previous value might
+  // have been compiled into the fast construct stub. More over, the inobject
+  // slack tracking logic might have adjusted the previous value, so even
+  // passing the same value is risky.
+  if (func->shared()->live_objects_may_exist()) return;
+
   func->shared()->set_expected_nof_properties(nof);
   if (func->has_initial_map()) {
     Handle<Map> new_initial_map =
@@ -159,16 +165,25 @@ void SetPrototypeProperty(Handle<JSFunction> func, Handle<JSObject> value) {
 
 
 static int ExpectedNofPropertiesFromEstimate(int estimate) {
-  // TODO(1231235): We need dynamic feedback to estimate the number
-  // of expected properties in an object. The static hack below
-  // is barely a solution.
-  if (estimate == 0) return 4;
-  return estimate + 2;
+  // If no properties are added in the constructor, they are more likely
+  // to be added later.
+  if (estimate == 0) estimate = 2;
+
+  // We do not shrink objects that go into a snapshot (yet), so we adjust
+  // the estimate conservatively.
+  if (Serializer::enabled()) return estimate + 2;
+
+  // Inobject slack tracking will reclaim redundant inobject space later,
+  // so we can afford to adjust the estimate generously.
+  return estimate + 8;
 }
 
 
 void SetExpectedNofPropertiesFromEstimate(Handle<SharedFunctionInfo> shared,
                                           int estimate) {
+  // See the comment in SetExpectedNofProperties.
+  if (shared->live_objects_may_exist()) return;
+
   shared->set_expected_nof_properties(
       ExpectedNofPropertiesFromEstimate(estimate));
 }
@@ -195,19 +210,21 @@ void TransformToFastProperties(Handle<JSObject> object,
 }
 
 
+void NumberDictionarySet(Handle<NumberDictionary> dictionary,
+                         uint32_t index,
+                         Handle<Object> value,
+                         PropertyDetails details) {
+  CALL_HEAP_FUNCTION_VOID(dictionary->Set(index, *value, details));
+}
+
+
 void FlattenString(Handle<String> string) {
   CALL_HEAP_FUNCTION_VOID(string->TryFlatten());
 }
 
 
 Handle<String> FlattenGetString(Handle<String> string) {
-  Handle<String> result;
-  CALL_AND_RETRY(string->TryFlatten(),
-                 { result = Handle<String>(String::cast(__object__));
-                   break; },
-                 return Handle<String>());
-  ASSERT(string->IsFlat());
-  return result;
+  CALL_HEAP_FUNCTION(string->TryFlatten(), String);
 }
 
 
@@ -467,7 +484,8 @@ void InitScriptLineEnds(Handle<Script> script) {
 
   if (!script->source()->IsString()) {
     ASSERT(script->source()->IsUndefined());
-    script->set_line_ends(*(Factory::NewFixedArray(0)));
+    Handle<FixedArray> empty = Factory::NewFixedArray(0);
+    script->set_line_ends(*empty);
     ASSERT(script->line_ends()->IsFixedArray());
     return;
   }
@@ -476,48 +494,59 @@ void InitScriptLineEnds(Handle<Script> script) {
 
   Handle<FixedArray> array = CalculateLineEnds(src, true);
 
+  if (*array != Heap::empty_fixed_array()) {
+    array->set_map(Heap::fixed_cow_array_map());
+  }
+
   script->set_line_ends(*array);
   ASSERT(script->line_ends()->IsFixedArray());
 }
 
 
-Handle<FixedArray> CalculateLineEnds(Handle<String> src,
-                                     bool with_imaginary_last_new_line) {
-  const int src_len = src->length();
-  Handle<String> new_line = Factory::NewStringFromAscii(CStrVector("\n"));
+template <typename SourceChar>
+static void CalculateLineEnds(List<int>* line_ends,
+                              Vector<const SourceChar> src,
+                              bool with_last_line) {
+  const int src_len = src.length();
+  StringSearch<char, SourceChar> search(CStrVector("\n"));
 
-  // Pass 1: Identify line count.
-  int line_count = 0;
+  // Find and record line ends.
   int position = 0;
   while (position != -1 && position < src_len) {
-    position = Runtime::StringMatch(src, new_line, position);
+    position = search.Search(src, position);
     if (position != -1) {
+      line_ends->Add(position);
       position++;
-    }
-    if (position != -1) {
-      line_count++;
-    } else if (with_imaginary_last_new_line) {
+    } else if (with_last_line) {
       // Even if the last line misses a line end, it is counted.
-      line_count++;
+      line_ends->Add(src_len);
+      return;
     }
   }
+}
 
-  // Pass 2: Fill in line ends positions
+
+Handle<FixedArray> CalculateLineEnds(Handle<String> src,
+                                     bool with_last_line) {
+  src = FlattenGetString(src);
+  // Rough estimate of line count based on a roughly estimated average
+  // length of (unpacked) code.
+  int line_count_estimate = src->length() >> 4;
+  List<int> line_ends(line_count_estimate);
+  {
+    AssertNoAllocation no_heap_allocation;  // ensure vectors stay valid.
+    // Dispatch on type of strings.
+    if (src->IsAsciiRepresentation()) {
+      CalculateLineEnds(&line_ends, src->ToAsciiVector(), with_last_line);
+    } else {
+      CalculateLineEnds(&line_ends, src->ToUC16Vector(), with_last_line);
+    }
+  }
+  int line_count = line_ends.length();
   Handle<FixedArray> array = Factory::NewFixedArray(line_count);
-  int array_index = 0;
-  position = 0;
-  while (position != -1 && position < src_len) {
-    position = Runtime::StringMatch(src, new_line, position);
-    if (position != -1) {
-      array->set(array_index++, Smi::FromInt(position++));
-    } else if (with_imaginary_last_new_line) {
-      // If the script does not end with a line ending add the final end
-      // position as just past the last line ending.
-      array->set(array_index++, Smi::FromInt(src_len));
-    }
+  for (int i = 0; i < line_count; i++) {
+    array->set(i, Smi::FromInt(line_ends[i]));
   }
-  ASSERT(array_index == line_count);
-
   return array;
 }
 
@@ -529,11 +558,11 @@ int GetScriptLineNumber(Handle<Script> script, int code_pos) {
   FixedArray* line_ends_array = FixedArray::cast(script->line_ends());
   const int line_ends_len = line_ends_array->length();
 
-  if (!line_ends_len)
-    return -1;
+  if (!line_ends_len) return -1;
 
-  if ((Smi::cast(line_ends_array->get(0)))->value() >= code_pos)
+  if ((Smi::cast(line_ends_array->get(0)))->value() >= code_pos) {
     return script->line_offset()->value();
+  }
 
   int left = 0;
   int right = line_ends_len;
@@ -619,8 +648,19 @@ v8::Handle<v8::Array> GetKeysForIndexedInterceptor(Handle<JSObject> receiver,
 }
 
 
+static bool ContainsOnlyValidKeys(Handle<FixedArray> array) {
+  int len = array->length();
+  for (int i = 0; i < len; i++) {
+    Object* e = array->get(i);
+    if (!(e->IsString() || e->IsNumber())) return false;
+  }
+  return true;
+}
+
+
 Handle<FixedArray> GetKeysInFixedArrayFor(Handle<JSObject> object,
                                           KeyCollectionType type) {
+  USE(ContainsOnlyValidKeys);
   Handle<FixedArray> content = Factory::empty_fixed_array();
   Handle<JSObject> arguments_boilerplate =
       Handle<JSObject>(
@@ -648,6 +688,7 @@ Handle<FixedArray> GetKeysInFixedArrayFor(Handle<JSObject> object,
         Factory::NewFixedArray(current->NumberOfEnumElements());
     current->GetEnumElementKeys(*element_keys);
     content = UnionOfKeys(content, element_keys);
+    ASSERT(ContainsOnlyValidKeys(content));
 
     // Add the element keys from the interceptor.
     if (current->HasIndexedInterceptor()) {
@@ -655,6 +696,7 @@ Handle<FixedArray> GetKeysInFixedArrayFor(Handle<JSObject> object,
           GetKeysForIndexedInterceptor(object, current);
       if (!result.IsEmpty())
         content = AddKeysFromJSArray(content, v8::Utils::OpenHandle(*result));
+      ASSERT(ContainsOnlyValidKeys(content));
     }
 
     // We can cache the computed property keys if access checks are
@@ -676,6 +718,7 @@ Handle<FixedArray> GetKeysInFixedArrayFor(Handle<JSObject> object,
     // Compute the property keys and cache them if possible.
     content =
         UnionOfKeys(content, GetEnumPropertyKeys(current, cache_enum_keys));
+    ASSERT(ContainsOnlyValidKeys(content));
 
     // Add the property keys from the interceptor.
     if (current->HasNamedInterceptor()) {
@@ -683,6 +726,7 @@ Handle<FixedArray> GetKeysInFixedArrayFor(Handle<JSObject> object,
           GetKeysForNamedInterceptor(object, current);
       if (!result.IsEmpty())
         content = AddKeysFromJSArray(content, v8::Utils::OpenHandle(*result));
+      ASSERT(ContainsOnlyValidKeys(content));
     }
 
     // If we only want local properties we bail out after the first
@@ -769,15 +813,16 @@ bool CompileLazyShared(Handle<SharedFunctionInfo> shared,
 
 
 bool CompileLazy(Handle<JSFunction> function,
-                 Handle<Object> receiver,
                  ClearExceptionFlag flag) {
   if (function->shared()->is_compiled()) {
     function->set_code(function->shared()->code());
+    PROFILE(FunctionCreateEvent(*function));
     function->shared()->set_code_age(0);
     return true;
   } else {
-    CompilationInfo info(function, 0, receiver);
+    CompilationInfo info(function);
     bool result = CompileLazyHelper(&info, flag);
+    ASSERT(!result || function->is_compiled());
     PROFILE(FunctionCreateEvent(*function));
     return result;
   }
@@ -785,15 +830,17 @@ bool CompileLazy(Handle<JSFunction> function,
 
 
 bool CompileLazyInLoop(Handle<JSFunction> function,
-                       Handle<Object> receiver,
                        ClearExceptionFlag flag) {
   if (function->shared()->is_compiled()) {
     function->set_code(function->shared()->code());
+    PROFILE(FunctionCreateEvent(*function));
     function->shared()->set_code_age(0);
     return true;
   } else {
-    CompilationInfo info(function, 1, receiver);
+    CompilationInfo info(function);
+    info.MarkAsInLoop();
     bool result = CompileLazyHelper(&info, flag);
+    ASSERT(!result || function->is_compiled());
     PROFILE(FunctionCreateEvent(*function));
     return result;
   }

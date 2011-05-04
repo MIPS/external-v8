@@ -27,6 +27,7 @@
 
 #include <stdlib.h>
 #include <math.h>
+#include <limits.h>
 #include <cstdarg>
 #include "v8.h"
 
@@ -37,11 +38,11 @@
 #include "globals.h"    // Need the BitCast
 #include "mips/constants-mips.h"
 #include "mips/simulator-mips.h"
-#include "mips/assembler-mips.h"
+#include "mips/assembler-mips-inl.h"
 
 namespace v8i = v8::internal;
 
-#if !defined(__mips)
+#if defined(USE_SIMULATOR)
 
 #ifdef _MIPS_ARCH_MIPS32R2
   #define mips32r2 1
@@ -64,6 +65,13 @@ bool HaveSameSign(int32_t a, int32_t b) {
   return ((a ^ b) >= 0);
 }
 
+uint32_t get_fcsr_condition_bit(uint32_t cc) {
+  if (cc == 0) {
+    return 23;
+  } else {
+    return 24 + cc;
+  }
+}
 
 // This macro provides a platform independent use of sscanf. The reason for
 // SScanF not being implemented in a platform independent was through
@@ -112,8 +120,10 @@ Debugger::Debugger(Simulator* sim) {
   sim_ = sim;
 }
 
+
 Debugger::~Debugger() {
 }
+
 
 #ifdef GENERATED_CODE_COVERAGE
 static FILE* coverage_log = NULL;
@@ -140,6 +150,7 @@ void Debugger::Stop(Instruction* instr) {
   sim_->set_pc(sim_->get_pc() + Instruction::kInstructionSize);
 }
 
+
 #else  // ndef GENERATED_CODE_COVERAGE
 
 #define UNSUPPORTED() printf("Unsupported instruction.\n");
@@ -164,6 +175,7 @@ int32_t Debugger::GetRegisterValue(int regnum) {
   }
 }
 
+
 int32_t Debugger::GetFPURegisterValueInt(int regnum) {
   if (regnum == kNumFPURegisters) {
     return sim_->get_pc();
@@ -171,6 +183,7 @@ int32_t Debugger::GetFPURegisterValueInt(int regnum) {
     return sim_->get_fpu_register(regnum);
   }
 }
+
 
 int64_t Debugger::GetFPURegisterValueLong(int regnum) {
   if (regnum == kNumFPURegisters) {
@@ -180,6 +193,7 @@ int64_t Debugger::GetFPURegisterValueLong(int regnum) {
   }
 }
 
+
 float Debugger::GetFPURegisterValueFloat(int regnum) {
   if (regnum == kNumFPURegisters) {
     return sim_->get_pc();
@@ -188,6 +202,7 @@ float Debugger::GetFPURegisterValueFloat(int regnum) {
   }
 }
 
+
 double Debugger::GetFPURegisterValueDouble(int regnum) {
   if (regnum == kNumFPURegisters) {
     return sim_->get_pc();
@@ -195,6 +210,7 @@ double Debugger::GetFPURegisterValueDouble(int regnum) {
     return sim_->get_fpu_register_double(regnum);
   }
 }
+
 
 bool Debugger::GetValue(const char* desc, int32_t* value) {
   int regnum = Registers::Number(desc);
@@ -259,6 +275,7 @@ void Debugger::RedoBreakpoints() {
   }
 }
 
+
 void Debugger::PrintAllRegs() {
 #define REG_INFO(n) Registers::Name(n), GetRegisterValue(n), GetRegisterValue(n)
 
@@ -297,9 +314,12 @@ void Debugger::PrintAllRegs() {
 #undef FPU_REG_INFO
 }
 
+
 void Debugger::PrintAllRegsIncludingFPU() {
 #define FPU_REG_INFO(n) FPURegisters::Name(n), FPURegisters::Name(n+1), \
-                        GetFPURegisterValueLong(n), GetFPURegisterValueDouble(n)
+        GetFPURegisterValueInt(n+1), \
+        GetFPURegisterValueInt(n), \
+                        GetFPURegisterValueDouble(n)
 
   PrintAllRegs();
 
@@ -307,27 +327,28 @@ void Debugger::PrintAllRegsIncludingFPU() {
     v8i::CpuFeatures::Scope scope(v8i::FPU);
     PrintF("\n\n");
     // f0, f1, f2, ... f31
-    PrintF("%3s,%3s: 0x%016llx %16.4e\n", FPU_REG_INFO(0) );
-    PrintF("%3s,%3s: 0x%016llx %16.4e\n", FPU_REG_INFO(2) );
-    PrintF("%3s,%3s: 0x%016llx %16.4e\n", FPU_REG_INFO(4) );
-    PrintF("%3s,%3s: 0x%016llx %16.4e\n", FPU_REG_INFO(6) );
-    PrintF("%3s,%3s: 0x%016llx %16.4e\n", FPU_REG_INFO(8) );
-    PrintF("%3s,%3s: 0x%016llx %16.4e\n", FPU_REG_INFO(10));
-    PrintF("%3s,%3s: 0x%016llx %16.4e\n", FPU_REG_INFO(12));
-    PrintF("%3s,%3s: 0x%016llx %16.4e\n", FPU_REG_INFO(14));
-    PrintF("%3s,%3s: 0x%016llx %16.4e\n", FPU_REG_INFO(16));
-    PrintF("%3s,%3s: 0x%016llx %16.4e\n", FPU_REG_INFO(18));
-    PrintF("%3s,%3s: 0x%016llx %16.4e\n", FPU_REG_INFO(20));
-    PrintF("%3s,%3s: 0x%016llx %16.4e\n", FPU_REG_INFO(22));
-    PrintF("%3s,%3s: 0x%016llx %16.4e\n", FPU_REG_INFO(24));
-    PrintF("%3s,%3s: 0x%016llx %16.4e\n", FPU_REG_INFO(26));
-    PrintF("%3s,%3s: 0x%016llx %16.4e\n", FPU_REG_INFO(28));
-    PrintF("%3s,%3s: 0x%016llx %16.4e\n", FPU_REG_INFO(30));
+    PrintF("%3s,%3s: 0x%08x%08x %16.4e\n", FPU_REG_INFO(0) );
+    PrintF("%3s,%3s: 0x%08x%08x %16.4e\n", FPU_REG_INFO(2) );
+    PrintF("%3s,%3s: 0x%08x%08x %16.4e\n", FPU_REG_INFO(4) );
+    PrintF("%3s,%3s: 0x%08x%08x %16.4e\n", FPU_REG_INFO(6) );
+    PrintF("%3s,%3s: 0x%08x%08x %16.4e\n", FPU_REG_INFO(8) );
+    PrintF("%3s,%3s: 0x%08x%08x %16.4e\n", FPU_REG_INFO(10));
+    PrintF("%3s,%3s: 0x%08x%08x %16.4e\n", FPU_REG_INFO(12));
+    PrintF("%3s,%3s: 0x%08x%08x %16.4e\n", FPU_REG_INFO(14));
+    PrintF("%3s,%3s: 0x%08x%08x %16.4e\n", FPU_REG_INFO(16));
+    PrintF("%3s,%3s: 0x%08x%08x %16.4e\n", FPU_REG_INFO(18));
+    PrintF("%3s,%3s: 0x%08x%08x %16.4e\n", FPU_REG_INFO(20));
+    PrintF("%3s,%3s: 0x%08x%08x %16.4e\n", FPU_REG_INFO(22));
+    PrintF("%3s,%3s: 0x%08x%08x %16.4e\n", FPU_REG_INFO(24));
+    PrintF("%3s,%3s: 0x%08x%08x %16.4e\n", FPU_REG_INFO(26));
+    PrintF("%3s,%3s: 0x%08x%08x %16.4e\n", FPU_REG_INFO(28));
+    PrintF("%3s,%3s: 0x%08x%08x %16.4e\n", FPU_REG_INFO(30));
   }
 
 #undef REG_INFO
 #undef FPU_REG_INFO
 }
+
 
 void Debugger::Debug() {
   intptr_t last_pc = -1;
@@ -417,14 +438,15 @@ void Debugger::Debug() {
                 fvalue = GetFPURegisterValueFloat(fpuregnum);
                 PrintF("%s: 0x%08x %11.4e\n", arg1, value, fvalue);
               } else {
-                int64_t lvalue;
                 double dfvalue;
-                lvalue = GetFPURegisterValueLong(fpuregnum);
+                int32_t lvalue1 = GetFPURegisterValueInt(fpuregnum);
+                int32_t lvalue2 = GetFPURegisterValueInt(fpuregnum + 1);
                 dfvalue = GetFPURegisterValueDouble(fpuregnum);
-                PrintF("%3s,%3s: 0x%016llx %16.4e\n",
-                       FPURegisters::Name(fpuregnum),
+                PrintF("%3s,%3s: 0x%08x%08x %16.4e\n",
                        FPURegisters::Name(fpuregnum+1),
-                       lvalue,
+                       FPURegisters::Name(fpuregnum),
+                       lvalue1,
+                       lvalue2,
                        dfvalue);
               }
             } else {
@@ -504,7 +526,8 @@ void Debugger::Debug() {
         end = cur + words;
 
         while (cur < end) {
-          PrintF("  0x%08x:  0x%08x %10d\n", cur, *cur, *cur);
+          PrintF("  0x%08x:  0x%08x %10d\n",
+                 reinterpret_cast<intptr_t>(cur), *cur, *cur);
           cur++;
         }
 
@@ -538,7 +561,8 @@ void Debugger::Debug() {
 
         while (cur < end) {
           dasm.InstructionDecode(buffer, cur);
-          PrintF("  0x%08x  %s\n", cur, buffer.start());
+          PrintF("  0x%08x  %s\n",
+              reinterpret_cast<intptr_t>(cur), buffer.start());
           cur += Instruction::kInstructionSize;
         }
       } else if (strcmp(cmd, "gdb") == 0) {
@@ -600,7 +624,8 @@ void Debugger::Debug() {
 
         while (cur < end) {
           dasm.InstructionDecode(buffer, cur);
-          PrintF("  0x%08x  %s\n", cur, buffer.start());
+          PrintF("  0x%08x  %s\n",
+                 reinterpret_cast<intptr_t>(cur), buffer.start());
           cur += Instruction::kInstructionSize;
         }
       } else if ((strcmp(cmd, "h") == 0) || (strcmp(cmd, "help") == 0)) {
@@ -648,6 +673,7 @@ void Debugger::Debug() {
 #undef STR
 #undef XSTR
 }
+
 
 static bool ICacheMatch(void* one, void* two) {
   ASSERT((reinterpret_cast<intptr_t>(one) & CachePage::kPageMask) == 0);
@@ -736,6 +762,7 @@ void Simulator::CheckICache(Instruction* instr) {
   }
 }
 
+
 // Create one simulator per thread and keep it in thread local storage.
 static v8::internal::Thread::LocalStorageKey simulator_key;
 
@@ -749,6 +776,7 @@ void Simulator::Initialize() {
   initialized_ = true;
   ::v8::internal::ExternalReference::set_redirector(&RedirectExternalReference);
 }
+
 
 v8::internal::HashMap* Simulator::i_cache_ = NULL;
 
@@ -775,7 +803,7 @@ Simulator::Simulator() {
   for (int i = 0; i < kNumFPURegisters; i++) {
     FPUregisters_[i] = 0;
   }
-  FPUccr_ = 0;
+  FCSR_ = 0;
 
   // The sp is initialized to point to the bottom (high address) of the
   // allocated stack area. To be safe in potential stack underflows we leave
@@ -786,6 +814,9 @@ Simulator::Simulator() {
   registers_[pc] = bad_ra;
   registers_[ra] = bad_ra;
   InitializeCoverage();
+  for(int i = 0; i < kNumExceptions; i++){
+    exceptions[i] = 0;
+  }
 }
 
 
@@ -876,15 +907,18 @@ void Simulator::set_register(int reg, int32_t value) {
   registers_[reg] = (reg == 0) ? 0 : value;
 }
 
+
 void Simulator::set_fpu_register(int fpureg, int32_t value) {
   ASSERT((fpureg >= 0) && (fpureg < kNumFPURegisters));
   FPUregisters_[fpureg] = value;
 }
 
+
 void Simulator::set_fpu_register_float(int fpureg, float value) {
   ASSERT((fpureg >= 0) && (fpureg < kNumFPURegisters));
   *v8i::BitCast<float*>(&FPUregisters_[fpureg]) = value;
 }
+
 
 void Simulator::set_fpu_register_double(int fpureg, double value) {
   ASSERT((fpureg >= 0) && (fpureg < kNumFPURegisters) && ((fpureg % 2) == 0));
@@ -902,10 +936,12 @@ int32_t Simulator::get_register(int reg) const {
     return registers_[reg] + ((reg == pc) ? Instruction::kPCReadOffset : 0);
 }
 
+
 int32_t Simulator::get_fpu_register(int fpureg) const {
   ASSERT((fpureg >= 0) && (fpureg < kNumFPURegisters));
   return FPUregisters_[fpureg];
 }
+
 
 int64_t Simulator::get_fpu_register_long(int fpureg) const {
   ASSERT((fpureg >= 0) && (fpureg < kNumFPURegisters) && ((fpureg % 2) == 0));
@@ -913,38 +949,55 @@ int64_t Simulator::get_fpu_register_long(int fpureg) const {
       const_cast<int32_t*>(&FPUregisters_[fpureg]));
 }
 
+
 float Simulator::get_fpu_register_float(int fpureg) const {
   ASSERT((fpureg >= 0) && (fpureg < kNumFPURegisters));
   return *v8i::BitCast<float*>(
       const_cast<int32_t*>(&FPUregisters_[fpureg]));
 }
 
+
 double Simulator::get_fpu_register_double(int fpureg) const {
   ASSERT((fpureg >= 0) && (fpureg < kNumFPURegisters) && ((fpureg % 2) == 0));
   return *v8i::BitCast<double*>(const_cast<int32_t*>(&FPUregisters_[fpureg]));
 }
 
-// Helper functions for setting and testing the FPU condition code bits.
-void Simulator::set_fpu_ccr_bit(uint32_t cc, bool value) {
-  ASSERT(is_uint3(cc));
+
+// Helper functions for setting and testing the FCSR register's bits.
+void Simulator::set_fcsr_bit(uint32_t cc, bool value) {
   if (value) {
-    FPUccr_ |= (1 << cc);
+    FCSR_ |= (1 << cc);
   } else {
-    FPUccr_ &= ~(1 << cc);
+    FCSR_ &= ~(1 << cc);
   }
 }
 
-bool Simulator::test_fpu_ccr_bit(uint32_t cc) {
-  ASSERT(is_uint3(cc));
-  return FPUccr_ & (1 << cc);
+
+bool Simulator::test_fcsr_bit(uint32_t cc) {
+  return FCSR_ & (1 << cc);
 }
 
+
+// Sets the rounding error codes in FCSR based on the result of the rounding.
+// Returns true if the operation was invalid.
+bool Simulator::set_fcsr_round_error(double original, double rounded) {
+  if (!isfinite(original) ||
+      rounded > LONG_MAX ||
+      rounded < LONG_MIN) {
+    set_fcsr_bit(6, true);  // Invalid operation.
+    return true;
+  } else if (original != static_cast<double>(rounded)) {
+    set_fcsr_bit(2, true);  // Inexact.
+  }
+  return false;
+}
 
 // Raw access to the PC register.
 void Simulator::set_pc(int32_t value) {
   pc_modified_ = true;
   registers_[pc] = value;
 }
+
 
 // Raw access to the PC register without the special adjustment when reading.
 int32_t Simulator::get_pc() const {
@@ -970,7 +1023,8 @@ int Simulator::ReadW(int32_t addr, Instruction* instr) {
     intptr_t* ptr = reinterpret_cast<intptr_t*>(addr);
     return *ptr;
   }
-  PrintF("Unaligned read at 0x%08x, pc=%p\n", addr, instr);
+  PrintF("Unaligned read at 0x%08x, pc=%p\n", addr,
+      reinterpret_cast<void*>(instr));
   Debugger dbg(this);
   dbg.Debug();
   return 0;
@@ -988,7 +1042,8 @@ void Simulator::WriteW(int32_t addr, int value, Instruction* instr) {
     *ptr = value;
     return;
   }
-  PrintF("Unaligned write at 0x%08x, pc=%p\n", addr, instr);
+  PrintF("Unaligned write at 0x%08x, pc=%p\n", addr,
+      reinterpret_cast<void*>(instr));
   Debugger dbg(this);
   dbg.Debug();
 }
@@ -999,7 +1054,8 @@ double Simulator::ReadD(int32_t addr, Instruction* instr) {
     double* ptr = reinterpret_cast<double*>(addr);
     return *ptr;
   }
-  PrintF("Unaligned (double) read at 0x%08x, pc=%p\n", addr, instr);
+  PrintF("Unaligned (double) read at 0x%08x, pc=%p\n", addr,
+      reinterpret_cast<void*>(instr));
   OS::Abort();
   return 0;
 }
@@ -1011,7 +1067,8 @@ void Simulator::WriteD(int32_t addr, double value, Instruction* instr) {
     *ptr = value;
     return;
   }
-  PrintF("Unaligned (double) write at 0x%08x, pc=%p\n", addr, instr);
+  PrintF("Unaligned (double) write at 0x%08x, pc=%p\n", addr,
+      reinterpret_cast<void*>(instr));
   OS::Abort();
 }
 
@@ -1021,7 +1078,8 @@ uint16_t Simulator::ReadHU(int32_t addr, Instruction* instr) {
     uint16_t* ptr = reinterpret_cast<uint16_t*>(addr);
     return *ptr;
   }
-  PrintF("Unaligned unsigned halfword read at 0x%08x, pc=%p\n", addr, instr);
+  PrintF("Unaligned unsigned halfword read at 0x%08x, pc=%p\n", addr,
+      reinterpret_cast<void*>(instr));
   OS::Abort();
   return 0;
 }
@@ -1032,7 +1090,8 @@ int16_t Simulator::ReadH(int32_t addr, Instruction* instr) {
     int16_t* ptr = reinterpret_cast<int16_t*>(addr);
     return *ptr;
   }
-  PrintF("Unaligned signed halfword read at 0x%08x, pc=%p\n", addr, instr);
+  PrintF("Unaligned signed halfword read at 0x%08x, pc=%p\n", addr,
+      reinterpret_cast<void*>(instr));
   OS::Abort();
   return 0;
 }
@@ -1044,7 +1103,8 @@ void Simulator::WriteH(int32_t addr, uint16_t value, Instruction* instr) {
     *ptr = value;
     return;
   }
-  PrintF("Unaligned unsigned halfword write at 0x%08x, pc=%p\n", addr, instr);
+  PrintF("Unaligned unsigned halfword write at 0x%08x, pc=%p\n", addr,
+      reinterpret_cast<void*>(instr));
   OS::Abort();
 }
 
@@ -1055,7 +1115,8 @@ void Simulator::WriteH(int32_t addr, int16_t value, Instruction* instr) {
     *ptr = value;
     return;
   }
-  PrintF("Unaligned halfword write at 0x%08x, pc=%p\n", addr, instr);
+  PrintF("Unaligned halfword write at 0x%08x, pc=%p\n", addr,
+      reinterpret_cast<void*>(instr));
   OS::Abort();
 }
 
@@ -1095,7 +1156,7 @@ uintptr_t Simulator::StackLimit() const {
 // Unsupported instructions use Format to print an error and stop execution.
 void Simulator::Format(Instruction* instr, const char* format) {
   PrintF("Simulator found unsupported instruction:\n 0x%08x: %s\n",
-         instr, format);
+         reinterpret_cast<intptr_t>(instr), format);
   UNIMPLEMENTED_MIPS();
 }
 
@@ -1195,6 +1256,7 @@ void Simulator::SoftwareInterrupt(Instruction* instr) {
   }
 }
 
+
 void Simulator::SignalExceptions() {
   for (int i = 1; i < kNumExceptions; i++) {
     if (exceptions[i] != 0) {
@@ -1202,6 +1264,7 @@ void Simulator::SignalExceptions() {
     }
   }
 }
+
 
 // Handle execution based on instruction types.
 void Simulator::DecodeTypeRegister(Instruction* instr) {
@@ -1243,12 +1306,18 @@ void Simulator::DecodeTypeRegister(Instruction* instr) {
         case BC1:   // Handled in DecodeTypeImmed, should never come here.
           UNREACHABLE();
           break;
+        case CFC1:
+          // At the moment only FCSR is supported.
+          ASSERT(fs_reg == kFCSRRegister);
+          alu_out = FCSR_;
+          break;
         case MFC1:
           alu_out = get_fpu_register(fs_reg);
           break;
         case MFHC1:
           UNIMPLEMENTED_MIPS();
           break;
+        case CTC1:
         case MTC1:
         case MTHC1:
           // Do the store in the execution step.
@@ -1427,7 +1496,7 @@ void Simulator::DecodeTypeRegister(Instruction* instr) {
               // Interpret sa field as 5-bit lsb of insert.
               uint16_t lsb = sa;
               uint16_t size = msb - lsb + 1;
-              uint16_t mask = (1 << size) - 1;
+              uint32_t mask = (1 << size) - 1;
               alu_out = (rt_u & ~(mask << lsb)) | ((rs_u & mask) << lsb);
             } else {
               Format(instr, "INS");
@@ -1441,7 +1510,7 @@ void Simulator::DecodeTypeRegister(Instruction* instr) {
               // Interpret sa field as 5-bit lsb of extract.
               uint16_t lsb = sa;
               uint16_t size = msb + 1;
-              uint16_t mask = (1 << size) - 1;
+              uint32_t mask = (1 << size) - 1;
               alu_out = (rs_u & (mask << lsb)) >> lsb;
             } else {
               Format(instr, "EXT");
@@ -1466,11 +1535,18 @@ void Simulator::DecodeTypeRegister(Instruction* instr) {
         case BC1:   // branch on coprocessor condition
           UNREACHABLE();
           break;
+        case CFC1:
+          set_register(rt_reg, alu_out);
         case MFC1:
           set_register(rt_reg, alu_out);
           break;
         case MFHC1:
           UNIMPLEMENTED_MIPS();
+          break;
+        case CTC1:
+          // At the moment only FCSR is supported.
+          ASSERT(fs_reg == kFCSRRegister);
+          FCSR_ = registers_[rt_reg];
           break;
         case MTC1:
           FPUregisters_[fs_reg] = registers_[rt_reg];
@@ -1489,6 +1565,12 @@ void Simulator::DecodeTypeRegister(Instruction* instr) {
             case CVT_L_S:
             case TRUNC_W_S:
             case TRUNC_L_S:
+            case ROUND_W_S:
+            case ROUND_L_S:
+            case FLOOR_W_S:
+            case FLOOR_L_S:
+            case CEIL_W_S:
+            case CEIL_L_S:
             case CVT_PS_S:
               UNIMPLEMENTED_MIPS();
               break;
@@ -1498,11 +1580,12 @@ void Simulator::DecodeTypeRegister(Instruction* instr) {
           break;
         case D:
           double ft, fs;
-          uint32_t cc;
+          uint32_t cc, fcsr_cc;
           int64_t  i64;
           fs = get_fpu_register_double(fs_reg);
           ft = get_fpu_register_double(ft_reg);
           cc = instr->FCccField();
+          fcsr_cc = get_fcsr_condition_bit(cc);
           switch (instr->FunctionFieldRaw()) {
             case ADD_D:
               set_fpu_register_double(fd_reg, fs + ft);
@@ -1529,39 +1612,74 @@ void Simulator::DecodeTypeRegister(Instruction* instr) {
               set_fpu_register_double(fd_reg, sqrt(fs));
               break;
             case C_UN_D:
-              set_fpu_ccr_bit(cc, isnan(fs) || isnan(ft));
+              set_fcsr_bit(fcsr_cc, isnan(fs) || isnan(ft));
               break;
             case C_EQ_D:
-              set_fpu_ccr_bit(cc, (fs == ft));
+              set_fcsr_bit(fcsr_cc, (fs == ft));
               break;
             case C_UEQ_D:
-              set_fpu_ccr_bit(cc, (fs == ft) || (isnan(fs) || isnan(ft)));
+              set_fcsr_bit(fcsr_cc, (fs == ft) || (isnan(fs) || isnan(ft)));
               break;
             case C_OLT_D:
-              set_fpu_ccr_bit(cc, (fs < ft));
+              set_fcsr_bit(fcsr_cc, (fs < ft));
               break;
             case C_ULT_D:
-              set_fpu_ccr_bit(cc, (fs < ft) || (isnan(fs) || isnan(ft)));
+              set_fcsr_bit(fcsr_cc, (fs < ft) || (isnan(fs) || isnan(ft)));
               break;
             case C_OLE_D:
-              set_fpu_ccr_bit(cc, (fs <= ft));
+              set_fcsr_bit(fcsr_cc, (fs <= ft));
               break;
             case C_ULE_D:
-              set_fpu_ccr_bit(cc, (fs <= ft) || (isnan(fs) || isnan(ft)));
+              set_fcsr_bit(fcsr_cc, (fs <= ft) || (isnan(fs) || isnan(ft)));
               break;
             case CVT_W_D:   // Convert double to word.
-              // Warning: does not follow rouding modes, just truncates.
-              set_fpu_register(fd_reg, static_cast<int32_t>(fs));
+              // Rounding modes are not yet supported.
+              ASSERT((FCSR_ & 3) == 0);
+              // In rounding mode 0 it should behave like ROUND.
+            case ROUND_W_D:  // Round double to word.
+              {
+                double rounded = fs > 0 ? floor(fs + 0.5) : ceil(fs - 0.5);
+                int32_t result = static_cast<int32_t>(rounded);
+                set_fpu_register(fd_reg, result);
+                if (set_fcsr_round_error(fs, rounded)) {
+                  set_fpu_register(fd_reg, kFPUInvalidResult);
+                }
+              }
               break;
-            case TRUNC_W_D:  // Truncate double to word.
-              set_fpu_register(fd_reg, static_cast<int32_t>(fs));
+            case TRUNC_W_D:  // Truncate double to word (round towards 0).
+              {
+                int32_t result = static_cast<int32_t>(fs);
+                set_fpu_register(fd_reg, result);
+                if (set_fcsr_round_error(fs, static_cast<double>(result))) {
+                  set_fpu_register(fd_reg, kFPUInvalidResult);
+                }
+              }
+              break;
+            case FLOOR_W_D:  // Round double to word towards negative infinity.
+              {
+                double rounded = floor(fs);
+                int32_t result = static_cast<int32_t>(rounded);
+                set_fpu_register(fd_reg, result);
+                if (set_fcsr_round_error(fs, rounded)) {
+                  set_fpu_register(fd_reg, kFPUInvalidResult);
+                }
+              }
+              break;
+            case CEIL_W_D:  // Round double to word towards positive infinity.
+              {
+                double rounded = ceil(fs);
+                int32_t result = static_cast<int32_t>(rounded);
+                set_fpu_register(fd_reg, result);
+                if (set_fcsr_round_error(fs, rounded)) {
+                  set_fpu_register(fd_reg, kFPUInvalidResult);
+                }
+              }
               break;
             case CVT_S_D:  // Convert double to float (single).
               set_fpu_register_float(fd_reg, static_cast<float>(fs));
               break;
             case CVT_L_D:  // Truncate double to 64-bit long-word.
               if (mips32r2) {
-                // Does not follow rounding modes, just truncates.
                 i64 = static_cast<int64_t>(fs);
                 set_fpu_register(fd_reg, i64 & 0xffffffff);
                 set_fpu_register(fd_reg + 1, i64 >> 32);
@@ -1573,6 +1691,37 @@ void Simulator::DecodeTypeRegister(Instruction* instr) {
             case TRUNC_L_D:
               if (mips32r2) {
                 i64 = static_cast<int64_t>(fs);
+                set_fpu_register(fd_reg, i64 & 0xffffffff);
+                set_fpu_register(fd_reg + 1, i64 >> 32);
+              } else {
+                // Not allowed on MIPS32 Release 1
+                UNIMPLEMENTED_MIPS();
+              }
+              break;
+            case ROUND_L_D:
+              if (mips32r2) {
+                double rounded = fs > 0 ? floor(fs + 0.5) : ceil(fs - 0.5);
+                i64 = static_cast<int64_t>(rounded);
+                set_fpu_register(fd_reg, i64 & 0xffffffff);
+                set_fpu_register(fd_reg + 1, i64 >> 32);
+              } else {
+                // Not allowed on MIPS32 Release 1
+                UNIMPLEMENTED_MIPS();
+              }
+              break;
+            case FLOOR_L_D:
+              if (mips32r2) {
+                i64 = static_cast<int64_t>(floor(fs));
+                set_fpu_register(fd_reg, i64 & 0xffffffff);
+                set_fpu_register(fd_reg + 1, i64 >> 32);
+              } else {
+                // Not allowed on MIPS32 Release 1
+                UNIMPLEMENTED_MIPS();
+              }
+              break;
+            case CEIL_L_D:
+              if (mips32r2) {
+                i64 = static_cast<int64_t>(ceil(fs));
                 set_fpu_register(fd_reg, i64 & 0xffffffff);
                 set_fpu_register(fd_reg + 1, i64 >> 32);
               } else {
@@ -1683,10 +1832,11 @@ void Simulator::DecodeTypeRegister(Instruction* instr) {
           break;
         case MOVCI: {
           uint32_t cc = instr->FCccField();
+          uint32_t fcsr_cc = get_fcsr_condition_bit(cc);
           if (instr->Bit(16)) {  // Read Tf bit
-            if (test_fpu_ccr_bit(cc)) set_register(rd_reg, rs);
+            if (test_fcsr_bit(fcsr_cc)) set_register(rd_reg, rs);
           } else {
-            if (!test_fpu_ccr_bit(cc)) set_register(rd_reg, rs);
+            if (!test_fcsr_bit(fcsr_cc)) set_register(rd_reg, rs);
           }
           break;
         }
@@ -1731,6 +1881,7 @@ void Simulator::DecodeTypeRegister(Instruction* instr) {
   };
 }
 
+
 // Type 2: instructions using a 16 bytes immediate. (eg: addi, beq)
 void Simulator::DecodeTypeImmediate(Instruction* instr) {
   // Instruction fields.
@@ -1761,7 +1912,7 @@ void Simulator::DecodeTypeImmediate(Instruction* instr) {
   int32_t alu_out = 0;
   // Floating point.
   double fp_out = 0.0;
-  uint32_t cc, cc_value;
+  uint32_t cc, cc_value, fcsr_cc;
 
   // Used for memory instructions.
   int32_t addr = 0x0;
@@ -1775,7 +1926,8 @@ void Simulator::DecodeTypeImmediate(Instruction* instr) {
       switch (instr->RsFieldRaw()) {
         case BC1:   // Branch on coprocessor condition.
           cc = instr->FBccField();
-          cc_value = test_fpu_ccr_bit(cc);
+          fcsr_cc = get_fcsr_condition_bit(cc);
+          cc_value = test_fcsr_bit(fcsr_cc);
           do_branch = (instr->FBtrueField()) ? cc_value : !cc_value;
           execute_branch_delay_instruction = true;
           // Set next_pc
@@ -2052,6 +2204,7 @@ void Simulator::DecodeTypeImmediate(Instruction* instr) {
   }
 }
 
+
 // Type 3: instructions using a 26 bytes immediate. (eg: j, jal)
 void Simulator::DecodeTypeJump(Instruction* instr) {
   // Get current pc.
@@ -2077,6 +2230,7 @@ void Simulator::DecodeTypeJump(Instruction* instr) {
   pc_modified_ = true;
 }
 
+
 // Executes the current instruction.
 void Simulator::InstructionDecode(Instruction* instr) {
   if (v8::internal::FLAG_check_icache) {
@@ -2090,7 +2244,8 @@ void Simulator::InstructionDecode(Instruction* instr) {
     v8::internal::EmbeddedVector<char, 256> buffer;
     dasm.InstructionDecode(buffer,
                            reinterpret_cast<byte_*>(instr));
-    PrintF("  0x%08x  %s\n", instr, buffer.start());
+    PrintF("  0x%08x  %s\n", reinterpret_cast<intptr_t>(instr),
+        buffer.start());
   }
 
   switch (instr->InstructionType()) {
@@ -2268,6 +2423,6 @@ uintptr_t Simulator::PopAddress() {
 
 } }  // namespace assembler::mips
 
-#endif  // __mips
+#endif  // USE_SIMULATOR
 
 #endif  // V8_TARGET_ARCH_MIPS

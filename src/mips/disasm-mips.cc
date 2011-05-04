@@ -465,6 +465,13 @@ void Decoder::DecodeTypeRegister(Instruction* instr) {
         case MTC1:
           Format(instr, "mtc1   'rt, 'fs");
           break;
+        // These are called "fs" too, although they are not FPU registers.
+        case CTC1:
+          Format(instr, "ctc1   'rt, 'fs");
+          break;
+        case CFC1:
+          Format(instr, "cfc1   'rt, 'fs");
+          break;
         case MTHC1:
           Format(instr, "mthc1  'rt, 'fs");
           break;
@@ -515,6 +522,15 @@ void Decoder::DecodeTypeRegister(Instruction* instr) {
                 Unknown(instr);
               }
               }
+              break;
+            case ROUND_W_D:
+              Format(instr, "round.w.d 'fd, 'fs");
+              break;
+            case FLOOR_W_D:
+              Format(instr, "floor.w.d 'fd, 'fs");
+              break;
+            case CEIL_W_D:
+              Format(instr, "ceil.w.d 'fd, 'fs");
               break;
             case CVT_S_D:
               Format(instr, "cvt.s.d 'fd, 'fs");
@@ -1000,6 +1016,7 @@ int Disassembler::InstructionDecode(v8::internal::Vector<char> buffer,
   return d.InstructionDecode(instruction);
 }
 
+
 // The MIPS assembler does not currently use constant pools.
 int Disassembler::ConstantPoolSizeAt(byte_* instruction) {
   return -1;
@@ -1018,6 +1035,7 @@ void Disassembler::Disassemble(FILE* f, byte_* begin, byte_* end) {
             prev_pc, *reinterpret_cast<int32_t*>(prev_pc), buffer.start());
   }
 }
+
 
 #undef UNSUPPORTED
 

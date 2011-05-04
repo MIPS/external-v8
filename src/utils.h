@@ -31,6 +31,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "globals.h"
+#include "checks.h"
+#include "allocation.h"
+
 namespace v8 {
 namespace internal {
 
@@ -142,7 +146,19 @@ static int PointerValueCompare(const T* a, const T* b) {
 
 // Returns the smallest power of two which is >= x. If you pass in a
 // number that is already a power of two, it is returned as is.
-uint32_t RoundUpToPowerOf2(uint32_t x);
+// Implementation is from "Hacker's Delight" by Henry S. Warren, Jr.,
+// figure 3-3, page 48, where the function is called clp2.
+static inline uint32_t RoundUpToPowerOf2(uint32_t x) {
+  ASSERT(x <= 0x80000000u);
+  x = x - 1;
+  x = x | (x >> 1);
+  x = x | (x >> 2);
+  x = x | (x >> 4);
+  x = x | (x >> 8);
+  x = x | (x >> 16);
+  return x + 1;
+}
+
 
 
 template <typename T>
@@ -216,55 +232,18 @@ class BitField {
 // ----------------------------------------------------------------------------
 // Hash function.
 
-uint32_t ComputeIntegerHash(uint32_t key);
-
-
-// ----------------------------------------------------------------------------
-// I/O support.
-
-// Our version of printf(). Avoids compilation errors that we get
-// with standard printf when attempting to print pointers, etc.
-// (the errors are due to the extra compilation flags, which we
-// want elsewhere).
-void PrintF(const char* format, ...);
-
-// Our version of fflush.
-void Flush();
-
-
-// Read a line of characters after printing the prompt to stdout. The resulting
-// char* needs to be disposed off with DeleteArray by the caller.
-char* ReadLine(const char* prompt);
-
-
-// Read and return the raw bytes in a file. the size of the buffer is returned
-// in size.
-// The returned buffer must be freed by the caller.
-byte* ReadBytes(const char* filename, int* size, bool verbose = true);
-
-
-// Write size chars from str to the file given by filename.
-// The file is overwritten. Returns the number of chars written.
-int WriteChars(const char* filename,
-               const char* str,
-               int size,
-               bool verbose = true);
-
-
-// Write size bytes to the file given by filename.
-// The file is overwritten. Returns the number of bytes written.
-int WriteBytes(const char* filename,
-               const byte* bytes,
-               int size,
-               bool verbose = true);
-
-
-// Write the C code
-// const char* <varname> = "<str>";
-// const int <varname>_len = <len>;
-// to the file given by filename. Only the first len chars are written.
-int WriteAsCFile(const char* filename, const char* varname,
-                 const char* str, int size, bool verbose = true);
+// Thomas Wang, Integer Hash Functions.
+// http://www.concentric.net/~Ttwang/tech/inthash.htm
+static inline uint32_t ComputeIntegerHash(uint32_t key) {
+  uint32_t hash = key;
+  hash = ~hash + (hash << 15);  // hash = (hash << 15) - hash - 1;
+  hash = hash ^ (hash >> 12);
+  hash = hash + (hash << 2);
+  hash = hash ^ (hash >> 4);
+  hash = hash * 2057;  // hash = (hash + (hash << 3)) + (hash << 11);
+  hash = hash ^ (hash >> 16);
+  return hash;
+}
 
 
 // ----------------------------------------------------------------------------
@@ -326,9 +305,9 @@ class Vector {
   // Returns a vector using the same backing storage as this one,
   // spanning from and including 'from', to but not including 'to'.
   Vector<T> SubVector(int from, int to) {
-    ASSERT(from < length_);
     ASSERT(to <= length_);
     ASSERT(from < to);
+    ASSERT(0 <= from);
     return Vector<T>(start() + from, to - from);
   }
 
@@ -346,6 +325,8 @@ class Vector {
     ASSERT(0 <= index && index < length_);
     return start_[index];
   }
+
+  T& at(int i) const { return operator[](i); }
 
   T& first() { return start_[0]; }
 
@@ -391,29 +372,18 @@ class Vector {
   // Factory method for creating empty vectors.
   static Vector<T> empty() { return Vector<T>(NULL, 0); }
 
+  template<typename S>
+  static Vector<T> cast(Vector<S> input) {
+    return Vector<T>(reinterpret_cast<T*>(input.start()),
+                     input.length() * sizeof(S) / sizeof(T));
+  }
+
  protected:
   void set_start(T* start) { start_ = start; }
 
  private:
   T* start_;
   int length_;
-};
-
-
-// A temporary assignment sets a (non-local) variable to a value on
-// construction and resets it the value on destruction.
-template <typename T>
-class TempAssign {
- public:
-  TempAssign(T* var, T value): var_(var), old_value_(*var) {
-    *var = value;
-  }
-
-  ~TempAssign() { *var_ = old_value_; }
-
- private:
-  T* var_;
-  T old_value_;
 };
 
 
@@ -468,13 +438,6 @@ inline Vector<char> MutableCStrVector(char* data, int max) {
   return Vector<char>(data, (length < max) ? length : max);
 }
 
-template <typename T>
-inline Vector< Handle<Object> > HandleVector(v8::internal::Handle<T>* elms,
-                                             int length) {
-  return Vector< Handle<Object> >(
-      reinterpret_cast<v8::internal::Handle<Object>*>(elms), length);
-}
-
 
 /*
  * A class that collects values into a backing store.
@@ -485,24 +448,20 @@ inline Vector< Handle<Object> > HandleVector(v8::internal::Handle<T>* elms,
  * in memory). The collector may move elements unless it has guaranteed not
  * to.
  */
-template <typename T>
+template <typename T, int growth_factor = 2, int max_growth = 1 * MB>
 class Collector {
  public:
-  Collector(int initial_capacity = kMinCapacity,
-            int growth_factor = 2,
-            int max_growth = 1 * MB)
-      : growth_factor_(growth_factor), max_growth_(max_growth) {
+  explicit Collector(int initial_capacity = kMinCapacity)
+      : index_(0), size_(0) {
     if (initial_capacity < kMinCapacity) {
       initial_capacity = kMinCapacity;
     }
-    current_chunk_ = NewArray<T>(initial_capacity);
-    current_capacity_ = initial_capacity;
-    index_ = 0;
+    current_chunk_ = Vector<T>::New(initial_capacity);
   }
 
   virtual ~Collector() {
     // Free backing store (in reverse allocation order).
-    DeleteArray(current_chunk_);
+    current_chunk_.Dispose();
     for (int i = chunks_.length() - 1; i >= 0; i--) {
       chunks_.at(i).Dispose();
     }
@@ -510,11 +469,12 @@ class Collector {
 
   // Add a single element.
   inline void Add(T value) {
-    if (index_ >= current_capacity_) {
+    if (index_ >= current_chunk_.length()) {
       Grow(1);
     }
     current_chunk_[index_] = value;
     index_++;
+    size_++;
   }
 
   // Add a block of contiguous elements and return a Vector backed by the
@@ -522,11 +482,13 @@ class Collector {
   // A basic Collector will keep this vector valid as long as the Collector
   // is alive.
   inline Vector<T> AddBlock(int size, T initial_value) {
-    if (index_ + size > current_capacity_) {
+    ASSERT(size > 0);
+    if (size > current_chunk_.length() - index_) {
       Grow(size);
     }
-    T* position = current_chunk_ + index_;
+    T* position = current_chunk_.start() + index_;
     index_ += size;
+    size_ += size;
     for (int i = 0; i < size; i++) {
       position[i] = initial_value;
     }
@@ -534,30 +496,31 @@ class Collector {
   }
 
 
+  // Write the contents of the collector into the provided vector.
+  void WriteTo(Vector<T> destination) {
+    ASSERT(size_ <= destination.length());
+    int position = 0;
+    for (int i = 0; i < chunks_.length(); i++) {
+      Vector<T> chunk = chunks_.at(i);
+      for (int j = 0; j < chunk.length(); j++) {
+        destination[position] = chunk[j];
+        position++;
+      }
+    }
+    for (int i = 0; i < index_; i++) {
+      destination[position] = current_chunk_[i];
+      position++;
+    }
+  }
+
   // Allocate a single contiguous vector, copy all the collected
   // elements to the vector, and return it.
   // The caller is responsible for freeing the memory of the returned
   // vector (e.g., using Vector::Dispose).
   Vector<T> ToVector() {
-    // Find the total length.
-    int total_length = index_;
-    for (int i = 0; i < chunks_.length(); i++) {
-      total_length += chunks_.at(i).length();
-    }
-    T* new_store = NewArray<T>(total_length);
-    int position = 0;
-    for (int i = 0; i < chunks_.length(); i++) {
-      Vector<T> chunk = chunks_.at(i);
-      for (int j = 0; j < chunk.length(); j++) {
-        new_store[position] = chunk[j];
-        position++;
-      }
-    }
-    for (int i = 0; i < index_; i++) {
-      new_store[position] = current_chunk_[i];
-      position++;
-    }
-    return Vector<T>(new_store, total_length);
+    Vector<T> new_store = Vector<T>::New(size_);
+    WriteTo(new_store);
+    return new_store;
   }
 
   // Resets the collector to be empty.
@@ -567,35 +530,42 @@ class Collector {
     }
     chunks_.Rewind(0);
     index_ = 0;
+    size_ = 0;
   }
+
+  // Total number of elements added to collector so far.
+  inline int size() { return size_; }
 
  protected:
   static const int kMinCapacity = 16;
   List<Vector<T> > chunks_;
-  T* current_chunk_;
-  int growth_factor_;
-  int max_growth_;
-  int current_capacity_;
-  int index_;
+  Vector<T> current_chunk_;  // Block of memory currently being written into.
+  int index_;  // Current index in current chunk.
+  int size_;  // Total number of elements in collector.
 
   // Creates a new current chunk, and stores the old chunk in the chunks_ list.
   void Grow(int min_capacity) {
-    ASSERT(growth_factor_ > 1);
-    int growth = current_capacity_ * (growth_factor_ - 1);
-    if (growth > max_growth_) {
-      growth = max_growth_;
+    ASSERT(growth_factor > 1);
+    int growth = current_chunk_.length() * (growth_factor - 1);
+    if (growth > max_growth) {
+      growth = max_growth;
     }
-    int new_capacity = current_capacity_ + growth;
+    int new_capacity = current_chunk_.length() + growth;
     if (new_capacity < min_capacity) {
-      new_capacity = min_capacity;
+      new_capacity = min_capacity + growth;
     }
-    T* new_chunk = NewArray<T>(new_capacity);
-    int new_index = PrepareGrow(Vector<T>(new_chunk, new_capacity));
-    chunks_.Add(Vector<T>(current_chunk_, index_));
+    Vector<T> new_chunk = Vector<T>::New(new_capacity);
+    int new_index = PrepareGrow(new_chunk);
+    if (index_ > 0) {
+      chunks_.Add(current_chunk_.SubVector(0, index_));
+    } else {
+      // Can happen if the call to PrepareGrow moves everything into
+      // the new chunk.
+      current_chunk_.Dispose();
+    }
     current_chunk_ = new_chunk;
-    current_capacity_ = new_capacity;
     index_ = new_index;
-    ASSERT(index_ + min_capacity <= current_capacity_);
+    ASSERT(index_ + min_capacity <= current_chunk_.length());
   }
 
   // Before replacing the current chunk, give a subclass the option to move
@@ -617,13 +587,11 @@ class Collector {
  * NOTICE: Blocks allocated using Collector::AddBlock(int) can move
  * as well, if inside an active sequence where another element is added.
  */
-template <typename T>
-class SequenceCollector : public Collector<T> {
+template <typename T, int growth_factor = 2, int max_growth = 1 * MB>
+class SequenceCollector : public Collector<T, growth_factor, max_growth> {
  public:
-  SequenceCollector(int initial_capacity,
-                    int growth_factor = 2,
-                    int max_growth = 1 * MB)
-      : Collector<T>(initial_capacity, growth_factor, max_growth),
+  explicit SequenceCollector(int initial_capacity)
+      : Collector<T, growth_factor, max_growth>(initial_capacity),
         sequence_start_(kNoSequence) { }
 
   virtual ~SequenceCollector() {}
@@ -637,20 +605,22 @@ class SequenceCollector : public Collector<T> {
     ASSERT(sequence_start_ != kNoSequence);
     int sequence_start = sequence_start_;
     sequence_start_ = kNoSequence;
-    return Vector<T>(this->current_chunk_ + sequence_start,
-                     this->index_ - sequence_start);
+    if (sequence_start == this->index_) return Vector<T>();
+    return this->current_chunk_.SubVector(sequence_start, this->index_);
   }
 
   // Drops the currently added sequence, and all collected elements in it.
   void DropSequence() {
     ASSERT(sequence_start_ != kNoSequence);
+    int sequence_length = this->index_ - sequence_start_;
     this->index_ = sequence_start_;
+    this->size_ -= sequence_length;
     sequence_start_ = kNoSequence;
   }
 
   virtual void Reset() {
     sequence_start_ = kNoSequence;
-    this->Collector<T>::Reset();
+    this->Collector<T, growth_factor, max_growth>::Reset();
   }
 
  private:
@@ -674,156 +644,6 @@ class SequenceCollector : public Collector<T> {
     return 0;
   }
 };
-
-
-// Simple support to read a file into a 0-terminated C-string.
-// The returned buffer must be freed by the caller.
-// On return, *exits tells whether the file existed.
-Vector<const char> ReadFile(const char* filename,
-                            bool* exists,
-                            bool verbose = true);
-
-
-// Simple wrapper that allows an ExternalString to refer to a
-// Vector<const char>. Doesn't assume ownership of the data.
-class AsciiStringAdapter: public v8::String::ExternalAsciiStringResource {
- public:
-  explicit AsciiStringAdapter(Vector<const char> data) : data_(data) {}
-
-  virtual const char* data() const { return data_.start(); }
-
-  virtual size_t length() const { return data_.length(); }
-
- private:
-  Vector<const char> data_;
-};
-
-
-// Helper class for building result strings in a character buffer. The
-// purpose of the class is to use safe operations that checks the
-// buffer bounds on all operations in debug mode.
-class StringBuilder {
- public:
-  // Create a string builder with a buffer of the given size. The
-  // buffer is allocated through NewArray<char> and must be
-  // deallocated by the caller of Finalize().
-  explicit StringBuilder(int size);
-
-  StringBuilder(char* buffer, int size)
-      : buffer_(buffer, size), position_(0) { }
-
-  ~StringBuilder() { if (!is_finalized()) Finalize(); }
-
-  int size() const { return buffer_.length(); }
-
-  // Get the current position in the builder.
-  int position() const {
-    ASSERT(!is_finalized());
-    return position_;
-  }
-
-  // Reset the position.
-  void Reset() { position_ = 0; }
-
-  // Add a single character to the builder. It is not allowed to add
-  // 0-characters; use the Finalize() method to terminate the string
-  // instead.
-  void AddCharacter(char c) {
-    ASSERT(c != '\0');
-    ASSERT(!is_finalized() && position_ < buffer_.length());
-    buffer_[position_++] = c;
-  }
-
-  // Add an entire string to the builder. Uses strlen() internally to
-  // compute the length of the input string.
-  void AddString(const char* s);
-
-  // Add the first 'n' characters of the given string 's' to the
-  // builder. The input string must have enough characters.
-  void AddSubstring(const char* s, int n);
-
-  // Add formatted contents to the builder just like printf().
-  void AddFormatted(const char* format, ...);
-
-  // Add character padding to the builder. If count is non-positive,
-  // nothing is added to the builder.
-  void AddPadding(char c, int count);
-
-  // Finalize the string by 0-terminating it and returning the buffer.
-  char* Finalize();
-
- private:
-  Vector<char> buffer_;
-  int position_;
-
-  bool is_finalized() const { return position_ < 0; }
-
-  DISALLOW_IMPLICIT_CONSTRUCTORS(StringBuilder);
-};
-
-
-// Custom memcpy implementation for platforms where the standard version
-// may not be good enough.
-// TODO(lrn): Check whether some IA32 platforms should be excluded.
-#if defined(V8_TARGET_ARCH_IA32)
-
-// TODO(lrn): Extend to other platforms as needed.
-
-typedef void (*MemCopyFunction)(void* dest, const void* src, size_t size);
-
-// Implemented in codegen-<arch>.cc.
-MemCopyFunction CreateMemCopyFunction();
-
-// Copy memory area to disjoint memory area.
-static inline void MemCopy(void* dest, const void* src, size_t size) {
-  static MemCopyFunction memcopy = CreateMemCopyFunction();
-  (*memcopy)(dest, src, size);
-#ifdef DEBUG
-  CHECK_EQ(0, memcmp(dest, src, size));
-#endif
-}
-
-
-// Limit below which the extra overhead of the MemCopy function is likely
-// to outweigh the benefits of faster copying.
-// TODO(lrn): Try to find a more precise value.
-static const int kMinComplexMemCopy = 64;
-
-#else  // V8_TARGET_ARCH_IA32
-
-static inline void MemCopy(void* dest, const void* src, size_t size) {
-  memcpy(dest, src, size);
-}
-
-static const int kMinComplexMemCopy = 256;
-
-#endif  // V8_TARGET_ARCH_IA32
-
-
-// Copy from ASCII/16bit chars to ASCII/16bit chars.
-template <typename sourcechar, typename sinkchar>
-static inline void CopyChars(sinkchar* dest, const sourcechar* src, int chars) {
-  sinkchar* limit = dest + chars;
-#ifdef V8_HOST_CAN_READ_UNALIGNED
-  if (sizeof(*dest) == sizeof(*src)) {
-    if (chars >= static_cast<int>(kMinComplexMemCopy / sizeof(*dest))) {
-      MemCopy(dest, src, chars * sizeof(*dest));
-      return;
-    }
-    // Number of characters in a uintptr_t.
-    static const int kStepSize = sizeof(uintptr_t) / sizeof(*dest);  // NOLINT
-    while (dest <= limit - kStepSize) {
-      *reinterpret_cast<uintptr_t*>(dest) =
-          *reinterpret_cast<const uintptr_t*>(src);
-      dest += kStepSize;
-      src += kStepSize;
-    }
-  }
-#endif
-  while (dest < limit) {
-    *dest++ = static_cast<sinkchar>(*src++);
-  }
-}
 
 
 // Compare ASCII/16bit chars to ASCII/16bit chars.
@@ -854,54 +674,14 @@ static inline int CompareChars(const lchar* lhs, const rchar* rhs, int chars) {
 }
 
 
-template <typename T>
-static inline void MemsetPointer(T** dest, T* value, int counter) {
-#if defined(V8_HOST_ARCH_IA32)
-#define STOS "stosl"
-#elif defined(V8_HOST_ARCH_X64)
-#define STOS "stosq"
-#endif
-
-#if defined(__GNUC__) && defined(STOS)
-  asm volatile(
-      "cld;"
-      "rep ; " STOS
-      : "+&c" (counter), "+&D" (dest)
-      : "a" (value)
-      : "memory", "cc");
-#else
-  for (int i = 0; i < counter; i++) {
-    dest[i] = value;
-  }
-#endif
-
-#undef STOS
-}
-
-
-// Copies data from |src| to |dst|.  The data spans MUST not overlap.
-inline void CopyWords(Object** dst, Object** src, int num_words) {
-  ASSERT(Min(dst, src) + num_words <= Max(dst, src));
-  ASSERT(num_words > 0);
-
-  // Use block copying memcpy if the segment we're copying is
-  // enough to justify the extra call/setup overhead.
-  static const int kBlockCopyLimit = 16;
-
-  if (num_words >= kBlockCopyLimit) {
-    memcpy(dst, src, num_words * kPointerSize);
-  } else {
-    int remaining = num_words;
-    do {
-      remaining--;
-      *dst++ = *src++;
-    } while (remaining > 0);
-  }
-}
-
-
 // Calculate 10^exponent.
-int TenToThe(int exponent);
+static inline int TenToThe(int exponent) {
+  ASSERT(exponent <= 9);
+  ASSERT(exponent >= 1);
+  int answer = 10;
+  for (int i = 1; i < exponent; i++) answer *= 10;
+  return answer;
+}
 
 
 // The type-based aliasing rule allows the compiler to assume that pointers of

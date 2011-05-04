@@ -46,8 +46,7 @@ const char* StringsStorage::GetFunctionName(const char* name) {
 
 
 CodeEntry::CodeEntry(int security_token_id)
-    : call_uid_(0),
-      tag_(Logger::FUNCTION_TAG),
+    : tag_(Logger::FUNCTION_TAG),
       name_prefix_(kEmptyNamePrefix),
       name_(""),
       resource_name_(""),
@@ -62,8 +61,7 @@ CodeEntry::CodeEntry(Logger::LogEventsAndTags tag,
                      const char* resource_name,
                      int line_number,
                      int security_token_id)
-    : call_uid_(next_call_uid_++),
-      tag_(tag),
+    : tag_(tag),
       name_prefix_(name_prefix),
       name_(name),
       resource_name_(resource_name),
@@ -107,24 +105,6 @@ void CodeMap::DeleteCode(Address addr) {
 }
 
 
-template<class Visitor>
-void HeapEntriesMap::UpdateEntries(Visitor* visitor) {
-  for (HashMap::Entry* p = entries_.Start();
-       p != NULL;
-       p = entries_.Next(p)) {
-    if (!IsAlias(p->value)) {
-      EntryInfo* entry_info = reinterpret_cast<EntryInfo*>(p->value);
-      entry_info->entry = visitor->GetEntry(
-          reinterpret_cast<HeapObject*>(p->key),
-          entry_info->children_count,
-          entry_info->retainers_count);
-      entry_info->children_count = 0;
-      entry_info->retainers_count = 0;
-    }
-  }
-}
-
-
 CodeEntry* ProfileGenerator::EntryForVMState(StateTag tag) {
   switch (tag) {
     case GC:
@@ -138,6 +118,31 @@ CodeEntry* ProfileGenerator::EntryForVMState(StateTag tag) {
     case EXTERNAL:
       return program_entry_;
     default: return NULL;
+  }
+}
+
+
+inline uint64_t HeapEntry::id() {
+  union {
+    Id stored_id;
+    uint64_t returned_id;
+  } id_adaptor = {id_};
+  return id_adaptor.returned_id;
+}
+
+
+template<class Visitor>
+void HeapEntriesMap::UpdateEntries(Visitor* visitor) {
+  for (HashMap::Entry* p = entries_.Start();
+       p != NULL;
+       p = entries_.Next(p)) {
+    EntryInfo* entry_info = reinterpret_cast<EntryInfo*>(p->value);
+    entry_info->entry = visitor->GetEntry(
+        reinterpret_cast<HeapObject*>(p->key),
+        entry_info->children_count,
+        entry_info->retainers_count);
+    entry_info->children_count = 0;
+    entry_info->retainers_count = 0;
   }
 }
 

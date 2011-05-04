@@ -45,7 +45,7 @@ Debug.DebugEvent = { Break: 1,
                      ScriptCollected: 6 };
 
 // Types of exceptions that can be broken upon.
-Debug.ExceptionBreak = { All : 0,
+Debug.ExceptionBreak = { Caught : 0,
                          Uncaught: 1 };
 
 // The different types of steps.
@@ -87,7 +87,27 @@ var debugger_flags = {
       this.value = !!value;
       %SetDisableBreak(!this.value);
     }
-  }
+  },
+  breakOnCaughtException: {
+    getValue: function() { return Debug.isBreakOnException(); },
+    setValue: function(value) {
+      if (value) {
+        Debug.setBreakOnException();
+      } else {
+        Debug.clearBreakOnException();
+      }
+    }
+  },
+  breakOnUncaughtException: {
+    getValue: function() { return Debug.isBreakOnUncaughtException(); },
+    setValue: function(value) {
+      if (value) {
+        Debug.setBreakOnUncaughtException();
+      } else {
+        Debug.clearBreakOnUncaughtException();
+      }
+    }
+  },
 };
 
 
@@ -781,11 +801,15 @@ Debug.clearStepping = function() {
 }
 
 Debug.setBreakOnException = function() {
-  return %ChangeBreakOnException(Debug.ExceptionBreak.All, true);
+  return %ChangeBreakOnException(Debug.ExceptionBreak.Caught, true);
 };
 
 Debug.clearBreakOnException = function() {
-  return %ChangeBreakOnException(Debug.ExceptionBreak.All, false);
+  return %ChangeBreakOnException(Debug.ExceptionBreak.Caught, false);
+};
+
+Debug.isBreakOnException = function() {
+  return !!%IsBreakOnException(Debug.ExceptionBreak.Caught);
 };
 
 Debug.setBreakOnUncaughtException = function() {
@@ -794,6 +818,10 @@ Debug.setBreakOnUncaughtException = function() {
 
 Debug.clearBreakOnUncaughtException = function() {
   return %ChangeBreakOnException(Debug.ExceptionBreak.Uncaught, false);
+};
+
+Debug.isBreakOnUncaughtException = function() {
+  return !!%IsBreakOnException(Debug.ExceptionBreak.Uncaught);
 };
 
 Debug.showBreakPoints = function(f, full) {
@@ -867,10 +895,6 @@ ExecutionState.prototype.frame = function(opt_index) {
   if (opt_index < 0 || opt_index >= this.frameCount())
     throw new Error('Illegal frame index.');
   return new FrameMirror(this.break_id, opt_index);
-};
-
-ExecutionState.prototype.cframesValue = function(opt_from_index, opt_to_index) {
-  return %GetCFrames(this.break_id);
 };
 
 ExecutionState.prototype.setSelectedFrame = function(index) {
@@ -1273,7 +1297,7 @@ DebugCommandProcessor.prototype.processDebugJSONRequest = function(json_request)
   try {
     try {
       // Convert the JSON string to an object.
-      request = %CompileString('(' + json_request + ')', false)();
+      request = %CompileString('(' + json_request + ')')();
 
       // Create an initial response.
       response = this.createResponse(request);
@@ -1723,11 +1747,6 @@ DebugCommandProcessor.prototype.backtraceRequest_ = function(request, response) 
 };
 
 
-DebugCommandProcessor.prototype.backtracec = function(cmd, args) {
-  return this.exec_state_.cframesValue();
-};
-
-
 DebugCommandProcessor.prototype.frameRequest_ = function(request, response) {
   // No frames no source.
   if (this.exec_state_.frameCount() == 0) {
@@ -2090,7 +2109,7 @@ DebugCommandProcessor.prototype.changeLiveRequest_ = function(request, response)
   }
   var script_id = request.arguments.script_id;
   var preview_only = !!request.arguments.preview_only;
-  
+
   var scripts = %DebugGetLoadedScripts();
 
   var the_script = null;
@@ -2111,11 +2130,11 @@ DebugCommandProcessor.prototype.changeLiveRequest_ = function(request, response)
   }
 
   var new_source = request.arguments.new_source;
-  
+
   var result_description = Debug.LiveEdit.SetScriptSource(the_script,
       new_source, preview_only, change_log);
   response.body = {change_log: change_log, result: result_description};
-  
+
   if (!preview_only && !this.running_ && result_description.stack_modified) {
     response.body.stepin_recommended = true;
   }
@@ -2176,29 +2195,6 @@ function NumberToHex8Str(n) {
   }
   return r;
 };
-
-DebugCommandProcessor.prototype.formatCFrames = function(cframes_value) {
-  var result = "";
-  if (cframes_value == null || cframes_value.length == 0) {
-    result += "(stack empty)";
-  } else {
-    for (var i = 0; i < cframes_value.length; ++i) {
-      if (i != 0) result += "\n";
-      result += this.formatCFrame(cframes_value[i]);
-    }
-  }
-  return result;
-};
-
-
-DebugCommandProcessor.prototype.formatCFrame = function(cframe_value) {
-  var result = "";
-  result += "0x" + NumberToHex8Str(cframe_value.address);
-  if (!IS_UNDEFINED(cframe_value.text)) {
-    result += " " + cframe_value.text;
-  }
-  return result;
-}
 
 
 /**

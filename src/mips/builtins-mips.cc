@@ -164,6 +164,7 @@ static void AllocateEmptyJSArray(MacroAssembler* masm,
   }
 }
 
+
 // Allocate a JSArray with the number of elements stored in a register. The
 // register array_function holds the built-in Array function and the register
 // array_size holds the size of the array as a smi. The allocated array is put
@@ -291,6 +292,7 @@ static void AllocateJSArray(MacroAssembler* masm,
     __ Branch(&loop, lt, elements_array_storage, Operand(elements_array_end));
   }
 }
+
 
 // Create a new array for the built-in Array function. This function allocates
 // the JSArray object and the FixedArray elements array and initializes these.
@@ -483,6 +485,132 @@ void Builtins::Generate_ArrayConstructCode(MacroAssembler* masm) {
 }
 
 
+void Builtins::Generate_StringConstructCode(MacroAssembler* masm) {
+  // ----------- S t a t e -------------
+  //  -- a0                     : number of arguments
+  //  -- a1                     : constructor function
+  //  -- ra                     : return address
+  //  -- sp[(argc - n - 1) * 4] : arg[n] (zero based)
+  //  -- sp[argc * 4]           : receiver
+  // -----------------------------------
+  __ IncrementCounter(&Counters::string_ctor_calls, 1, a2, a3);
+
+  Register function = a1;
+  if (FLAG_debug_code) {
+    __ LoadGlobalFunction(Context::STRING_FUNCTION_INDEX, a2);
+    __ Assert(eq, "Unexpected String function", function, Operand(a2));
+  }
+
+  // Load the first arguments in a0 and get rid of the rest.
+  Label no_arguments;
+  __ Branch(&no_arguments, eq, a0, Operand(zero_reg));
+  // First args = sp[(argc - 1) * 4].
+  __ Subu(a0, a0, Operand(1));
+  __ sll(a0, a0, kPointerSizeLog2);
+  __ Addu(sp, a0, sp);
+  __ lw(a0, MemOperand(sp));
+  // sp now point to args[0], drop args[0] + receiver.
+  __ Drop(2);
+
+  Register argument = a2;
+  Label not_cached, argument_is_string;
+  NumberToStringStub::GenerateLookupNumberStringCache(
+      masm,
+      a0,        // Input.
+      argument,  // Result.
+      a3,        // Scratch.
+      t0,        // Scratch.
+      t1,        // Scratch.
+      false,     // Is it a Smi?
+      &not_cached);
+  __ IncrementCounter(&Counters::string_ctor_cached_number, 1, a3, t0);
+  __ bind(&argument_is_string);
+
+  // ----------- S t a t e -------------
+  //  -- a2     : argument converted to string
+  //  -- a1     : constructor function
+  //  -- ra     : return address
+  // -----------------------------------
+
+  Label gc_required;
+  __ AllocateInNewSpace(JSValue::kSize,
+                        v0,  // Result.
+                        a3,  // Scratch.
+                        t0,  // Scratch.
+                        &gc_required,
+                        TAG_OBJECT);
+
+  // Initialising the String Object.
+  Register map = a3;
+  __ LoadGlobalFunctionInitialMap(function, map, t0);
+  if (FLAG_debug_code) {
+    __ lbu(t0, FieldMemOperand(map, Map::kInstanceSizeOffset));
+    __ Assert(eq, "Unexpected string wrapper instance size",
+        t0, Operand(JSValue::kSize >> kPointerSizeLog2));
+    __ lbu(t0, FieldMemOperand(map, Map::kUnusedPropertyFieldsOffset));
+    __ Assert(eq, "Unexpected unused properties of string wrapper",
+        t0, Operand(zero_reg));
+  }
+  __ sw(map, FieldMemOperand(v0, HeapObject::kMapOffset));
+
+  __ LoadRoot(a3, Heap::kEmptyFixedArrayRootIndex);
+  __ sw(a3, FieldMemOperand(v0, JSObject::kPropertiesOffset));
+  __ sw(a3, FieldMemOperand(v0, JSObject::kElementsOffset));
+
+  __ sw(argument, FieldMemOperand(v0, JSValue::kValueOffset));
+
+  // Ensure the object is fully initialized.
+  STATIC_ASSERT(JSValue::kSize == 4 * kPointerSize);
+
+  __ Ret();
+
+  // The argument was not found in the number to string cache. Check
+  // if it's a string already before calling the conversion builtin.
+  Label convert_argument;
+  __ bind(&not_cached);
+  __ BranchOnSmi(a0, &convert_argument);
+
+  // Is it a String?
+  __ lw(a2, FieldMemOperand(a0, HeapObject::kMapOffset));
+  __ lbu(a3, FieldMemOperand(a2, Map::kInstanceTypeOffset));
+  ASSERT(kNotStringTag != 0);
+  __ And(t0, a3, Operand(kIsNotStringMask));
+  __ Branch(&convert_argument, ne, t0, Operand(zero_reg));
+  __ mov(argument, a0);
+  __ IncrementCounter(&Counters::string_ctor_conversions, 1, a3, t0);
+  __ Branch(&argument_is_string);
+
+  // Invoke the conversion builtin and put the result into a2.
+  __ bind(&convert_argument);
+  __ push(function);  // Preserve the function.
+  __ IncrementCounter(&Counters::string_ctor_conversions, 1, a3, t0);
+  __ EnterInternalFrame();
+  __ push(v0);
+  __ InvokeBuiltin(Builtins::TO_STRING, CALL_JS);
+  __ LeaveInternalFrame();
+  __ pop(function);
+  __ mov(argument, v0);
+  __ Branch(&argument_is_string);
+
+  // Load the empty string into a2, remove the receiver from the
+  // stack, and jump back to the case where the argument is a string.
+  __ bind(&no_arguments);
+  __ LoadRoot(argument, Heap::kEmptyStringRootIndex);
+  __ Drop(1);
+  __ Branch(&argument_is_string);
+
+  // At this point the argument is already a string. Call runtime to
+  // create a string wrapper.
+  __ bind(&gc_required);
+  __ IncrementCounter(&Counters::string_ctor_gc_required, 1, a3, t0);
+  __ EnterInternalFrame();
+  __ push(argument);
+  __ CallRuntime(Runtime::kNewStringWrapper, 1);
+  __ LeaveInternalFrame();
+  __ Ret();
+}
+
+
 void Builtins::Generate_JSConstructCall(MacroAssembler* masm) {
   // a0     : number of arguments
   // a1     : constructor function
@@ -510,7 +638,7 @@ void Builtins::Generate_JSConstructCall(MacroAssembler* masm) {
   // (instead of the original receiver from the call site). The receiver is
   // stack element argc.
   // Set expected number of arguments to zero (not changing a0).
-  __ li(a2, Operand(0));
+  __ mov(a2, zero_reg);
   __ GetBuiltinEntry(a3, Builtins::CALL_NON_FUNCTION_AS_CONSTRUCTOR);
   // ra-dev: Already inside builtin, so don't need args slots?
   // __ break_(__LINE__);
@@ -520,7 +648,11 @@ void Builtins::Generate_JSConstructCall(MacroAssembler* masm) {
 
 
 static void Generate_JSConstructStubHelper(MacroAssembler* masm,
-                                           bool is_api_function) {
+                                           bool is_api_function,
+                                           bool count_constructions) {
+  // Should never count constructions for api objects.
+  ASSERT(!is_api_function || !count_constructions);
+
   // a0     : number of arguments
   // a1     : constructor function
   // ra     : return address
@@ -551,7 +683,6 @@ static void Generate_JSConstructStubHelper(MacroAssembler* masm,
 
     // Load the initial map and verify that it is in fact a map.
     // a1: constructor function
-    // t7: undefined value
     __ lw(a2, FieldMemOperand(a1, JSFunction::kPrototypeOrInitialMapOffset));
     __ And(t0, a2, Operand(kSmiTagMask));
     __ Branch(&rt_call, eq, t0, Operand(zero_reg));
@@ -563,14 +694,36 @@ static void Generate_JSConstructStubHelper(MacroAssembler* masm,
     // instance type would be JS_FUNCTION_TYPE.
     // a1: constructor function
     // a2: initial map
-    // t7: undefined value
     __ lbu(a3, FieldMemOperand(a2, Map::kInstanceTypeOffset));
     __ Branch(&rt_call, eq, a3, Operand(JS_FUNCTION_TYPE));
+
+    if (count_constructions) {
+      Label allocate;
+      // Decrease generous allocation count.
+      __ lw(a3, FieldMemOperand(a1, JSFunction::kSharedFunctionInfoOffset));
+      MemOperand constructor_count =
+         FieldMemOperand(a3, SharedFunctionInfo::kConstructionCountOffset);
+      __ lbu(t0, constructor_count);
+      __ Subu(t0, t0, Operand(1));
+      __ sb(t0, constructor_count);
+      __ Branch(&allocate, ne, t0, Operand(zero_reg));
+
+      __ Push(a1, a2);
+
+      __ push(a1);  // constructor
+      // The call will replace the stub, so the countdown is only done once.
+      __ CallRuntime(Runtime::kFinalizeInstanceSize, 1);
+
+      __ pop(a2);
+      __ pop(a1);
+
+      __ bind(&allocate);
+    }
+
 
     // Now allocate the JSObject on the heap.
     // constructor function
     // a2: initial map
-    // t7: undefined value
     __ lbu(a3, FieldMemOperand(a2, Map::kInstanceSizeOffset));
     __ AllocateInNewSpace(a3, t4, t5, t6, &rt_call, SIZE_IN_WORDS);
 
@@ -580,7 +733,6 @@ static void Generate_JSConstructStubHelper(MacroAssembler* masm,
     // a2: initial map
     // a3: object size
     // t4: JSObject (not tagged)
-    // t7: undefined value
     __ LoadRoot(t6, Heap::kEmptyFixedArrayRootIndex);
     __ mov(t5, t4);
     __ sw(a2, MemOperand(t5, JSObject::kMapOffset));
@@ -591,17 +743,22 @@ static void Generate_JSConstructStubHelper(MacroAssembler* masm,
     ASSERT_EQ(1 * kPointerSize, JSObject::kPropertiesOffset);
     ASSERT_EQ(2 * kPointerSize, JSObject::kElementsOffset);
 
-    // Fill all the in-object properties with undefined.
+    // Fill all the in-object properties with appropriate filler.
     // a1: constructor function
     // a2: initial map
     // a3: object size (in words)
     // t4: JSObject (not tagged)
     // t5: First in-object property of JSObject (not tagged)
-    // t7: undefined value
     __ sll(t0, a3, kPointerSizeLog2);
     __ addu(t6, t4, t0);   // End of object.
     ASSERT_EQ(3 * kPointerSize, JSObject::kHeaderSize);
     { Label loop, entry;
+      if (count_constructions) {
+        // To allow for truncation.
+        __ LoadRoot(t7, Heap::kOnePointerFillerMapRootIndex);
+      } else {
+        __ LoadRoot(t7, Heap::kUndefinedValueRootIndex);
+      }
       __ jmp(&entry);
       __ bind(&loop);
       __ sw(t7, MemOperand(t5, 0));
@@ -621,7 +778,6 @@ static void Generate_JSConstructStubHelper(MacroAssembler* masm,
     // a1: constructor function
     // t4: JSObject
     // t5: start of next object (not tagged)
-    // t7: undefined value
     __ lbu(a3, FieldMemOperand(a2, Map::kUnusedPropertyFieldsOffset));
     // The field instance sizes contains both pre-allocated property fields and
     // in-object properties.
@@ -646,7 +802,6 @@ static void Generate_JSConstructStubHelper(MacroAssembler* masm,
     // a3: number of elements in properties array
     // t4: JSObject
     // t5: start of next object
-    // t7: undefined value
     __ Addu(a0, a3, Operand(FixedArray::kHeaderSize / kPointerSize));
     __ AllocateInNewSpace(
         a0,
@@ -661,7 +816,6 @@ static void Generate_JSConstructStubHelper(MacroAssembler* masm,
     // a3: number of elements in properties array (un-tagged)
     // t4: JSObject
     // t5: start of next object
-    // t7: undefined value
     __ LoadRoot(t6, Heap::kFixedArrayMapRootIndex);
     __ mov(a2, t5);
     __ sw(t6, MemOperand(a2, JSObject::kMapOffset));
@@ -678,11 +832,16 @@ static void Generate_JSConstructStubHelper(MacroAssembler* masm,
     // a3: number of elements in properties array
     // t4: JSObject
     // t5: FixedArray (not tagged)
-    // t7: undefined value
     __ sll(t3, a3, kPointerSizeLog2);
     __ addu(t6, a2, t3);  // End of object.
     ASSERT_EQ(2 * kPointerSize, FixedArray::kHeaderSize);
     { Label loop, entry;
+      if (count_constructions) {
+        __ LoadRoot(t7, Heap::kUndefinedValueRootIndex);
+      } else if (FLAG_debug_code) {
+        __ LoadRoot(t8, Heap::kUndefinedValueRootIndex);
+        __ Assert(eq, "Undefined value not loaded.", t7, Operand(t8));
+      }
       __ jmp(&entry);
       __ bind(&loop);
       __ sw(t7, MemOperand(a2));
@@ -834,13 +993,18 @@ static void Generate_JSConstructStubHelper(MacroAssembler* masm,
 }
 
 
+void Builtins::Generate_JSConstructStubCountdown(MacroAssembler* masm) {
+  Generate_JSConstructStubHelper(masm, false, true);
+}
+
+
 void Builtins::Generate_JSConstructStubGeneric(MacroAssembler* masm) {
-  Generate_JSConstructStubHelper(masm, false);
+  Generate_JSConstructStubHelper(masm, false, false);
 }
 
 
 void Builtins::Generate_JSConstructStubApi(MacroAssembler* masm) {
-  Generate_JSConstructStubHelper(masm, true);
+  Generate_JSConstructStubHelper(masm, true, false);
 }
 
 
@@ -864,7 +1028,7 @@ static void Generate_JSEntryTrampolineHelper(MacroAssembler* masm,
   // args
 
   // Clear the context before we push it when entering the JS frame.
-  __ li(cp, Operand(0));
+  __ mov(cp, zero_reg);
 
   // Enter an internal frame.
   __ EnterInternalFrame();
@@ -951,6 +1115,7 @@ void Builtins::Generate_JSConstructEntryTrampoline(MacroAssembler* masm) {
   Generate_JSEntryTrampolineHelper(masm, true);
 }
 
+
 void Builtins::Generate_LazyCompile(MacroAssembler* masm) {
   // Enter an internal frame.
   __ EnterInternalFrame();
@@ -975,7 +1140,6 @@ void Builtins::Generate_LazyCompile(MacroAssembler* masm) {
 }
 
 
-
 void Builtins::Generate_FunctionCall(MacroAssembler* masm) {
   // CAREFUL! : Implemented without Builtins args slots.
 
@@ -989,23 +1153,15 @@ void Builtins::Generate_FunctionCall(MacroAssembler* masm) {
     __ bind(&done);
   }
 
-  Register shifted_actual_args = t0;
-  Register function_location = t1;
-  MemOperand receiver_memop = MemOperand(function_location, -kPointerSize);
-  Register scratch1 = t2;
-  Register scratch2 = t3;
-
-  // Setup shifted_actual_args and function_location.
-  __ sll(shifted_actual_args, a0, kPointerSizeLog2);
-  __ Addu(function_location, sp, shifted_actual_args);
-
   // 2. Get the function to call (passed as receiver) from the stack, check
   //    if it is a function.
   // a0: actual number of arguments
   Label non_function;
-  __ lw(a1, MemOperand(function_location));
-  __ And(scratch1, a1, Operand(kSmiTagMask));
-  __ Branch(&non_function, eq, scratch1, Operand(zero_reg));
+  __ sll(at, a0, kPointerSizeLog2);
+  __ addu(at, sp, at);
+  __ lw(a1, MemOperand(at));
+  __ And(at, a1, Operand(kSmiTagMask));
+  __ Branch(&non_function, eq, at, Operand(zero_reg));
   __ GetObjectType(a1, a2, a2);
   __ Branch(&non_function, ne, a2, Operand(JS_FUNCTION_TYPE));
 
@@ -1018,7 +1174,9 @@ void Builtins::Generate_FunctionCall(MacroAssembler* masm) {
     __ lw(cp, FieldMemOperand(a1, JSFunction::kContextOffset));
 
     // Load first argument in a2. a2 = -kPointerSize(sp + n_args << 2)
-    __ lw(a2, receiver_memop);
+    __ sll(at, a0, kPointerSizeLog2);
+    __ addu(a2, sp, at);
+    __ lw(a2, MemOperand(a2, -kPointerSize));
     // a0: actual number of arguments
     // a1: function
     // a2: first argument
@@ -1035,20 +1193,20 @@ void Builtins::Generate_FunctionCall(MacroAssembler* masm) {
 
     __ bind(&convert_to_object);
     __ EnterInternalFrame();  // In order to preserve argument count.
-    // Preserve shifted_actual_args and function_location over the builtin call.
-    __ MultiPush(a0.bit() |
-        shifted_actual_args.bit() | function_location.bit());
-    __ mov(a0, shifted_actual_args);   // Setup a0 for the builtin.
+    __ sll(a0, a0, kSmiTagSize);  // Smi tagged.
+    __ Push(a0);
 
     __ Push(a2);
     __ InvokeBuiltin(Builtins::TO_OBJECT, CALL_JS);
     __ mov(a2, v0);
 
-    // Restore shifted_actual_args and function_location.
-    __ MultiPop(a0.bit() | shifted_actual_args.bit() | function_location.bit());
+    __ Pop(a0);
+    __ sra(a0, a0, kSmiTagSize);  // Un-tag.
     __ LeaveInternalFrame();
     // Restore the function to a1.
-    __ lw(a1, MemOperand(function_location));
+    __ sll(at, a0, kPointerSizeLog2);
+    __ addu(at, sp, at);
+    __ lw(a1, MemOperand(at));
     __ Branch(&patch_receiver);
 
     // Use the global receiver object from the called function as the
@@ -1062,7 +1220,9 @@ void Builtins::Generate_FunctionCall(MacroAssembler* masm) {
     __ lw(a2, FieldMemOperand(a2, GlobalObject::kGlobalReceiverOffset));
 
     __ bind(&patch_receiver);
-    __ sw(a2, receiver_memop);
+    __ sll(at, a0, kPointerSizeLog2);
+    __ addu(a3, sp, at);
+    __ sw(a2, MemOperand(a3, -kPointerSize));
 
     __ Branch(&shift_arguments);
   }
@@ -1075,7 +1235,9 @@ void Builtins::Generate_FunctionCall(MacroAssembler* masm) {
   // a1: function
   __ bind(&non_function);
   // Restore the function in case it has been modified.
-  __ sw(a1, MemOperand(t1));
+  __ sll(at, a0, kPointerSizeLog2);
+  __ addu(a2, sp, at);
+  __ sw(a1, MemOperand(a2, -kPointerSize));
   // Clear a1 to indicate a non-function being called.
   __ mov(a1, zero_reg);
 
@@ -1087,14 +1249,14 @@ void Builtins::Generate_FunctionCall(MacroAssembler* masm) {
   __ bind(&shift_arguments);
   { Label loop;
     // Calculate the copy start address (destination). Copy end address is sp.
-    // function_location register already holds the start address.
-    __ mov(scratch1, function_location);
+    __ sll(at, a0, kPointerSizeLog2);
+    __ addu(a2, sp, at);
 
     __ bind(&loop);
-    __ lw(scratch2, MemOperand(scratch1, -kPointerSize));
-    __ sw(scratch2, MemOperand(scratch1));
-    __ Subu(scratch1, scratch1, Operand(kPointerSize));
-    __ Branch(&loop, ne, scratch1, Operand(sp));
+    __ lw(at, MemOperand(a2, -kPointerSize));
+    __ sw(at, MemOperand(a2));
+    __ Subu(a2, a2, Operand(kPointerSize));
+    __ Branch(&loop, ne, a2, Operand(sp));
     // Adjust the actual number of arguments and remove the top element
     // (which is a copy of the last argument).
     __ Subu(a0, a0, Operand(1));
@@ -1170,7 +1332,7 @@ void Builtins::Generate_FunctionApply(MacroAssembler* masm) {
   // Push current limit and index.
   __ bind(&okay);
   __ push(v0);  // Limit.
-  __ li(a1, Operand(0));  // Initial index.
+  __ mov(a1, zero_reg);  // Initial index.
   __ push(a1);
 
   // Change context eagerly to get the right global object if necessary.
@@ -1199,7 +1361,7 @@ void Builtins::Generate_FunctionApply(MacroAssembler* masm) {
   __ push(a0);
   __ InvokeBuiltin(Builtins::TO_OBJECT, CALL_JS);
   __ mov(a0, v0);  // Put object in a0 to match other paths to push_receiver.
-  __ b(&push_receiver);
+  __ Branch(&push_receiver);
 
   // Use the current global receiver object as the receiver.
   __ bind(&use_global_receiver);

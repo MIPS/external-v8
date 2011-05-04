@@ -38,11 +38,23 @@
 
 #include "allocation.h"
 
-#if defined(__mips)
+#if !defined(USE_SIMULATOR)
+// Running without a simulator on a native mips platform.
+
+namespace v8 {
+namespace internal {
 
 // When running without a simulator we call the entry directly.
 #define CALL_GENERATED_CODE(entry, p0, p1, p2, p3, p4) \
   entry(p0, p1, p2, p3, p4)
+
+// Call the generated regexp code directly. The entry function pointer should
+// expect seven int/pointer sized arguments and return an int.
+#define CALL_GENERATED_REGEXP_CODE(entry, p0, p1, p2, p3, p4, p5, p6) \
+  (entry(p0, p1, p2, p3, p4, p5, p6))
+
+#define TRY_CATCH_FROM_ADDRESS(try_catch_address) \
+  (reinterpret_cast<TryCatch*>(try_catch_address))
 
 // The stack limit beyond which we will throw stack overflow errors in
 // generated code. Because generated code on mips uses the C stack, we
@@ -60,6 +72,8 @@ class SimulatorStack : public v8::internal::AllStatic {
   static inline void UnregisterCTryCatch() { }
 };
 
+} }  // namespace v8::internal
+
 // Calculated the stack limit beyond which we will throw stack overflow errors.
 // This macro must be called from a C++ method. It relies on being able to take
 // the address of "this" to get a value on the current execution stack and then
@@ -70,31 +84,8 @@ class SimulatorStack : public v8::internal::AllStatic {
   (reinterpret_cast<uintptr_t>(this) >= limit ? \
       reinterpret_cast<uintptr_t>(this) - limit : 0)
 
-// Call the generated regexp code directly. The entry function pointer should
-// expect seven int/pointer sized arguments and return an int.
-#define CALL_GENERATED_REGEXP_CODE(entry, p0, p1, p2, p3, p4, p5, p6) \
-  entry(p0, p1, p2, p3, p4, p5, p6)
-
-#define TRY_CATCH_FROM_ADDRESS(try_catch_address) \
-  reinterpret_cast<TryCatch*>(try_catch_address)
-
-
-#else   // #if defined(__mips)
-
-// When running with the simulator transition into simulated execution at this
-// point.
-#define CALL_GENERATED_CODE(entry, p0, p1, p2, p3, p4) \
-  reinterpret_cast<Object*>(\
-      assembler::mips::Simulator::current()->Call(FUNCTION_ADDR(entry), 5, \
-                                                  p0, p1, p2, p3, p4))
-
-#define CALL_GENERATED_REGEXP_CODE(entry, p0, p1, p2, p3, p4, p5, p6) \
-  assembler::mips::Simulator::current()->Call(\
-    FUNCTION_ADDR(entry), 7, p0, p1, p2, p3, p4, p5, p6)
-
-#define TRY_CATCH_FROM_ADDRESS(try_catch_address) \
-  try_catch_address == NULL ? \
-      NULL : *(reinterpret_cast<TryCatch**>(try_catch_address))
+#else  // !defined(USE_SIMULATOR)
+// Running with a simulator.
 
 #include "hashmap.h"
 
@@ -198,8 +189,9 @@ class Simulator {
   int64_t get_fpu_register_long(int fpureg) const;
   float get_fpu_register_float(int fpureg) const;
   double get_fpu_register_double(int fpureg) const;
-  void set_fpu_ccr_bit(uint32_t cc, bool value);
-  bool test_fpu_ccr_bit(uint32_t cc);
+  void set_fcsr_bit(uint32_t cc, bool value);
+  bool test_fcsr_bit(uint32_t cc);
+  bool set_fcsr_round_error(double original, double rounded);
 
   // Special case of set_register and get_register to access the raw PC value.
   void set_pc(int32_t value);
@@ -323,8 +315,8 @@ class Simulator {
   int32_t registers_[kNumSimuRegisters];
   // Coprocessor Registers.
   int32_t FPUregisters_[kNumFPURegisters];
-  // FPU Condition Code register.
-  int32_t FPUccr_;
+  // FPU control register.
+  uint32_t FCSR_;
 
   // Simulator support.
   char* stack_;
@@ -342,6 +334,23 @@ class Simulator {
 };
 
 } }   // namespace assembler::mips
+
+namespace v8 {
+namespace internal {
+
+// When running with the simulator transition into simulated execution at this
+// point.
+#define CALL_GENERATED_CODE(entry, p0, p1, p2, p3, p4) \
+  reinterpret_cast<Object*>(assembler::mips::Simulator::current()->Call( \
+      FUNCTION_ADDR(entry), 5, p0, p1, p2, p3, p4))
+
+#define CALL_GENERATED_REGEXP_CODE(entry, p0, p1, p2, p3, p4, p5, p6) \
+  assembler::mips::Simulator::current()->Call( \
+      FUNCTION_ADDR(entry), 7, p0, p1, p2, p3, p4, p5, p6)
+
+#define TRY_CATCH_FROM_ADDRESS(try_catch_address) \
+  try_catch_address == \
+      NULL ? NULL : *(reinterpret_cast<TryCatch**>(try_catch_address))
 
 
 // The simulator has its own stack. Thus it has a different stack limit from
@@ -365,7 +374,8 @@ class SimulatorStack : public v8::internal::AllStatic {
   }
 };
 
-#endif  // defined(__mips)
+} }  // namespace v8::internal
 
+#endif  // !defined(USE_SIMULATOR)
 #endif  // V8_MIPS_SIMULATOR_MIPS_H_
 

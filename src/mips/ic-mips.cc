@@ -32,7 +32,7 @@
 #if defined(V8_TARGET_ARCH_MIPS)
 
 #include "codegen-inl.h"
-#include "code-stubs-mips.h"
+#include "code-stubs.h"
 #include "ic-inl.h"
 #include "runtime.h"
 #include "stub-cache.h"
@@ -540,32 +540,6 @@ static void GenerateKeyStringCheck(MacroAssembler* masm,
 }
 
 
-// Picks out an array index from the hash field.
-static void GenerateIndexFromHash(MacroAssembler* masm,
-                                  Register key,
-                                  Register hash) {
-  // Register use:
-  //   key - holds the overwritten key on exit.
-  //   hash - holds the key's hash. Clobbered.
-
-  // If the hash field contains an array index pick it out. The assert checks
-  // that the constants for the maximum number of digits for an array index
-  // cached in the hash field and the number of bits reserved for it does not
-  // conflict.
-  ASSERT(TenToThe(String::kMaxCachedArrayIndexLength) <
-         (1 << String::kArrayIndexValueBits));
-  // We want the smi-tagged index in key.  kArrayIndexValueMask has zeros in
-  // the low kHashShift bits.
-  ASSERT(String::kHashShift >= kSmiTagSize);
-  // Here we actually clobber the key which will be used if calling into
-  // runtime later. However as the new key is the numeric value of a string key
-  // there is no difference in using either key.
-  ASSERT(String::kHashShift >= kSmiTagSize);
-  __ Ext(hash, hash, String::kHashShift, String::kArrayIndexValueBits);
-  __ sll(key, hash, kSmiTagSize);
-}
-
-
 // Defined in ic.cc.
 Object* CallIC_Miss(Arguments args);
 
@@ -583,7 +557,7 @@ static void GenerateMonomorphicCacheProbe(MacroAssembler* masm,
   // Probe the stub cache.
   Code::Flags flags =
       Code::ComputeFlags(kind, NOT_IN_LOOP, MONOMORPHIC, NORMAL, argc);
-  StubCache::GenerateProbe(masm, flags, a1, a2, a3, no_reg);
+  StubCache::GenerateProbe(masm, flags, a1, a2, a3, t0, t1);
 
   // If the stub cache probing failed, the receiver might be a value.
   // For value objects, we use the map of the prototype objects for
@@ -618,7 +592,7 @@ static void GenerateMonomorphicCacheProbe(MacroAssembler* masm,
 
   // Probe the stub cache for the value object.
   __ bind(&probe);
-  StubCache::GenerateProbe(masm, flags, a1, a2, a3, no_reg);
+  StubCache::GenerateProbe(masm, flags, a1, a2, a3, t0, t1);
 
   __ bind(&miss);
 }
@@ -858,7 +832,7 @@ void KeyedCallIC::GenerateMegamorphic(MacroAssembler* masm, int argc) {
   GenerateMiss(masm, argc);
 
   __ bind(&index_string);
-  GenerateIndexFromHash(masm, a2, a3);
+  __ IndexFromHash(a3, a2);
   // Now jump to the place where smi keys are handled.
   __ jmp(&index_smi);
 }
@@ -888,7 +862,7 @@ void LoadIC::GenerateMegamorphic(MacroAssembler* masm) {
   Code::Flags flags = Code::ComputeFlags(Code::LOAD_IC,
                                          NOT_IN_LOOP,
                                          MONOMORPHIC);
-  StubCache::GenerateProbe(masm, flags, a0, a2, a3, no_reg);
+  StubCache::GenerateProbe(masm, flags, a0, a2, a3, t0, t1);
 
   // Cache miss: Jump to runtime.
   GenerateMiss(masm);
@@ -933,8 +907,9 @@ void LoadIC::GenerateMiss(MacroAssembler* masm) {
 }
 
 
-static inline bool IsInlinedICSite(Address address,
-                                   Address* inline_end_address) {
+// Returns the code marker, or the 0 if the code is not marked.
+static inline int InlinedICSiteMarker(Address address,
+                                      Address* inline_end_address) {
   // If the instruction after the call site is not the pseudo instruction nop(1)
   // then this is not related to an inlined in-object property load. The nop(1)
   // instruction is located just after the call to the IC in the deferred code
@@ -942,9 +917,12 @@ static inline bool IsInlinedICSite(Address address,
   // is a branch instruction for jumping back from the deferred code.
   Address address_after_call = address + Assembler::kCallTargetAddressOffset;
   Instr instr_after_call = Assembler::instr_at(address_after_call);
-  if (!Assembler::is_nop(instr_after_call, PROPERTY_ACCESS_INLINED)) {
-    return false;
-  }
+
+  int code_marker = MacroAssembler::GetCodeMarker(instr_after_call);
+
+  // A negative result means the code is not marked.
+  if (code_marker <= 0) return 0;
+
   Address address_after_nop = address_after_call + Assembler::kInstrSize;
   Instr instr_after_nop = Assembler::instr_at(address_after_nop);
   // There may be some reg-reg move and frame merging code to skip over before
@@ -961,7 +939,7 @@ static inline bool IsInlinedICSite(Address address,
   ASSERT(b_offset < 0);  // Jumping back from deferred code.
   *inline_end_address = address_after_nop + b_offset;
 
-  return true;
+  return code_marker;
 }
 
 
@@ -972,7 +950,10 @@ bool LoadIC::PatchInlinedLoad(Address address, Object* map, int offset) {
   // Find the end of the inlined code for handling the load if this is an
   // inlined IC call site.
   Address inline_end_address;
-  if (!IsInlinedICSite(address, &inline_end_address)) return false;
+  if (InlinedICSiteMarker(address, &inline_end_address)
+      != Assembler::PROPERTY_ACCESS_INLINED) {
+    return false;
+  }
 
   // Patch the offset of the property load instruction.
   // The immediate must be representable in 16 bits.
@@ -991,10 +972,57 @@ bool LoadIC::PatchInlinedLoad(Address address, Object* map, int offset) {
   CPU::FlushICache(lw_property_instr_address, 1 * Assembler::kInstrSize);
 
   // Patch the map check.
-  Address li_map_instr_address = inline_end_address - 5 * Assembler::kInstrSize;
+  // For PROPERTY_ACCESS_INLINED, the load map instruction is generated
+  // 5 instructions before the end of the inlined code.
+  // See codgen-arm.cc CodeGenerator::EmitNamedLoad.
+  int lw_map_offset = -5;
+  Address li_map_instr_address = inline_end_address + lw_map_offset *
+      Assembler::kInstrSize;
 
   Assembler::set_target_address_at(li_map_instr_address,
                                    reinterpret_cast<Address>(map));
+  return true;
+}
+
+
+bool LoadIC::PatchInlinedContextualLoad(Address address,
+                                        Object* map,
+                                        Object* cell,
+                                        bool is_dont_delete) {
+  // Find the end of the inlined code for handling the contextual load if
+  // this is inlined IC call site.
+  Address inline_end_address;
+  int marker = InlinedICSiteMarker(address, &inline_end_address);
+  if (!((marker == Assembler::PROPERTY_ACCESS_INLINED_CONTEXT) ||
+        (marker == Assembler::PROPERTY_ACCESS_INLINED_CONTEXT_DONT_DELETE))) {
+    return false;
+  }
+  // On MIPS we don't rely on the is_dont_delete argument as the hint is already
+  // embedded in the code marker.
+  bool marker_is_dont_delete =
+      marker == Assembler::PROPERTY_ACCESS_INLINED_CONTEXT_DONT_DELETE;
+
+  // These are the offsets from the end of the inlined code.
+  // See codgen-mips.cc CodeGenerator::EmitNamedLoad.
+  int lw_map_offset = marker_is_dont_delete ? -7: -11;
+  int lw_cell_offset = marker_is_dont_delete ? -3: -7;
+  if (FLAG_debug_code && marker_is_dont_delete) {
+    // Three extra instructions were generated to check for the_hole_value.
+    lw_map_offset -= 4;
+    lw_cell_offset -= 4;
+  }
+  Address lw_map_instr_address =
+      inline_end_address + lw_map_offset * Assembler::kInstrSize;
+  Address lw_cell_instr_address =
+      inline_end_address + lw_cell_offset * Assembler::kInstrSize;
+
+  // Patch the map check.
+  Assembler::set_target_address_at(lw_map_instr_address,
+                                   reinterpret_cast<Address>(map));
+  // Patch the cell address.
+  Assembler::set_target_address_at(lw_cell_instr_address,
+                                   reinterpret_cast<Address>(cell));
+
   return true;
 }
 
@@ -1003,7 +1031,10 @@ bool StoreIC::PatchInlinedStore(Address address, Object* map, int offset) {
   // Find the end of the inlined code for the store if there is an
   // inlined version of the store.
   Address inline_end_address;
-  if (!IsInlinedICSite(address, &inline_end_address)) return false;
+  if (InlinedICSiteMarker(address, &inline_end_address)
+      != Assembler::PROPERTY_ACCESS_INLINED) {
+    return false;
+  }
 
   // Compute the address of the map load instruction.
   Address li_map_instr_address =
@@ -1053,7 +1084,10 @@ bool StoreIC::PatchInlinedStore(Address address, Object* map, int offset) {
 
 bool KeyedLoadIC::PatchInlinedLoad(Address address, Object* map) {
   Address inline_end_address;
-  if (!IsInlinedICSite(address, &inline_end_address)) return false;
+  if (InlinedICSiteMarker(address, &inline_end_address)
+      != Assembler::PROPERTY_ACCESS_INLINED) {
+    return false;
+  }
 
   // Patch the map check.
   // This code patches CodeGenerator::EmitKeyedLoad(), at the
@@ -1073,7 +1107,10 @@ bool KeyedStoreIC::PatchInlinedStore(Address address, Object* map) {
   // Find the end of the inlined code for handling the store if this is an
   // inlined IC call site.
   Address inline_end_address;
-  if (!IsInlinedICSite(address, &inline_end_address)) return false;
+  if (InlinedICSiteMarker(address, &inline_end_address)
+      != Assembler::PROPERTY_ACCESS_INLINED) {
+    return false;
+  }
 
   // Patch the map check.
   // This code patches CodeGenerator::EmitKeyedStore(), at the
@@ -1276,7 +1313,7 @@ void KeyedLoadIC::GenerateGeneric(MacroAssembler* masm) {
   __ Ret();
 
   __ bind(&index_string);
-  GenerateIndexFromHash(masm, key, a3);
+  __ IndexFromHash(a3, key);
   // Now jump to the place where smi keys are handled.
   __ Branch(&index_smi);
 }
@@ -1289,7 +1326,6 @@ void KeyedLoadIC::GenerateString(MacroAssembler* masm) {
   //  -- a1     : receiver
   // -----------------------------------
   Label miss;
-  Label index_out_of_range;
 
   Register receiver = a1;
   Register index = a0;
@@ -1304,17 +1340,13 @@ void KeyedLoadIC::GenerateString(MacroAssembler* masm) {
                                           result,
                                           &miss,  // When not a string.
                                           &miss,  // When not a number.
-                                          &index_out_of_range,
+                                          &miss,  // When index out of range.
                                           STRING_INDEX_IS_ARRAY_INDEX);
   char_at_generator.GenerateFast(masm);
   __ Ret();
 
   ICRuntimeCallHelper call_helper;
   char_at_generator.GenerateSlow(masm, call_helper);
-
-  __ bind(&index_out_of_range);
-  __ LoadRoot(v0, Heap::kUndefinedValueRootIndex);
-  __ Ret();
 
   __ bind(&miss);
   GenerateMiss(masm);
@@ -1359,6 +1391,7 @@ static void GenerateUInt2Double(MacroAssembler* masm,
     __ and_(hiword, hiword, scratch);
   }
 }
+
 
 void KeyedLoadIC::GenerateExternalArray(MacroAssembler* masm,
                                         ExternalArrayType array_type) {
@@ -1473,9 +1506,11 @@ void KeyedLoadIC::GenerateExternalArray(MacroAssembler* masm,
 
     __ bind(&box_int);
     // Allocate a HeapNumber for the result and perform int-to-double
-    // conversion. Use v0 for result as key is not needed any more.
-    __ LoadRoot(t6, Heap::kHeapNumberMapRootIndex);
-    __ AllocateHeapNumber(v0, a3, t0, t6, &slow);
+    // conversion.
+    // The arm version uses a temporary here to save r0, but we don't need to
+    // (a0 is not modified).
+    __ LoadRoot(t1, Heap::kHeapNumberMapRootIndex);
+    __ AllocateHeapNumber(v0, a3, t0, t1, &slow);
 
     if (CpuFeatures::IsSupported(FPU)) {
       CpuFeatures::Scope scope(FPU);
@@ -1537,7 +1572,7 @@ void KeyedLoadIC::GenerateExternalArray(MacroAssembler* masm,
       __ bind(&box_int_0);
       // Integer does not have leading zeros.
       GenerateUInt2Double(masm, hiword, loword, t0, 0);
-      __ b(&done);
+      __ Branch(&done);
 
       __ bind(&box_int_1);
       // Integer has one leading zero.
@@ -1802,10 +1837,12 @@ void KeyedStoreIC::GenerateGeneric(MacroAssembler* masm) {
 }
 
 
-// Convert int passed in register ival to IEEE-754 single precision
-// floating point value and store it into register fval.
+// Convert and store int passed in register ival to IEEE 754 single precision
+// floating point value at memory location (dst + 4 * wordoffset)
 // If FPU is available use it for conversion.
-static void ConvertIntToFloat(MacroAssembler* masm,
+static void StoreIntAsFloat(MacroAssembler* masm,
+                              Register dst,
+                              Register wordoffset,
                               Register ival,
                               Register fval,
                               Register scratch1,
@@ -1814,7 +1851,9 @@ static void ConvertIntToFloat(MacroAssembler* masm,
     CpuFeatures::Scope scope(FPU);
     __ mtc1(ival, f0);
     __ cvt_s_w(f0, f0);
-    __ mfc1(fval, f0);
+    __ sll(scratch1, wordoffset, 2);
+    __ addu(scratch1, dst, scratch1);
+    __ swc1(f0, MemOperand(scratch1, 0));
   } else {
     // FPU is not available,  do manual conversions.
 
@@ -1866,6 +1905,10 @@ static void ConvertIntToFloat(MacroAssembler* masm,
     __ or_(fval, fval, scratch1);
 
     __ bind(&done);
+
+    __ sll(scratch1, wordoffset, 2);
+    __ addu(scratch1, dst, scratch1);
+    __ sw(fval, MemOperand(scratch1, 0));
   }
 }
 
@@ -1966,11 +2009,8 @@ void KeyedStoreIC::GenerateExternalArray(MacroAssembler* masm,
       __ sw(t1, MemOperand(t8, 0));
       break;
     case kExternalFloatArray:
-      // Need to perform int-to-float conversion.
-      ConvertIntToFloat(masm, t1, t2, t3, t4);
-      __ sll(t8, t0, 2);
-      __ addu(t8, a3, t8);
-      __ sw(t1, MemOperand(t8, 0));
+      // Perform int-to-float conversion and store to memory.
+      StoreIntAsFloat(masm, a3, t0, t1, t2, t3, t4);
       break;
     default:
       UNREACHABLE();
@@ -2230,8 +2270,9 @@ void KeyedLoadIC::GenerateIndexedInterceptor(MacroAssembler* masm) {
   // Check that the receiver isn't a smi.
   __ BranchOnSmi(a1, &slow);
 
-  // Check that the key is a smi.
-  __ BranchOnNotSmi(a0, &slow);
+  // Check that the key is an array index, that is Uint32.
+  __ And(t0, a0, Operand(kSmiTagMask | kSmiSignMask));
+  __ Branch(&slow, ne, t0, Operand(zero_reg));
 
   // Get the map of the receiver.
   __ lw(a2, FieldMemOperand(a1, HeapObject::kMapOffset));
@@ -2280,7 +2321,7 @@ void StoreIC::GenerateMegamorphic(MacroAssembler* masm) {
   Code::Flags flags = Code::ComputeFlags(Code::STORE_IC,
                                          NOT_IN_LOOP,
                                          MONOMORPHIC);
-  StubCache::GenerateProbe(masm, flags, a1, a2, a3, no_reg);
+  StubCache::GenerateProbe(masm, flags, a1, a2, a3, t0, t1);
 
   // Cache miss: Jump to runtime.
   GenerateMiss(masm);
