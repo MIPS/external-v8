@@ -55,8 +55,6 @@ V8_LOCAL_SRC_FILES := \
 	src/objects-visiting.cc \
 	src/oprofile-agent.cc \
 	src/parser.cc \
-	src/platform-linux.cc \
-	src/platform-posix.cc \
 	src/preparser.cc \
 	src/preparse-data.cc \
 	src/profile-generator.cc \
