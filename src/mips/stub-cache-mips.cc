@@ -835,7 +835,7 @@ class CallInterceptorCompiler BASE_EMBEDDED {
 
     // If interceptor returns no-result sentinel, call the constant function.
     __ LoadRoot(scratch, Heap::kNoInterceptorResultSentinelRootIndex);
-    __ Branch(interceptor_succeeded, ne, a0, Operand(scratch));
+    __ Branch(interceptor_succeeded, ne, v0, Operand(scratch));
   }
 
   StubCompiler* stub_compiler_;
