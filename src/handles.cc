@@ -39,6 +39,7 @@
 #include "runtime.h"
 #include "string-search.h"
 #include "stub-cache.h"
+#include "vm-state-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -241,17 +242,21 @@ Handle<Object> SetPrototype(Handle<JSFunction> function,
 Handle<Object> SetProperty(Handle<JSObject> object,
                            Handle<String> key,
                            Handle<Object> value,
-                           PropertyAttributes attributes) {
-  CALL_HEAP_FUNCTION(object->SetProperty(*key, *value, attributes), Object);
+                           PropertyAttributes attributes,
+                           StrictModeFlag strict_mode) {
+  CALL_HEAP_FUNCTION(object->SetProperty(*key, *value, attributes, strict_mode),
+                     Object);
 }
 
 
 Handle<Object> SetProperty(Handle<Object> object,
                            Handle<Object> key,
                            Handle<Object> value,
-                           PropertyAttributes attributes) {
+                           PropertyAttributes attributes,
+                           StrictModeFlag strict_mode) {
   CALL_HEAP_FUNCTION(
-      Runtime::SetObjectProperty(object, key, value, attributes), Object);
+      Runtime::SetObjectProperty(object, key, value, attributes, strict_mode),
+      Object);
 }
 
 
@@ -260,7 +265,9 @@ Handle<Object> ForceSetProperty(Handle<JSObject> object,
                                 Handle<Object> value,
                                 PropertyAttributes attributes) {
   CALL_HEAP_FUNCTION(
-      Runtime::ForceSetObjectProperty(object, key, value, attributes), Object);
+      Runtime::ForceSetObjectProperty(
+          object, key, value, attributes),
+      Object);
 }
 
 
@@ -279,23 +286,36 @@ Handle<Object> ForceDeleteProperty(Handle<JSObject> object,
 }
 
 
-Handle<Object> IgnoreAttributesAndSetLocalProperty(
+Handle<Object> SetLocalPropertyIgnoreAttributes(
     Handle<JSObject> object,
     Handle<String> key,
     Handle<Object> value,
     PropertyAttributes attributes) {
   CALL_HEAP_FUNCTION(object->
-      IgnoreAttributesAndSetLocalProperty(*key, *value, attributes), Object);
+      SetLocalPropertyIgnoreAttributes(*key, *value, attributes), Object);
+}
+
+
+void SetLocalPropertyNoThrow(Handle<JSObject> object,
+                             Handle<String> key,
+                             Handle<Object> value,
+                             PropertyAttributes attributes) {
+  ASSERT(!Top::has_pending_exception());
+  CHECK(!SetLocalPropertyIgnoreAttributes(
+        object, key, value, attributes).is_null());
+  CHECK(!Top::has_pending_exception());
 }
 
 
 Handle<Object> SetPropertyWithInterceptor(Handle<JSObject> object,
                                           Handle<String> key,
                                           Handle<Object> value,
-                                          PropertyAttributes attributes) {
+                                          PropertyAttributes attributes,
+                                          StrictModeFlag strict_mode) {
   CALL_HEAP_FUNCTION(object->SetPropertyWithInterceptor(*key,
                                                         *value,
-                                                        attributes),
+                                                        attributes,
+                                                        strict_mode),
                      Object);
 }
 
@@ -408,8 +428,9 @@ Handle<String> SubString(Handle<String> str,
 
 Handle<Object> SetElement(Handle<JSObject> object,
                           uint32_t index,
-                          Handle<Object> value) {
-  if (object->HasPixelElements() || object->HasExternalArrayElements()) {
+                          Handle<Object> value,
+                          StrictModeFlag strict_mode) {
+  if (object->HasExternalArrayElements()) {
     if (!value->IsSmi() && !value->IsHeapNumber() && !value->IsUndefined()) {
       bool has_exception;
       Handle<Object> number = Execution::ToNumber(value, &has_exception);
@@ -417,7 +438,17 @@ Handle<Object> SetElement(Handle<JSObject> object,
       value = number;
     }
   }
-  CALL_HEAP_FUNCTION(object->SetElement(index, *value), Object);
+  CALL_HEAP_FUNCTION(object->SetElement(index, *value, strict_mode), Object);
+}
+
+
+Handle<Object> SetOwnElement(Handle<JSObject> object,
+                             uint32_t index,
+                             Handle<Object> value,
+                             StrictModeFlag strict_mode) {
+  ASSERT(!object->HasExternalArrayElements());
+  CALL_HEAP_FUNCTION(object->SetElement(index, *value, strict_mode, false),
+                     Object);
 }
 
 
@@ -797,7 +828,8 @@ bool EnsureCompiled(Handle<SharedFunctionInfo> shared,
 static bool CompileLazyHelper(CompilationInfo* info,
                               ClearExceptionFlag flag) {
   // Compile the source information to a code object.
-  ASSERT(!info->shared_info()->is_compiled());
+  ASSERT(info->IsOptimizing() || !info->shared_info()->is_compiled());
+  ASSERT(!Top::has_pending_exception());
   bool result = Compiler::CompileLazy(info);
   ASSERT(result != Top::has_pending_exception());
   if (!result && flag == CLEAR_EXCEPTION) Top::clear_pending_exception();
@@ -812,38 +844,41 @@ bool CompileLazyShared(Handle<SharedFunctionInfo> shared,
 }
 
 
-bool CompileLazy(Handle<JSFunction> function,
-                 ClearExceptionFlag flag) {
+static bool CompileLazyFunction(Handle<JSFunction> function,
+                                ClearExceptionFlag flag,
+                                InLoopFlag in_loop_flag) {
+  bool result = true;
   if (function->shared()->is_compiled()) {
-    function->set_code(function->shared()->code());
-    PROFILE(FunctionCreateEvent(*function));
+    function->ReplaceCode(function->shared()->code());
     function->shared()->set_code_age(0);
-    return true;
   } else {
     CompilationInfo info(function);
-    bool result = CompileLazyHelper(&info, flag);
+    if (in_loop_flag == IN_LOOP) info.MarkAsInLoop();
+    result = CompileLazyHelper(&info, flag);
     ASSERT(!result || function->is_compiled());
-    PROFILE(FunctionCreateEvent(*function));
-    return result;
   }
+  return result;
+}
+
+
+bool CompileLazy(Handle<JSFunction> function,
+                 ClearExceptionFlag flag) {
+  return CompileLazyFunction(function, flag, NOT_IN_LOOP);
 }
 
 
 bool CompileLazyInLoop(Handle<JSFunction> function,
                        ClearExceptionFlag flag) {
-  if (function->shared()->is_compiled()) {
-    function->set_code(function->shared()->code());
-    PROFILE(FunctionCreateEvent(*function));
-    function->shared()->set_code_age(0);
-    return true;
-  } else {
-    CompilationInfo info(function);
-    info.MarkAsInLoop();
-    bool result = CompileLazyHelper(&info, flag);
-    ASSERT(!result || function->is_compiled());
-    PROFILE(FunctionCreateEvent(*function));
-    return result;
-  }
+  return CompileLazyFunction(function, flag, IN_LOOP);
+}
+
+
+bool CompileOptimized(Handle<JSFunction> function,
+                      int osr_ast_id,
+                      ClearExceptionFlag flag) {
+  CompilationInfo info(function);
+  info.SetOptimizing(osr_ast_id);
+  return CompileLazyHelper(&info, flag);
 }
 
 
@@ -852,7 +887,7 @@ OptimizedObjectForAddingMultipleProperties(Handle<JSObject> object,
                                            int expected_additional_properties,
                                            bool condition) {
   object_ = object;
-  if (condition && object_->HasFastProperties()) {
+  if (condition && object_->HasFastProperties() && !object->IsJSGlobalProxy()) {
     // Normalize the properties of object to avoid n^2 behavior
     // when extending the object multiple properties. Indicate the number of
     // properties to be added.

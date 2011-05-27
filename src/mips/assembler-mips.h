@@ -41,8 +41,6 @@
 #include "constants-mips.h"
 #include "serialize.h"
 
-using namespace assembler::mips;
-
 namespace v8 {
 namespace internal {
 
@@ -73,6 +71,44 @@ namespace internal {
 
 // Core register.
 struct Register {
+  static const int kNumRegisters = v8::internal::kNumRegisters;
+  static const int kNumAllocatableRegisters = 14;  // v0 through t7
+
+  static int ToAllocationIndex(Register reg) {
+    return reg.code() - 2;  // zero_reg and 'at' are skipped.
+  }
+
+  static Register FromAllocationIndex(int index) {
+    ASSERT(index >= 0 && index < kNumAllocatableRegisters);
+    return from_code(index + 2);  // zero_reg and 'at' are skipped.
+  }
+
+  static const char* AllocationIndexToString(int index) {
+    ASSERT(index >= 0 && index < kNumAllocatableRegisters);
+    const char* const names[] = {
+      "v0",
+      "v1",
+      "a0",
+      "a1",
+      "a2",
+      "a3",
+      "t0",
+      "t1",
+      "t2",
+      "t3",
+      "t4",
+      "t5",
+      "t6",
+      "t7",
+    };
+    return names[index];
+  }
+
+  static Register from_code(int code) {
+    Register r = { code };
+    return r;
+  }
+
   bool is_valid() const { return 0 <= code_ && code_ < kNumRegisters; }
   bool is(Register reg) const { return code_ == reg.code_; }
   int code() const {
@@ -88,40 +124,41 @@ struct Register {
   int code_;
 };
 
-extern const Register no_reg;
+const Register no_reg = { -1 };
 
-extern const Register zero_reg;
-extern const Register at;
-extern const Register v0;
-extern const Register v1;
-extern const Register a0;
-extern const Register a1;
-extern const Register a2;
-extern const Register a3;
-extern const Register t0;
-extern const Register t1;
-extern const Register t2;
-extern const Register t3;
-extern const Register t4;
-extern const Register t5;
-extern const Register t6;
-extern const Register t7;
-extern const Register s0;
-extern const Register s1;
-extern const Register s2;
-extern const Register s3;
-extern const Register s4;
-extern const Register s5;
-extern const Register s6;
-extern const Register s7;
-extern const Register t8;
-extern const Register t9;
-extern const Register k0;
-extern const Register k1;
-extern const Register gp;
-extern const Register sp;
-extern const Register s8_fp;
-extern const Register ra;
+const Register zero_reg = { 0 };
+const Register at = { 1 };
+const Register v0 = { 2 };
+const Register v1 = { 3 };
+const Register a0 = { 4 };
+const Register a1 = { 5 };
+const Register a2 = { 6 };
+const Register a3 = { 7 };
+const Register t0 = { 8 };
+const Register t1 = { 9 };
+const Register t2 = { 10 };
+const Register t3 = { 11 };
+const Register t4 = { 12 };
+const Register t5 = { 13 };
+const Register t6 = { 14 };
+const Register t7 = { 15 };
+const Register s0 = { 16 };
+const Register s1 = { 17 };
+const Register s2 = { 18 };
+const Register s3 = { 19 };
+const Register s4 = { 20 };
+const Register s5 = { 21 };
+const Register s6 = { 22 };
+const Register s7 = { 23 };
+const Register t8 = { 24 };
+const Register t9 = { 25 };
+const Register k0 = { 26 };
+const Register k1 = { 27 };
+const Register gp = { 28 };
+const Register sp = { 29 };
+const Register s8_fp = { 30 };
+const Register ra = { 31 };
+
 
 int ToNumber(Register reg);
 
@@ -129,6 +166,49 @@ Register ToRegister(int num);
 
 // Coprocessor register.
 struct FPURegister {
+  static const int kNumRegisters = v8::internal::kNumFPURegisters;
+  // f0 has been excluded from allocation. This is following ia32
+  // where xmm0 is excluded.
+  static const int kNumAllocatableRegisters = 15;
+
+  static int ToAllocationIndex(FPURegister reg) {
+    ASSERT(reg.code() != 0);
+    ASSERT(reg.code() % 2 == 0);
+    return (reg.code() / 2) - 1;
+  }
+
+  static FPURegister FromAllocationIndex(int index) {
+    ASSERT(index >= 0 && index < kNumAllocatableRegisters);
+    return from_code((index + 1) * 2);
+  }
+
+  static const char* AllocationIndexToString(int index) {
+    ASSERT(index >= 0 && index < kNumAllocatableRegisters);
+    const char* const names[] = {
+      "f2",
+      "f4",
+      "f6",
+      "f8",
+      "f10",
+      "f12",
+      "f14",
+      "f16",
+      "f18",
+      "f20",
+      "f22",
+      "f24",
+      "f26",
+      "f28",
+      "f30"
+    };
+    return names[index];
+  }
+
+  static FPURegister from_code(int code) {
+    FPURegister r = { code };
+    return r;
+  }
+
   bool is_valid() const { return 0 <= code_ && code_ < kNumFPURegisters ; }
   bool is(FPURegister creg) const { return code_ == creg.code_; }
   int code() const {
@@ -147,44 +227,49 @@ struct FPURegister {
   int code_;
 };
 
-extern const FPURegister no_creg;
+typedef FPURegister DoubleRegister;
 
-extern const FPURegister f0;
-extern const FPURegister f1;
-extern const FPURegister f2;
-extern const FPURegister f3;
-extern const FPURegister f4;
-extern const FPURegister f5;
-extern const FPURegister f6;
-extern const FPURegister f7;
-extern const FPURegister f8;
-extern const FPURegister f9;
-extern const FPURegister f10;
-extern const FPURegister f11;
-extern const FPURegister f12;  // arg
-extern const FPURegister f13;
-extern const FPURegister f14;  // arg
-extern const FPURegister f15;
-extern const FPURegister f16;
-extern const FPURegister f17;
-extern const FPURegister f18;
-extern const FPURegister f19;
-extern const FPURegister f20;
-extern const FPURegister f21;
-extern const FPURegister f22;
-extern const FPURegister f23;
-extern const FPURegister f24;
-extern const FPURegister f25;
-extern const FPURegister f26;
-extern const FPURegister f27;
-extern const FPURegister f28;
-extern const FPURegister f29;
-extern const FPURegister f30;
-extern const FPURegister f31;
+const FPURegister no_creg = { -1 };
+
+const FPURegister f0 = { 0 };  // Return value in hard float mode.
+const FPURegister f1 = { 1 };
+const FPURegister f2 = { 2 };
+const FPURegister f3 = { 3 };
+const FPURegister f4 = { 4 };
+const FPURegister f5 = { 5 };
+const FPURegister f6 = { 6 };
+const FPURegister f7 = { 7 };
+const FPURegister f8 = { 8 };
+const FPURegister f9 = { 9 };
+const FPURegister f10 = { 10 };
+const FPURegister f11 = { 11 };
+const FPURegister f12 = { 12 };  // Arg 0 in hard float mode.
+const FPURegister f13 = { 13 };
+const FPURegister f14 = { 14 };  // Arg 1 in hard float mode.
+const FPURegister f15 = { 15 };
+const FPURegister f16 = { 16 };
+const FPURegister f17 = { 17 };
+const FPURegister f18 = { 18 };
+const FPURegister f19 = { 19 };
+const FPURegister f20 = { 20 };
+const FPURegister f21 = { 21 };
+const FPURegister f22 = { 22 };
+const FPURegister f23 = { 23 };
+const FPURegister f24 = { 24 };
+const FPURegister f25 = { 25 };
+const FPURegister f26 = { 26 };
+const FPURegister f27 = { 27 };
+const FPURegister f28 = { 28 };
+const FPURegister f29 = { 29 };
+const FPURegister f30 = { 30 };
+const FPURegister f31 = { 31 };
 
 // FPU (coprocessor 1) control registers.
 // Currently only FCSR (#31) is implemented.
 struct FPUControlRegister {
+  static const int kFCSRRegister = 31;
+  static const int kInvalidFPUControlRegister = -1;
+
   bool is_valid() const { return code_ == kFCSRRegister; }
   bool is(FPUControlRegister creg) const { return code_ == creg.code_; }
   int code() const {
@@ -203,54 +288,8 @@ struct FPUControlRegister {
   int code_;
 };
 
-extern const FPUControlRegister no_fpucreg;
-extern const FPUControlRegister FCSR;
-
-// FCSR constants.
-static const uint32_t kFCSRFlagMask = (1 << 6) - 1;
-static const uint32_t kFCSRFlagShift = 2;
-
-// Returns the equivalent of !cc.
-// Negation of the default no_condition (-1) results in a non-default
-// no_condition value (-2). As long as tests for no_condition check
-// for condition < 0, this will work as expected.
-inline Condition NegateCondition(Condition cc) {
-  ASSERT(cc != cc_always);
-  return static_cast<Condition>(cc ^ 1);
-}
-
-
-inline Condition ReverseCondition(Condition cc) {
-  switch (cc) {
-    case Uless:
-      return Ugreater;
-    case Ugreater:
-      return Uless;
-    case Ugreater_equal:
-      return Uless_equal;
-    case Uless_equal:
-      return Ugreater_equal;
-    case less:
-      return greater;
-    case greater:
-      return less;
-    case greater_equal:
-      return less_equal;
-    case less_equal:
-      return greater_equal;
-    default:
-      return cc;
-  };
-}
-
-
-enum Hint {
-  no_hint = 0
-};
-
-inline Hint NegateHint(Hint hint) {
-  return no_hint;
-}
+const FPUControlRegister no_fpucreg = { -1 };
+const FPUControlRegister FCSR = { kFCSRRegister };
 
 
 // -----------------------------------------------------------------------------
@@ -307,7 +346,7 @@ class CpuFeatures : public AllStatic {
  public:
   // Detect features of the target CPU. Set safe defaults if the serializer
   // is enabled (snapshots must be portable).
-  static void Probe();
+  static void Probe(bool portable);
 
   // Check whether a feature is supported by the target CPU.
   static bool IsSupported(CpuFeature f) {
@@ -363,6 +402,9 @@ class Assembler : public Malloced {
   // upon destruction of the assembler.
   Assembler(void* buffer, int buffer_size);
   ~Assembler();
+
+  // Overrides the default provided by FLAG_debug_code.
+  void set_emit_debug_code(bool value) { emit_debug_code_ = value; }
 
   // GetCode emits any pending (non-emitted) code and fills the descriptor
   // desc. GetCode() is idempotent; it returns the same result if no other
@@ -424,13 +466,22 @@ class Assembler : public Malloced {
   static const int kBranchPCOffset = 4;
 
   // Here we are patching the address in the LUI/ORI instruction pair.
-  // These values are used in serialization process and must be zero for
+  // These values are used in the serialization process and must be zero for
   // MIPS platform, as Code, Embedded Object or External-reference pointers
-  // are split across two consequtive instructions and don't exist separately
+  // are split across two consecutive instructions and don't exist separately
   // in the code, so the serializer should not step forwards in memory after
   // a target is resolved and written.
   static const int kCallTargetSize = 0 * kInstrSize;
   static const int kExternalTargetSize = 0 * kInstrSize;
+
+  // Number of consecutive instructions used to store 32bit constant.
+  // Before jump-optimizations, this constant was used in
+  // RelocInfo::target_address_address() function to tell serializer address of
+  // the instruction that follows LUI/ORI instruction pair. Now, with new jump
+  // optimization, where jump-through-register instruction that usually
+  // follows LUI/ORI pair is substituted with J/JAL, this constant equals
+  // to 3 instructions (LUI+ORI+J/JAL/JR/JALR).
+  static const int kInstructionsFor32BitConstant = 3;
 
   // Distance between the instruction referring to the address of the call
   // target and the return address.
@@ -517,6 +568,8 @@ class Assembler : public Malloced {
   void jal(int32_t target);
   void jalr(Register rs, Register rd = ra);
   void jr(Register target);
+  void j_or_jr(int32_t target, Register rs);
+  void jal_or_jalr(int32_t target, Register rs);
 
 
   //-------Data-processing-instructions---------
@@ -701,15 +754,20 @@ class Assembler : public Malloced {
   void RecordDebugBreakSlot();
 
   // Record a comment relocation entry that can be used by a disassembler.
-  // Use --debug_code to enable.
+  // Use --code-comments to enable.
   void RecordComment(const char* msg);
+
+  // Writes a single byte or word of data in the code stream.  Used for
+  // inline tables, e.g., jump-tables.
+  void db(uint8_t data);
+  void dd(uint32_t data);
 
   int32_t pc_offset() const { return pc_ - buffer_; }
 
   PositionsRecorder* positions_recorder() { return &positions_recorder_; }
 
   bool can_peephole_optimize(int instructions) {
-    if (!FLAG_peephole_optimization) return false;
+    if (!allow_peephole_optimization_) return false;
     if (last_bound_pos_ > pc_offset() - instructions * kInstrSize) return false;
     return reloc_info_writer.last_pc() <= pc_ - instructions * kInstrSize;
   }
@@ -737,9 +795,14 @@ class Assembler : public Malloced {
   }
 
   // Check if an instruction is a branch of some kind.
-  static bool is_branch(Instr instr);
+  static bool IsBranch(Instr instr);
 
-  static bool is_nop(Instr instr, unsigned int type);
+  static bool IsJ(Instr instr);
+  static bool IsJal(Instr instr);
+  static bool IsJr(Instr instr);
+  static bool IsJalr(Instr instr);
+
+  static bool IsNop(Instr instr, unsigned int type);
   static bool IsPop(Instr instr);
   static bool IsPush(Instr instr);
   static bool IsLwRegFpOffset(Instr instr);
@@ -747,23 +810,42 @@ class Assembler : public Malloced {
   static bool IsLwRegFpNegOffset(Instr instr);
   static bool IsSwRegFpNegOffset(Instr instr);
 
-  static Register GetRt(Instr instr);
+  static Register GetRtReg(Instr instr);
+  static Register GetRsReg(Instr instr);
+  static Register GetRdReg(Instr instr);
 
-  static int32_t get_branch_offset(Instr instr);
-  static bool is_lw(Instr instr);
-  static int16_t get_lw_offset(Instr instr);
-  static Instr set_lw_offset(Instr instr, int16_t offset);
+  static uint32_t GetRt(Instr instr);
+  static uint32_t GetRtField(Instr instr);
+  static uint32_t GetRs(Instr instr);
+  static uint32_t GetRsField(Instr instr);
+  static uint32_t GetRd(Instr instr);
+  static uint32_t GetRdField(Instr instr);
+  static uint32_t GetSa(Instr instr);
+  static uint32_t GetSaField(Instr instr);
+  static uint32_t GetOpcodeField(Instr instr);
+  static uint32_t GetFunctionField(Instr instr);
+  static uint32_t GetImmediate16(Instr instr);
+  static uint32_t GetLabelConst(Instr instr);
+
+  static int32_t GetBranchOffset(Instr instr);
+  static bool IsLw(Instr instr);
+  static int16_t GetLwOffset(Instr instr);
+  static Instr SetLwOffset(Instr instr, int16_t offset);
 
   static bool IsSw(Instr instr);
   static Instr SetSwOffset(Instr instr, int16_t offset);
   static bool IsAddImmediate(Instr instr);
   static Instr SetAddImmediateOffset(Instr instr, int16_t offset);
 
+  void CheckTrampolinePool(bool force_emit = false);
+
   bool has_exception() const {
     return internal_trampoline_exception_;
   }
 
  protected:
+  bool emit_debug_code() const { return emit_debug_code_; }
+
   int32_t buffer_space() const { return reloc_info_writer.pos() - pc_; }
 
   // Decode branch instruction at pos and return branch target pos.
@@ -844,7 +926,6 @@ class Assembler : public Malloced {
   void GrowBuffer();
   inline void emit(Instr x);
   inline void CheckTrampolinePoolQuick();
-  void CheckTrampolinePool();
 
   // Instruction generation.
   // We have 3 different kind of encoding layout on MIPS.
@@ -906,6 +987,8 @@ class Assembler : public Malloced {
   void GenInstrJump(Opcode opcode,
                      uint32_t address);
 
+  // Helpers.
+  void LoadRegPlusOffsetToAt(const MemOperand& src);
 
   // Labels.
   void print(Label* L);
@@ -917,7 +1000,7 @@ class Assembler : public Malloced {
   // - space for trampoline slots,
   // - space for labels.
   //
-  // Space for trampoline slots is equal to slot_count * 2*kInstrSize.
+  // Space for trampoline slots is equal to slot_count * 2 * kInstrSize.
   // Space for trampoline slots preceeds space for labels. Each label is of one
   // instruction size, so total amount for labels is equal to
   // label_count *  kInstrSize.
@@ -927,12 +1010,9 @@ class Assembler : public Malloced {
       start_ = start;
       next_slot_ = start;
       free_slot_count_ = slot_count;
-      next_label_ = start + slot_count*2*kInstrSize;
+      next_label_ = start + slot_count * 2 * kInstrSize;
       free_label_count_ = label_count;
-      end_ = next_label_ + (label_count-1)*kInstrSize;
-    }
-    int bound() {
-      return next_slot_;
+      end_ = next_label_ + (label_count - 1) * kInstrSize;
     }
     int start() {
       return start_;
@@ -993,6 +1073,8 @@ class Assembler : public Malloced {
   friend class BlockTrampolinePoolScope;
 
   PositionsRecorder positions_recorder_;
+  bool allow_peephole_optimization_;
+  bool emit_debug_code_;
   friend class PositionsRecorder;
   friend class EnsureSpace;
 };
