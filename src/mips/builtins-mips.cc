@@ -33,6 +33,8 @@
 
 #include "codegen-inl.h"
 #include "debug.h"
+#include "deoptimizer.h"
+#include "full-codegen.h"
 #include "runtime.h"
 
 namespace v8 {
@@ -427,7 +429,7 @@ void Builtins::Generate_ArrayCode(MacroAssembler* masm) {
   GenerateLoadArrayFunction(masm, a1);
 
   if (FLAG_debug_code) {
-    // Initial map for the builtin Array function shoud be a map.
+    // Initial map for the builtin Array functions should be maps.
     __ lw(a2, FieldMemOperand(a1, JSFunction::kPrototypeOrInitialMapOffset));
     __ And(t0, a2, Operand(kSmiTagMask));
     __ Assert(ne, "Unexpected initial map for Array function (1)",
@@ -459,10 +461,8 @@ void Builtins::Generate_ArrayConstructCode(MacroAssembler* masm) {
   Label generic_constructor;
 
   if (FLAG_debug_code) {
-    // The array construct code is only set for the builtin Array function which
-    // always have a map.
-    GenerateLoadArrayFunction(masm, a2);
-    __ Assert(eq, "Unexpected Array function", a1, Operand(a2));
+    // The array construct code is only set for the builtin and internal
+    // Array functions which always have a map.
     // Initial map for the builtin Array function should be a map.
     __ lw(a2, FieldMemOperand(a1, JSFunction::kPrototypeOrInitialMapOffset));
     __ And(t0, a2, Operand(kSmiTagMask));
@@ -568,7 +568,7 @@ void Builtins::Generate_StringConstructCode(MacroAssembler* masm) {
   // if it's a string already before calling the conversion builtin.
   Label convert_argument;
   __ bind(&not_cached);
-  __ BranchOnSmi(a0, &convert_argument);
+  __ JumpIfSmi(a0, &convert_argument);
 
   // Is it a String?
   __ lw(a2, FieldMemOperand(a0, HeapObject::kMapOffset));
@@ -640,9 +640,7 @@ void Builtins::Generate_JSConstructCall(MacroAssembler* masm) {
   // Set expected number of arguments to zero (not changing a0).
   __ mov(a2, zero_reg);
   __ GetBuiltinEntry(a3, Builtins::CALL_NON_FUNCTION_AS_CONSTRUCTOR);
-  // ra-dev: Already inside builtin, so don't need args slots?
-  // __ break_(__LINE__);
-  __ JumpToBuiltin(Handle<Code>(builtin(ArgumentsAdaptorTrampoline)),
+  __ Jump(Handle<Code>(builtin(ArgumentsAdaptorTrampoline)),
           RelocInfo::CODE_TARGET);
 }
 
@@ -1093,7 +1091,7 @@ static void Generate_JSEntryTrampolineHelper(MacroAssembler* masm,
   // Invoke the code and pass argc as a0.
   __ mov(a0, a3);
   if (is_construct) {
-    __ CallBuiltin(Handle<Code>(Builtins::builtin(Builtins::JSConstructCall)),
+    __ Call(Handle<Code>(Builtins::builtin(Builtins::JSConstructCall)),
             RelocInfo::CODE_TARGET);
   } else {
     ParameterCount actual(a0);
@@ -1140,6 +1138,50 @@ void Builtins::Generate_LazyCompile(MacroAssembler* masm) {
 }
 
 
+void Builtins::Generate_LazyRecompile(MacroAssembler* masm) {
+  // Enter an internal frame.
+  __ EnterInternalFrame();
+
+  // Preserve the function.
+  __ push(a1);
+
+  // Push the function on the stack as the argument to the runtime function.
+  __ push(a1);
+  __ CallRuntime(Runtime::kLazyRecompile, 1);
+  // Calculate the entry point.
+  __ Addu(t9, v0, Operand(Code::kHeaderSize - kHeapObjectTag));
+  // Restore saved function.
+  __ pop(a1);
+
+  // Tear down temporary frame.
+  __ LeaveInternalFrame();
+
+  // Do a tail-call of the compiled function.
+  __ Jump(t9);
+}
+
+
+// These functions are called from C++ but cannot be used in live code.
+void Builtins::Generate_NotifyDeoptimized(MacroAssembler* masm) {
+  __ Abort("Call to unimplemented function in builtins-mips.cc");
+}
+
+
+void Builtins::Generate_NotifyLazyDeoptimized(MacroAssembler* masm) {
+  __ Abort("Call to unimplemented function in builtins-mips.cc");
+}
+
+
+void Builtins::Generate_NotifyOSR(MacroAssembler* masm) {
+  __ Abort("Call to unimplemented function in builtins-mips.cc");
+}
+
+
+void Builtins::Generate_OnStackReplacement(MacroAssembler* masm) {
+  __ Abort("Call to unimplemented function in builtins-mips.cc");
+}
+
+
 void Builtins::Generate_FunctionCall(MacroAssembler* masm) {
   // CAREFUL! : Implemented without Builtins args slots.
 
@@ -1173,6 +1215,14 @@ void Builtins::Generate_FunctionCall(MacroAssembler* masm) {
     // Change context eagerly in case we need the global receiver.
     __ lw(cp, FieldMemOperand(a1, JSFunction::kContextOffset));
 
+    // Do not transform the receiver for strict mode functions.
+    __ lw(a2, FieldMemOperand(a1, JSFunction::kSharedFunctionInfoOffset));
+    __ lw(a2, FieldMemOperand(a2, SharedFunctionInfo::kCompilerHintsOffset));
+    __ And(t0, a2, Operand(1 << (SharedFunctionInfo::kStrictModeFunction +
+                                 kSmiTagSize)));
+    __ Branch(&shift_arguments, ne, t0, Operand(zero_reg));
+
+    // Compute the receiver in non-strict mode.
     // Load first argument in a2. a2 = -kPointerSize(sp + n_args << 2)
     __ sll(at, a0, kPointerSizeLog2);
     __ addu(a2, sp, at);
@@ -1180,7 +1230,7 @@ void Builtins::Generate_FunctionCall(MacroAssembler* masm) {
     // a0: actual number of arguments
     // a1: function
     // a2: first argument
-    __ BranchOnSmi(a2, &convert_to_object, t2);
+    __ JumpIfSmi(a2, &convert_to_object, t2);
 
     __ LoadRoot(t3, Heap::kNullValueRootIndex);
     __ Branch(&use_global_receiver, eq, a2, Operand(t3));
@@ -1338,10 +1388,20 @@ void Builtins::Generate_FunctionApply(MacroAssembler* masm) {
   // Change context eagerly to get the right global object if necessary.
   __ lw(a0, MemOperand(fp, kFunctionOffset));
   __ lw(cp, FieldMemOperand(a0, JSFunction::kContextOffset));
+  // Load the shared function info while the function is still in a0.
+  __ lw(a1, FieldMemOperand(a0, JSFunction::kSharedFunctionInfoOffset));
 
   // Compute the receiver.
   Label call_to_object, use_global_receiver, push_receiver;
   __ lw(a0, MemOperand(fp, kRecvOffset));
+
+  // Do not transform the receiver for strict mode functions.
+  __ lw(a1, FieldMemOperand(a1, SharedFunctionInfo::kCompilerHintsOffset));
+  __ And(t0, a1, Operand(1 << (SharedFunctionInfo::kStrictModeFunction +
+                               kSmiTagSize)));
+  __ Branch(&push_receiver, ne, t0, Operand(zero_reg));
+
+  // Compute the receiver in non-strict mode.
   __ And(t0, a0, Operand(kSmiTagMask));
   __ Branch(&call_to_object, eq, t0, Operand(zero_reg));
   __ LoadRoot(a1, Heap::kNullValueRootIndex);
@@ -1483,9 +1543,8 @@ void Builtins::Generate_ArgumentsAdaptorTrampoline(MacroAssembler* masm) {
     __ bind(&copy);
     __ lw(t0, MemOperand(a0));
     __ Push(t0);
-    // Use the branch delay slot to update a0.
-    __ Branch(false, &copy, ne, a0, Operand(a2));
-    __ addiu(a0, a0, -kPointerSize);
+    __ Branch(USE_DELAY_SLOT, &copy, ne, a0, Operand(a2));
+    __ addiu(a0, a0, -kPointerSize);  // In delay slot.
 
     __ jmp(&invoke);
   }
