@@ -138,12 +138,10 @@ class StringStream {
            FmtElm arg3);
 
   // Getting the message out.
-  void OutputToFile(FILE* out);
-  void OutputToStdOut() { OutputToFile(stdout); }
+  void OutputToStdOut();
   void Log();
   Handle<String> ToString();
   SmartPointer<const char> ToCString() const;
-  int length() const { return length_; }
 
   // Object printing support.
   void PrintName(Object* o);

@@ -1,4 +1,4 @@
-// Copyright 2011 the V8 project authors. All rights reserved.
+// Copyright 2009 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -223,7 +223,9 @@ void RegExpMacroAssemblerX64::CheckCharacters(Vector<const uc16> str,
   // If input is ASCII, don't even bother calling here if the string to
   // match contains a non-ascii character.
   if (mode_ == ASCII) {
-    ASSERT(String::IsAscii(str.start(), str.length()));
+    for (int i = 0; i < str.length(); i++) {
+      ASSERT(str[i] <= String::kMaxAsciiCharCodeU);
+    }
   }
 #endif
   int byte_length = str.length() * char_size();
@@ -688,7 +690,7 @@ bool RegExpMacroAssemblerX64::CheckSpecialCharacterClass(uc16 type,
 
 void RegExpMacroAssemblerX64::Fail() {
   ASSERT(FAILURE == 0);  // Return value for failure is zero.
-  __ Set(rax, 0);
+  __ xor_(rax, rax);  // zero rax.
   __ jmp(&exit_label_);
 }
 

@@ -48,16 +48,10 @@ namespace internal {
 class ObjectGroup : public Malloced {
  public:
   ObjectGroup() : objects_(4) {}
-  ObjectGroup(size_t capacity, v8::RetainedObjectInfo* info)
-      : objects_(static_cast<int>(capacity)),
-        info_(info) { }
-  ~ObjectGroup() { if (info_ != NULL) info_->Dispose(); }
+  explicit ObjectGroup(size_t capacity)
+      : objects_(static_cast<int>(capacity)) { }
 
   List<Object**> objects_;
-  v8::RetainedObjectInfo* info_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ObjectGroup);
 };
 
 
@@ -80,8 +74,6 @@ class GlobalHandles : public AllStatic {
   static void MakeWeak(Object** location,
                        void* parameter,
                        WeakReferenceCallback callback);
-
-  static void SetWrapperClassId(Object** location, uint16_t class_id);
 
   // Returns the current number of weak handles.
   static int NumberOfWeakHandles() { return number_of_weak_handles_; }
@@ -113,9 +105,6 @@ class GlobalHandles : public AllStatic {
   // Iterates over all handles.
   static void IterateAllRoots(ObjectVisitor* v);
 
-  // Iterates over all handles that have embedder-assigned class ID.
-  static void IterateAllRootsWithClassIds(ObjectVisitor* v);
-
   // Iterates over all weak roots in heap.
   static void IterateWeakRoots(ObjectVisitor* v);
 
@@ -130,9 +119,7 @@ class GlobalHandles : public AllStatic {
   // Add an object group.
   // Should only used in GC callback function before a collection.
   // All groups are destroyed after a mark-compact collection.
-  static void AddGroup(Object*** handles,
-                       size_t length,
-                       v8::RetainedObjectInfo* info);
+  static void AddGroup(Object*** handles, size_t length);
 
   // Returns the object groups.
   static List<ObjectGroup*>* ObjectGroups();

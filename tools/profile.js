@@ -26,17 +26,27 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
+// Initlialize namespaces
+var devtools = devtools || {};
+devtools.profiler = devtools.profiler || {};
+
+
 /**
  * Creates a profile object for processing profiling-related events
  * and calculating function execution times.
  *
  * @constructor
  */
-function Profile() {
-  this.codeMap_ = new CodeMap();
-  this.topDownTree_ = new CallTree();
-  this.bottomUpTree_ = new CallTree();
+devtools.profiler.Profile = function() {
+  this.codeMap_ = new devtools.profiler.CodeMap();
+  this.topDownTree_ = new devtools.profiler.CallTree();
+  this.bottomUpTree_ = new devtools.profiler.CallTree();
 };
+
+/**
+ * Version of profiler log.
+ */
+devtools.profiler.Profile.VERSION = 2;
 
 
 /**
@@ -45,7 +55,7 @@ function Profile() {
  *
  * @param {string} name Function name.
  */
-Profile.prototype.skipThisFunction = function(name) {
+devtools.profiler.Profile.prototype.skipThisFunction = function(name) {
   return false;
 };
 
@@ -56,7 +66,7 @@ Profile.prototype.skipThisFunction = function(name) {
  *
  * @enum {number}
  */
-Profile.Operation = {
+devtools.profiler.Profile.Operation = {
   MOVE: 0,
   DELETE: 1,
   TICK: 2
@@ -64,21 +74,9 @@ Profile.Operation = {
 
 
 /**
- * Enum for code state regarding its dynamic optimization.
- *
- * @enum {number}
- */
-Profile.CodeState = {
-  COMPILED: 0,
-  OPTIMIZABLE: 1,
-  OPTIMIZED: 2
-};
-
-
-/**
  * Called whenever the specified operation has failed finding a function
  * containing the specified address. Should be overriden by subclasses.
- * See the Profile.Operation enum for the list of
+ * See the devtools.profiler.Profile.Operation enum for the list of
  * possible operations.
  *
  * @param {number} operation Operation.
@@ -87,7 +85,7 @@ Profile.CodeState = {
  *     during stack strace processing, specifies a position of the frame
  *     containing the address.
  */
-Profile.prototype.handleUnknownCode = function(
+devtools.profiler.Profile.prototype.handleUnknownCode = function(
     operation, addr, opt_stackPos) {
 };
 
@@ -99,9 +97,9 @@ Profile.prototype.handleUnknownCode = function(
  * @param {number} startAddr Starting address.
  * @param {number} endAddr Ending address.
  */
-Profile.prototype.addLibrary = function(
+devtools.profiler.Profile.prototype.addLibrary = function(
     name, startAddr, endAddr) {
-  var entry = new CodeMap.CodeEntry(
+  var entry = new devtools.profiler.CodeMap.CodeEntry(
       endAddr - startAddr, name);
   this.codeMap_.addLibrary(startAddr, entry);
   return entry;
@@ -115,9 +113,9 @@ Profile.prototype.addLibrary = function(
  * @param {number} startAddr Starting address.
  * @param {number} endAddr Ending address.
  */
-Profile.prototype.addStaticCode = function(
+devtools.profiler.Profile.prototype.addStaticCode = function(
     name, startAddr, endAddr) {
-  var entry = new CodeMap.CodeEntry(
+  var entry = new devtools.profiler.CodeMap.CodeEntry(
       endAddr - startAddr, name);
   this.codeMap_.addStaticCode(startAddr, entry);
   return entry;
@@ -132,39 +130,26 @@ Profile.prototype.addStaticCode = function(
  * @param {number} start Starting address.
  * @param {number} size Code entry size.
  */
-Profile.prototype.addCode = function(
+devtools.profiler.Profile.prototype.addCode = function(
     type, name, start, size) {
-  var entry = new Profile.DynamicCodeEntry(size, type, name);
+  var entry = new devtools.profiler.Profile.DynamicCodeEntry(size, type, name);
   this.codeMap_.addCode(start, entry);
   return entry;
 };
 
 
 /**
- * Registers dynamic (JIT-compiled) code entry.
+ * Creates an alias entry for a code entry.
  *
- * @param {string} type Code entry type.
- * @param {string} name Code entry name.
- * @param {number} start Starting address.
- * @param {number} size Code entry size.
- * @param {number} funcAddr Shared function object address.
- * @param {Profile.CodeState} state Optimization state.
+ * @param {number} aliasAddr Alias address.
+ * @param {number} addr Code entry address.
  */
-Profile.prototype.addFuncCode = function(
-    type, name, start, size, funcAddr, state) {
-  // As code and functions are in the same address space,
-  // it is safe to put them in a single code map.
-  var func = this.codeMap_.findDynamicEntryByStartAddress(funcAddr);
-  if (!func) {
-    func = new Profile.FunctionEntry(name);
-    this.codeMap_.addCode(funcAddr, func);
-  } else if (func.name !== name) {
-    // Function object has been overwritten with a new one.
-    func.name = name;
+devtools.profiler.Profile.prototype.addCodeAlias = function(
+    aliasAddr, addr) {
+  var entry = this.codeMap_.findDynamicEntryByStartAddress(addr);
+  if (entry) {
+    this.codeMap_.addCode(aliasAddr, entry);
   }
-  var entry = new Profile.DynamicFuncCodeEntry(size, type, func, state);
-  this.codeMap_.addCode(start, entry);
-  return entry;
 };
 
 
@@ -174,11 +159,11 @@ Profile.prototype.addFuncCode = function(
  * @param {number} from Current code entry address.
  * @param {number} to New code entry address.
  */
-Profile.prototype.moveCode = function(from, to) {
+devtools.profiler.Profile.prototype.moveCode = function(from, to) {
   try {
     this.codeMap_.moveCode(from, to);
   } catch (e) {
-    this.handleUnknownCode(Profile.Operation.MOVE, from);
+    this.handleUnknownCode(devtools.profiler.Profile.Operation.MOVE, from);
   }
 };
 
@@ -188,11 +173,11 @@ Profile.prototype.moveCode = function(from, to) {
  *
  * @param {number} start Starting address.
  */
-Profile.prototype.deleteCode = function(start) {
+devtools.profiler.Profile.prototype.deleteCode = function(start) {
   try {
     this.codeMap_.deleteCode(start);
   } catch (e) {
-    this.handleUnknownCode(Profile.Operation.DELETE, start);
+    this.handleUnknownCode(devtools.profiler.Profile.Operation.DELETE, start);
   }
 };
 
@@ -203,9 +188,21 @@ Profile.prototype.deleteCode = function(start) {
  * @param {number} from Current code entry address.
  * @param {number} to New code entry address.
  */
-Profile.prototype.moveFunc = function(from, to) {
+devtools.profiler.Profile.prototype.safeMoveDynamicCode = function(from, to) {
   if (this.codeMap_.findDynamicEntryByStartAddress(from)) {
     this.codeMap_.moveCode(from, to);
+  }
+};
+
+
+/**
+ * Reports about deletion of a dynamic code entry.
+ *
+ * @param {number} start Starting address.
+ */
+devtools.profiler.Profile.prototype.safeDeleteDynamicCode = function(start) {
+  if (this.codeMap_.findDynamicEntryByStartAddress(start)) {
+    this.codeMap_.deleteCode(start);
   }
 };
 
@@ -215,7 +212,7 @@ Profile.prototype.moveFunc = function(from, to) {
  *
  * @param {number} addr Entry address.
  */
-Profile.prototype.findEntry = function(addr) {
+devtools.profiler.Profile.prototype.findEntry = function(addr) {
   return this.codeMap_.findEntry(addr);
 };
 
@@ -226,7 +223,7 @@ Profile.prototype.findEntry = function(addr) {
  *
  * @param {Array<number>} stack Stack sample.
  */
-Profile.prototype.recordTick = function(stack) {
+devtools.profiler.Profile.prototype.recordTick = function(stack) {
   var processedStack = this.resolveAndFilterFuncs_(stack);
   this.bottomUpTree_.addPath(processedStack);
   processedStack.reverse();
@@ -240,7 +237,7 @@ Profile.prototype.recordTick = function(stack) {
  *
  * @param {Array<number>} stack Stack sample.
  */
-Profile.prototype.resolveAndFilterFuncs_ = function(stack) {
+devtools.profiler.Profile.prototype.resolveAndFilterFuncs_ = function(stack) {
   var result = [];
   for (var i = 0; i < stack.length; ++i) {
     var entry = this.codeMap_.findEntry(stack[i]);
@@ -251,7 +248,7 @@ Profile.prototype.resolveAndFilterFuncs_ = function(stack) {
       }
     } else {
       this.handleUnknownCode(
-          Profile.Operation.TICK, stack[i], i);
+          devtools.profiler.Profile.Operation.TICK, stack[i], i);
     }
   }
   return result;
@@ -261,9 +258,9 @@ Profile.prototype.resolveAndFilterFuncs_ = function(stack) {
 /**
  * Performs a BF traversal of the top down call graph.
  *
- * @param {function(CallTree.Node)} f Visitor function.
+ * @param {function(devtools.profiler.CallTree.Node)} f Visitor function.
  */
-Profile.prototype.traverseTopDownTree = function(f) {
+devtools.profiler.Profile.prototype.traverseTopDownTree = function(f) {
   this.topDownTree_.traverse(f);
 };
 
@@ -271,9 +268,9 @@ Profile.prototype.traverseTopDownTree = function(f) {
 /**
  * Performs a BF traversal of the bottom up call graph.
  *
- * @param {function(CallTree.Node)} f Visitor function.
+ * @param {function(devtools.profiler.CallTree.Node)} f Visitor function.
  */
-Profile.prototype.traverseBottomUpTree = function(f) {
+devtools.profiler.Profile.prototype.traverseBottomUpTree = function(f) {
   this.bottomUpTree_.traverse(f);
 };
 
@@ -284,7 +281,7 @@ Profile.prototype.traverseBottomUpTree = function(f) {
  *
  * @param {string} opt_label Node label.
  */
-Profile.prototype.getTopDownProfile = function(opt_label) {
+devtools.profiler.Profile.prototype.getTopDownProfile = function(opt_label) {
   return this.getTreeProfile_(this.topDownTree_, opt_label);
 };
 
@@ -295,7 +292,7 @@ Profile.prototype.getTopDownProfile = function(opt_label) {
  *
  * @param {string} opt_label Node label.
  */
-Profile.prototype.getBottomUpProfile = function(opt_label) {
+devtools.profiler.Profile.prototype.getBottomUpProfile = function(opt_label) {
   return this.getTreeProfile_(this.bottomUpTree_, opt_label);
 };
 
@@ -303,10 +300,10 @@ Profile.prototype.getBottomUpProfile = function(opt_label) {
 /**
  * Helper function for calculating a tree profile.
  *
- * @param {Profile.CallTree} tree Call tree.
+ * @param {devtools.profiler.Profile.CallTree} tree Call tree.
  * @param {string} opt_label Node label.
  */
-Profile.prototype.getTreeProfile_ = function(tree, opt_label) {
+devtools.profiler.Profile.prototype.getTreeProfile_ = function(tree, opt_label) {
   if (!opt_label) {
     tree.computeTotalWeights();
     return tree;
@@ -324,9 +321,9 @@ Profile.prototype.getTreeProfile_ = function(tree, opt_label) {
  *
  * @param {string} opt_label Starting node label.
  */
-Profile.prototype.getFlatProfile = function(opt_label) {
-  var counters = new CallTree();
-  var rootLabel = opt_label || CallTree.ROOT_NODE_LABEL;
+devtools.profiler.Profile.prototype.getFlatProfile = function(opt_label) {
+  var counters = new devtools.profiler.CallTree();
+  var rootLabel = opt_label || devtools.profiler.CallTree.ROOT_NODE_LABEL;
   var precs = {};
   precs[rootLabel] = 0;
   var root = counters.findOrAddChild(rootLabel);
@@ -381,8 +378,8 @@ Profile.prototype.getFlatProfile = function(opt_label) {
  * @param {string} name Function name.
  * @constructor
  */
-Profile.DynamicCodeEntry = function(size, type, name) {
-  CodeMap.CodeEntry.call(this, size, name);
+devtools.profiler.Profile.DynamicCodeEntry = function(size, type, name) {
+  devtools.profiler.CodeMap.CodeEntry.call(this, size, name);
   this.type = type;
 };
 
@@ -390,79 +387,7 @@ Profile.DynamicCodeEntry = function(size, type, name) {
 /**
  * Returns node name.
  */
-Profile.DynamicCodeEntry.prototype.getName = function() {
-  return this.type + ': ' + this.name;
-};
-
-
-/**
- * Returns raw node name (without type decoration).
- */
-Profile.DynamicCodeEntry.prototype.getRawName = function() {
-  return this.name;
-};
-
-
-Profile.DynamicCodeEntry.prototype.isJSFunction = function() {
-  return false;
-};
-
-
-/**
- * Creates a dynamic code entry.
- *
- * @param {number} size Code size.
- * @param {string} type Code type.
- * @param {Profile.FunctionEntry} func Shared function entry.
- * @param {Profile.CodeState} state Code optimization state.
- * @constructor
- */
-Profile.DynamicFuncCodeEntry = function(size, type, func, state) {
-  CodeMap.CodeEntry.call(this, size);
-  this.type = type;
-  this.func = func;
-  this.state = state;
-};
-
-Profile.DynamicFuncCodeEntry.STATE_PREFIX = ["", "~", "*"];
-
-/**
- * Returns node name.
- */
-Profile.DynamicFuncCodeEntry.prototype.getName = function() {
-  var name = this.func.getName();
-  return this.type + ': ' + Profile.DynamicFuncCodeEntry.STATE_PREFIX[this.state] + name;
-};
-
-
-/**
- * Returns raw node name (without type decoration).
- */
-Profile.DynamicFuncCodeEntry.prototype.getRawName = function() {
-  return this.func.getName();
-};
-
-
-Profile.DynamicFuncCodeEntry.prototype.isJSFunction = function() {
-  return true;
-};
-
-
-/**
- * Creates a shared function object entry.
- *
- * @param {string} name Function name.
- * @constructor
- */
-Profile.FunctionEntry = function(name) {
-  CodeMap.CodeEntry.call(this, 0, name);
-};
-
-
-/**
- * Returns node name.
- */
-Profile.FunctionEntry.prototype.getName = function() {
+devtools.profiler.Profile.DynamicCodeEntry.prototype.getName = function() {
   var name = this.name;
   if (name.length == 0) {
     name = '<anonymous>';
@@ -470,7 +395,22 @@ Profile.FunctionEntry.prototype.getName = function() {
     // An anonymous function with location: " aaa.js:10".
     name = '<anonymous>' + name;
   }
-  return name;
+  return this.type + ': ' + name;
+};
+
+
+/**
+ * Returns raw node name (without type decoration).
+ */
+devtools.profiler.Profile.DynamicCodeEntry.prototype.getRawName = function() {
+  return this.name;
+};
+
+
+devtools.profiler.Profile.DynamicCodeEntry.prototype.isJSFunction = function() {
+  return this.type == "Function" ||
+    this.type == "LazyCompile" ||
+    this.type == "Script";
 };
 
 
@@ -479,28 +419,28 @@ Profile.FunctionEntry.prototype.getName = function() {
  *
  * @constructor
  */
-function CallTree() {
-  this.root_ = new CallTree.Node(
-      CallTree.ROOT_NODE_LABEL);
+devtools.profiler.CallTree = function() {
+  this.root_ = new devtools.profiler.CallTree.Node(
+      devtools.profiler.CallTree.ROOT_NODE_LABEL);
 };
 
 
 /**
  * The label of the root node.
  */
-CallTree.ROOT_NODE_LABEL = '';
+devtools.profiler.CallTree.ROOT_NODE_LABEL = '';
 
 
 /**
  * @private
  */
-CallTree.prototype.totalsComputed_ = false;
+devtools.profiler.CallTree.prototype.totalsComputed_ = false;
 
 
 /**
  * Returns the tree root.
  */
-CallTree.prototype.getRoot = function() {
+devtools.profiler.CallTree.prototype.getRoot = function() {
   return this.root_;
 };
 
@@ -510,7 +450,7 @@ CallTree.prototype.getRoot = function() {
  *
  * @param {Array<string>} path Call path.
  */
-CallTree.prototype.addPath = function(path) {
+devtools.profiler.CallTree.prototype.addPath = function(path) {
   if (path.length == 0) {
     return;
   }
@@ -530,7 +470,7 @@ CallTree.prototype.addPath = function(path) {
  *
  * @param {string} label Child node label.
  */
-CallTree.prototype.findOrAddChild = function(label) {
+devtools.profiler.CallTree.prototype.findOrAddChild = function(label) {
   return this.root_.findOrAddChild(label);
 };
 
@@ -551,8 +491,8 @@ CallTree.prototype.findOrAddChild = function(label) {
  *
  * @param {string} label The label of the new root node.
  */
-CallTree.prototype.cloneSubtree = function(label) {
-  var subTree = new CallTree();
+devtools.profiler.CallTree.prototype.cloneSubtree = function(label) {
+  var subTree = new devtools.profiler.CallTree();
   this.traverse(function(node, parent) {
     if (!parent && node.label != label) {
       return null;
@@ -568,7 +508,7 @@ CallTree.prototype.cloneSubtree = function(label) {
 /**
  * Computes total weights in the call graph.
  */
-CallTree.prototype.computeTotalWeights = function() {
+devtools.profiler.CallTree.prototype.computeTotalWeights = function() {
   if (this.totalsComputed_) {
     return;
   }
@@ -589,10 +529,10 @@ CallTree.prototype.computeTotalWeights = function() {
  *   return nodeClone;
  * });
  *
- * @param {function(CallTree.Node, *)} f Visitor function.
+ * @param {function(devtools.profiler.CallTree.Node, *)} f Visitor function.
  *    The second parameter is the result of calling 'f' on the parent node.
  */
-CallTree.prototype.traverse = function(f) {
+devtools.profiler.CallTree.prototype.traverse = function(f) {
   var pairsToProcess = new ConsArray();
   pairsToProcess.concat([{node: this.root_, param: null}]);
   while (!pairsToProcess.atEnd()) {
@@ -610,12 +550,12 @@ CallTree.prototype.traverse = function(f) {
 /**
  * Performs an indepth call graph traversal.
  *
- * @param {function(CallTree.Node)} enter A function called
+ * @param {function(devtools.profiler.CallTree.Node)} enter A function called
  *     prior to visiting node's children.
- * @param {function(CallTree.Node)} exit A function called
+ * @param {function(devtools.profiler.CallTree.Node)} exit A function called
  *     after visiting node's children.
  */
-CallTree.prototype.traverseInDepth = function(enter, exit) {
+devtools.profiler.CallTree.prototype.traverseInDepth = function(enter, exit) {
   function traverse(node) {
     enter(node);
     node.forEachChild(traverse);
@@ -629,9 +569,9 @@ CallTree.prototype.traverseInDepth = function(enter, exit) {
  * Constructs a call graph node.
  *
  * @param {string} label Node label.
- * @param {CallTree.Node} opt_parent Node parent.
+ * @param {devtools.profiler.CallTree.Node} opt_parent Node parent.
  */
-CallTree.Node = function(label, opt_parent) {
+devtools.profiler.CallTree.Node = function(label, opt_parent) {
   this.label = label;
   this.parent = opt_parent;
   this.children = {};
@@ -643,14 +583,14 @@ CallTree.Node = function(label, opt_parent) {
  * a call path).
  * @type {number}
  */
-CallTree.Node.prototype.selfWeight = 0;
+devtools.profiler.CallTree.Node.prototype.selfWeight = 0;
 
 
 /**
  * Node total weight (includes weights of all children).
  * @type {number}
  */
-CallTree.Node.prototype.totalWeight = 0;
+devtools.profiler.CallTree.Node.prototype.totalWeight = 0;
 
 
 /**
@@ -658,8 +598,8 @@ CallTree.Node.prototype.totalWeight = 0;
  *
  * @param {string} label Child node label.
  */
-CallTree.Node.prototype.addChild = function(label) {
-  var child = new CallTree.Node(label, this);
+devtools.profiler.CallTree.Node.prototype.addChild = function(label) {
+  var child = new devtools.profiler.CallTree.Node(label, this);
   this.children[label] = child;
   return child;
 };
@@ -668,7 +608,7 @@ CallTree.Node.prototype.addChild = function(label) {
 /**
  * Computes node's total weight.
  */
-CallTree.Node.prototype.computeTotalWeight =
+devtools.profiler.CallTree.Node.prototype.computeTotalWeight =
     function() {
   var totalWeight = this.selfWeight;
   this.forEachChild(function(child) {
@@ -680,7 +620,7 @@ CallTree.Node.prototype.computeTotalWeight =
 /**
  * Returns all node's children as an array.
  */
-CallTree.Node.prototype.exportChildren = function() {
+devtools.profiler.CallTree.Node.prototype.exportChildren = function() {
   var result = [];
   this.forEachChild(function (node) { result.push(node); });
   return result;
@@ -692,7 +632,7 @@ CallTree.Node.prototype.exportChildren = function() {
  *
  * @param {string} label Child node label.
  */
-CallTree.Node.prototype.findChild = function(label) {
+devtools.profiler.CallTree.Node.prototype.findChild = function(label) {
   return this.children[label] || null;
 };
 
@@ -703,7 +643,7 @@ CallTree.Node.prototype.findChild = function(label) {
  *
  * @param {string} label Child node label.
  */
-CallTree.Node.prototype.findOrAddChild = function(label) {
+devtools.profiler.CallTree.Node.prototype.findOrAddChild = function(label) {
   return this.findChild(label) || this.addChild(label);
 };
 
@@ -711,9 +651,9 @@ CallTree.Node.prototype.findOrAddChild = function(label) {
 /**
  * Calls the specified function for every child.
  *
- * @param {function(CallTree.Node)} f Visitor function.
+ * @param {function(devtools.profiler.CallTree.Node)} f Visitor function.
  */
-CallTree.Node.prototype.forEachChild = function(f) {
+devtools.profiler.CallTree.Node.prototype.forEachChild = function(f) {
   for (var c in this.children) {
     f(this.children[c]);
   }
@@ -723,9 +663,9 @@ CallTree.Node.prototype.forEachChild = function(f) {
 /**
  * Walks up from the current node up to the call tree root.
  *
- * @param {function(CallTree.Node)} f Visitor function.
+ * @param {function(devtools.profiler.CallTree.Node)} f Visitor function.
  */
-CallTree.Node.prototype.walkUpToRoot = function(f) {
+devtools.profiler.CallTree.Node.prototype.walkUpToRoot = function(f) {
   for (var curr = this; curr != null; curr = curr.parent) {
     f(curr);
   }
@@ -736,9 +676,9 @@ CallTree.Node.prototype.walkUpToRoot = function(f) {
  * Tries to find a node with the specified path.
  *
  * @param {Array<string>} labels The path.
- * @param {function(CallTree.Node)} opt_f Visitor function.
+ * @param {function(devtools.profiler.CallTree.Node)} opt_f Visitor function.
  */
-CallTree.Node.prototype.descendToChild = function(
+devtools.profiler.CallTree.Node.prototype.descendToChild = function(
     labels, opt_f) {
   for (var pos = 0, curr = this; pos < labels.length && curr != null; pos++) {
     var child = curr.findChild(labels[pos]);

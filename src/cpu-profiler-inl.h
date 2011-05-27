@@ -41,9 +41,6 @@ namespace internal {
 
 void CodeCreateEventRecord::UpdateCodeMap(CodeMap* code_map) {
   code_map->AddCode(start, entry, size);
-  if (shared != NULL) {
-    entry->set_shared_id(code_map->GetSharedId(shared));
-  }
 }
 
 
@@ -57,8 +54,8 @@ void CodeDeleteEventRecord::UpdateCodeMap(CodeMap* code_map) {
 }
 
 
-void SharedFunctionInfoMoveEventRecord::UpdateCodeMap(CodeMap* code_map) {
-  code_map->MoveCode(from, to);
+void CodeAliasEventRecord::UpdateCodeMap(CodeMap* code_map) {
+  code_map->AddAlias(start, entry, code_start);
 }
 
 

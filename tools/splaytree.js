@@ -26,6 +26,12 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
+// A namespace stub. It will become more clear how to declare it properly
+// during integration of this script into Dev Tools.
+var goog = goog || {};
+goog.structs = goog.structs || {};
+
+
 /**
  * Constructs a Splay tree.  A splay tree is a self-balancing binary
  * search tree with the additional property that recently accessed
@@ -34,23 +40,23 @@
  *
  * @constructor
  */
-function SplayTree() {
+goog.structs.SplayTree = function() {
 };
 
 
 /**
  * Pointer to the root node of the tree.
  *
- * @type {SplayTree.Node}
+ * @type {goog.structs.SplayTree.Node}
  * @private
  */
-SplayTree.prototype.root_ = null;
+goog.structs.SplayTree.prototype.root_ = null;
 
 
 /**
  * @return {boolean} Whether the tree is empty.
  */
-SplayTree.prototype.isEmpty = function() {
+goog.structs.SplayTree.prototype.isEmpty = function() {
   return !this.root_;
 };
 
@@ -64,9 +70,9 @@ SplayTree.prototype.isEmpty = function() {
  * @param {number} key Key to insert into the tree.
  * @param {*} value Value to insert into the tree.
  */
-SplayTree.prototype.insert = function(key, value) {
+goog.structs.SplayTree.prototype.insert = function(key, value) {
   if (this.isEmpty()) {
-    this.root_ = new SplayTree.Node(key, value);
+    this.root_ = new goog.structs.SplayTree.Node(key, value);
     return;
   }
   // Splay on the key to move the last node on the search path for
@@ -75,7 +81,7 @@ SplayTree.prototype.insert = function(key, value) {
   if (this.root_.key == key) {
     return;
   }
-  var node = new SplayTree.Node(key, value);
+  var node = new goog.structs.SplayTree.Node(key, value);
   if (key > this.root_.key) {
     node.left = this.root_;
     node.right = this.root_.right;
@@ -95,9 +101,9 @@ SplayTree.prototype.insert = function(key, value) {
  * key is not found, an exception is thrown.
  *
  * @param {number} key Key to find and remove from the tree.
- * @return {SplayTree.Node} The removed node.
+ * @return {goog.structs.SplayTree.Node} The removed node.
  */
-SplayTree.prototype.remove = function(key) {
+goog.structs.SplayTree.prototype.remove = function(key) {
   if (this.isEmpty()) {
     throw Error('Key not found: ' + key);
   }
@@ -126,9 +132,9 @@ SplayTree.prototype.remove = function(key) {
  * a node with the specified key.
  *
  * @param {number} key Key to find in the tree.
- * @return {SplayTree.Node} Node having the specified key.
+ * @return {goog.structs.SplayTree.Node} Node having the specified key.
  */
-SplayTree.prototype.find = function(key) {
+goog.structs.SplayTree.prototype.find = function(key) {
   if (this.isEmpty()) {
     return null;
   }
@@ -138,9 +144,9 @@ SplayTree.prototype.find = function(key) {
 
 
 /**
- * @return {SplayTree.Node} Node having the minimum key value.
+ * @return {goog.structs.SplayTree.Node} Node having the minimum key value.
  */
-SplayTree.prototype.findMin = function() {
+goog.structs.SplayTree.prototype.findMin = function() {
   if (this.isEmpty()) {
     return null;
   }
@@ -153,9 +159,9 @@ SplayTree.prototype.findMin = function() {
 
 
 /**
- * @return {SplayTree.Node} Node having the maximum key value.
+ * @return {goog.structs.SplayTree.Node} Node having the maximum key value.
  */
-SplayTree.prototype.findMax = function(opt_startNode) {
+goog.structs.SplayTree.prototype.findMax = function(opt_startNode) {
   if (this.isEmpty()) {
     return null;
   }
@@ -168,10 +174,10 @@ SplayTree.prototype.findMax = function(opt_startNode) {
 
 
 /**
- * @return {SplayTree.Node} Node having the maximum key value that
+ * @return {goog.structs.SplayTree.Node} Node having the maximum key value that
  *     is less or equal to the specified key value.
  */
-SplayTree.prototype.findGreatestLessThan = function(key) {
+goog.structs.SplayTree.prototype.findGreatestLessThan = function(key) {
   if (this.isEmpty()) {
     return null;
   }
@@ -193,7 +199,7 @@ SplayTree.prototype.findGreatestLessThan = function(key) {
 /**
  * @return {Array<*>} An array containing all the values of tree's nodes.
  */
-SplayTree.prototype.exportValues = function() {
+goog.structs.SplayTree.prototype.exportValues = function() {
   var result = [];
   this.traverse_(function(node) { result.push(node.value); });
   return result;
@@ -210,7 +216,7 @@ SplayTree.prototype.exportValues = function() {
  * @param {number} key Key to splay the tree on.
  * @private
  */
-SplayTree.prototype.splay_ = function(key) {
+goog.structs.SplayTree.prototype.splay_ = function(key) {
   if (this.isEmpty()) {
     return;
   }
@@ -220,7 +226,7 @@ SplayTree.prototype.splay_ = function(key) {
   // will hold the R tree of the algorithm.  Using a dummy node, left
   // and right will always be nodes and we avoid special cases.
   var dummy, left, right;
-  dummy = left = right = new SplayTree.Node(null, null);
+  dummy = left = right = new goog.structs.SplayTree.Node(null, null);
   var current = this.root_;
   while (true) {
     if (key < current.key) {
@@ -275,10 +281,10 @@ SplayTree.prototype.splay_ = function(key) {
 /**
  * Performs a preorder traversal of the tree.
  *
- * @param {function(SplayTree.Node)} f Visitor function.
+ * @param {function(goog.structs.SplayTree.Node)} f Visitor function.
  * @private
  */
-SplayTree.prototype.traverse_ = function(f) {
+goog.structs.SplayTree.prototype.traverse_ = function(f) {
   var nodesToVisit = [this.root_];
   while (nodesToVisit.length > 0) {
     var node = nodesToVisit.shift();
@@ -298,19 +304,19 @@ SplayTree.prototype.traverse_ = function(f) {
  * @param {number} key Key.
  * @param {*} value Value.
  */
-SplayTree.Node = function(key, value) {
+goog.structs.SplayTree.Node = function(key, value) {
   this.key = key;
   this.value = value;
 };
 
 
 /**
- * @type {SplayTree.Node}
+ * @type {goog.structs.SplayTree.Node}
  */
-SplayTree.Node.prototype.left = null;
+goog.structs.SplayTree.Node.prototype.left = null;
 
 
 /**
- * @type {SplayTree.Node}
+ * @type {goog.structs.SplayTree.Node}
  */
-SplayTree.Node.prototype.right = null;
+goog.structs.SplayTree.Node.prototype.right = null;

@@ -30,8 +30,6 @@
 #include "api.h"
 #include "global-handles.h"
 
-#include "vm-state-inl.h"
-
 namespace v8 {
 namespace internal {
 
@@ -41,7 +39,6 @@ class GlobalHandles::Node : public Malloced {
   void Initialize(Object* object) {
     // Set the initial value of the handle.
     object_ = object;
-    class_id_ = v8::HeapProfiler::kPersistentHandleNoClassId;
     state_  = NORMAL;
     parameter_or_next_free_.parameter = NULL;
     callback_ = NULL;
@@ -138,14 +135,6 @@ class GlobalHandles::Node : public Malloced {
     return state_ == WEAK;
   }
 
-  bool CanBeRetainer() {
-    return state_ != DESTROYED && state_ != NEAR_DEATH;
-  }
-
-  void SetWrapperClassId(uint16_t class_id) {
-    class_id_ = class_id;
-  }
-
   // Returns the id for this weak handle.
   void set_parameter(void* parameter) {
     ASSERT(state_ != DESTROYED);
@@ -199,8 +188,6 @@ class GlobalHandles::Node : public Malloced {
   // Place the handle address first to avoid offset computation.
   Object* object_;  // Storage for object pointer.
 
-  uint16_t class_id_;
-
   // Transition diagram:
   // NORMAL <-> WEAK -> PENDING -> NEAR_DEATH -> { NORMAL, WEAK, DESTROYED }
   enum State {
@@ -210,7 +197,7 @@ class GlobalHandles::Node : public Malloced {
     NEAR_DEATH,  // Callback has informed the handle is near death.
     DESTROYED
   };
-  State state_ : 4;  // Need one more bit for MSVC as it treats enums as signed.
+  State state_;
 
  private:
   // Handle specific callback.
@@ -348,11 +335,6 @@ bool GlobalHandles::IsWeak(Object** location) {
 }
 
 
-void GlobalHandles::SetWrapperClassId(Object** location, uint16_t class_id) {
-  Node::FromLocation(location)->SetWrapperClassId(class_id);
-}
-
-
 void GlobalHandles::IterateWeakRoots(ObjectVisitor* v) {
   // Traversal of GC roots in the global handle list that are marked as
   // WEAK or PENDING.
@@ -451,16 +433,6 @@ void GlobalHandles::IterateAllRoots(ObjectVisitor* v) {
 }
 
 
-void GlobalHandles::IterateAllRootsWithClassIds(ObjectVisitor* v) {
-  for (Node* current = head_; current != NULL; current = current->next()) {
-    if (current->class_id_ != v8::HeapProfiler::kPersistentHandleNoClassId &&
-        current->CanBeRetainer()) {
-      v->VisitEmbedderReference(&current->object_, current->class_id_);
-    }
-  }
-}
-
-
 void GlobalHandles::TearDown() {
   // Reset all the lists.
   set_head(NULL);
@@ -541,10 +513,8 @@ List<ObjectGroup*>* GlobalHandles::ObjectGroups() {
   return &groups;
 }
 
-void GlobalHandles::AddGroup(Object*** handles,
-                             size_t length,
-                             v8::RetainedObjectInfo* info) {
-  ObjectGroup* new_entry = new ObjectGroup(length, info);
+void GlobalHandles::AddGroup(Object*** handles, size_t length) {
+  ObjectGroup* new_entry = new ObjectGroup(length);
   for (size_t i = 0; i < length; ++i)
     new_entry->objects_.Add(handles[i]);
   ObjectGroups()->Add(new_entry);

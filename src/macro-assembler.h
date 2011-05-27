@@ -50,13 +50,6 @@ enum HandlerType {
 };
 
 
-// Types of uncatchable exceptions.
-enum UncatchableExceptionType {
-  OUT_OF_MEMORY,
-  TERMINATION
-};
-
-
 // Invalid depth in prototype chain.
 const int kInvalidProtoDepth = -1;
 

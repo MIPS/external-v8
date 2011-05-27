@@ -42,26 +42,18 @@ namespace v8 {
 namespace internal {
 
 void CPU::Setup() {
-  CpuFeatures::Probe(true);
-  if (!CpuFeatures::IsSupported(VFP3) || Serializer::enabled()) {
-    V8::DisableCrankshaft();
-  }
+  CpuFeatures::Probe();
 }
 
 
 void CPU::FlushICache(void* start, size_t size) {
-  // Nothing to do flushing no instructions.
-  if (size == 0) {
-    return;
-  }
-
 #if defined (USE_SIMULATOR)
   // Not generating ARM instructions for C-code. This means that we are
   // building an ARM emulator based target.  We should notify the simulator
   // that the Icache was flushed.
   // None of this code ends up in the snapshot so there are no issues
   // around whether or not to generate the code when building snapshots.
-  Simulator::FlushICache(start, size);
+  assembler::arm::Simulator::FlushICache(start, size);
 #else
   // Ideally, we would call
   //   syscall(__ARM_NR_cacheflush, start,

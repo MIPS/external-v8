@@ -86,9 +86,6 @@ class CompilationSubCache {
   // Clear this sub-cache evicting all its content.
   void Clear();
 
-  // Remove given shared function info from sub-cache.
-  void Remove(Handle<SharedFunctionInfo> function_info);
-
   // Number of generations in this sub-cache.
   inline int generations() { return generations_; }
 
@@ -136,8 +133,7 @@ class CompilationCacheEval: public CompilationSubCache {
       : CompilationSubCache(generations) { }
 
   Handle<SharedFunctionInfo> Lookup(Handle<String> source,
-                                    Handle<Context> context,
-                                    StrictModeFlag strict_mode);
+                                    Handle<Context> context);
 
   void Put(Handle<String> source,
            Handle<Context> context,
@@ -253,18 +249,6 @@ void CompilationSubCache::Clear() {
 }
 
 
-void CompilationSubCache::Remove(Handle<SharedFunctionInfo> function_info) {
-  // Probe the script generation tables. Make sure not to leak handles
-  // into the caller's handle scope.
-  { HandleScope scope;
-    for (int generation = 0; generation < generations(); generation++) {
-      Handle<CompilationCacheTable> table = GetTable(generation);
-      table->Remove(*function_info);
-    }
-  }
-}
-
-
 // We only re-use a cached function for some script source code if the
 // script originates from the same place. This is to avoid issues
 // when reporting errors, etc.
@@ -372,9 +356,7 @@ void CompilationCacheScript::Put(Handle<String> source,
 
 
 Handle<SharedFunctionInfo> CompilationCacheEval::Lookup(
-    Handle<String> source,
-    Handle<Context> context,
-    StrictModeFlag strict_mode) {
+    Handle<String> source, Handle<Context> context) {
   // Make sure not to leak the table into the surrounding handle
   // scope. Otherwise, we risk keeping old tables around even after
   // having cleared the cache.
@@ -383,7 +365,7 @@ Handle<SharedFunctionInfo> CompilationCacheEval::Lookup(
   { HandleScope scope;
     for (generation = 0; generation < generations(); generation++) {
       Handle<CompilationCacheTable> table = GetTable(generation);
-      result = table->LookupEval(*source, *context, strict_mode);
+      result = table->LookupEval(*source, *context);
       if (result->IsSharedFunctionInfo()) {
         break;
       }
@@ -485,15 +467,6 @@ void CompilationCacheRegExp::Put(Handle<String> source,
 }
 
 
-void CompilationCache::Remove(Handle<SharedFunctionInfo> function_info) {
-  if (!IsEnabled()) return;
-
-  eval_global.Remove(function_info);
-  eval_contextual.Remove(function_info);
-  script.Remove(function_info);
-}
-
-
 Handle<SharedFunctionInfo> CompilationCache::LookupScript(Handle<String> source,
                                                           Handle<Object> name,
                                                           int line_offset,
@@ -506,20 +479,18 @@ Handle<SharedFunctionInfo> CompilationCache::LookupScript(Handle<String> source,
 }
 
 
-Handle<SharedFunctionInfo> CompilationCache::LookupEval(
-    Handle<String> source,
-    Handle<Context> context,
-    bool is_global,
-    StrictModeFlag strict_mode) {
+Handle<SharedFunctionInfo> CompilationCache::LookupEval(Handle<String> source,
+                                                        Handle<Context> context,
+                                                        bool is_global) {
   if (!IsEnabled()) {
     return Handle<SharedFunctionInfo>::null();
   }
 
   Handle<SharedFunctionInfo> result;
   if (is_global) {
-    result = eval_global.Lookup(source, context, strict_mode);
+    result = eval_global.Lookup(source, context);
   } else {
-    result = eval_contextual.Lookup(source, context, strict_mode);
+    result = eval_contextual.Lookup(source, context);
   }
   return result;
 }
@@ -571,45 +542,6 @@ void CompilationCache::PutRegExp(Handle<String> source,
   }
 
   reg_exp.Put(source, flags, data);
-}
-
-
-static bool SourceHashCompare(void* key1, void* key2) {
-  return key1 == key2;
-}
-
-
-static HashMap* EagerOptimizingSet() {
-  static HashMap map(&SourceHashCompare);
-  return &map;
-}
-
-
-bool CompilationCache::ShouldOptimizeEagerly(Handle<JSFunction> function) {
-  if (FLAG_opt_eagerly) return true;
-  uint32_t hash = function->SourceHash();
-  void* key = reinterpret_cast<void*>(hash);
-  return EagerOptimizingSet()->Lookup(key, hash, false) != NULL;
-}
-
-
-void CompilationCache::MarkForEagerOptimizing(Handle<JSFunction> function) {
-  uint32_t hash = function->SourceHash();
-  void* key = reinterpret_cast<void*>(hash);
-  EagerOptimizingSet()->Lookup(key, hash, true);
-}
-
-
-void CompilationCache::MarkForLazyOptimizing(Handle<JSFunction> function) {
-  uint32_t hash = function->SourceHash();
-  void* key = reinterpret_cast<void*>(hash);
-  EagerOptimizingSet()->Remove(key, hash);
-}
-
-
-void CompilationCache::ResetEagerOptimizingData() {
-  HashMap* set = EagerOptimizingSet();
-  if (set->occupancy() > 0) set->Clear();
 }
 
 

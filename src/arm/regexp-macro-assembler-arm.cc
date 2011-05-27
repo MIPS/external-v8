@@ -57,57 +57,48 @@ namespace internal {
  * - r13/sp : points to tip of C stack.
  *
  * The remaining registers are free for computations.
- * Each call to a public method should retain this convention.
  *
+ * Each call to a public method should retain this convention.
  * The stack will have the following structure:
- *  - fp[48]  direct_call  (if 1, direct call from JavaScript code,
- *                          if 0, call through the runtime system).
- *  - fp[44]  stack_area_base (High end of the memory area to use as
- *                             backtracking stack).
- *  - fp[40]  int* capture_array (int[num_saved_registers_], for output).
- *  - fp[36]  secondary link/return address used by native call.
- *  --- sp when called ---
- *  - fp[32]  return address (lr).
- *  - fp[28]  old frame pointer (r11).
- *  - fp[0..24]  backup of registers r4..r10.
- *  --- frame pointer ----
- *  - fp[-4]  end of input       (Address of end of string).
- *  - fp[-8]  start of input     (Address of first character in string).
- *  - fp[-12] start index        (character index of start).
- *  - fp[-16] void* input_string (location of a handle containing the string).
- *  - fp[-20] Offset of location before start of input (effectively character
- *            position -1). Used to initialize capture registers to a
- *            non-position.
- *  - fp[-24] At start (if 1, we are starting at the start of the
- *    string, otherwise 0)
- *  - fp[-28] register 0         (Only positions must be stored in the first
- *  -         register 1          num_saved_registers_ registers)
- *  -         ...
- *  -         register num_registers-1
- *  --- sp ---
+ *       - direct_call        (if 1, direct call from JavaScript code, if 0 call
+ *                             through the runtime system)
+ *       - stack_area_base    (High end of the memory area to use as
+ *                             backtracking stack)
+ *       - int* capture_array (int[num_saved_registers_], for output).
+ *       --- sp when called ---
+ *       - link address
+ *       - backup of registers r4..r11
+ *       - end of input       (Address of end of string)
+ *       - start of input     (Address of first character in string)
+ *       - start index        (character index of start)
+ *       --- frame pointer ----
+ *       - void* input_string (location of a handle containing the string)
+ *       - Offset of location before start of input (effectively character
+ *         position -1). Used to initialize capture registers to a non-position.
+ *       - At start (if 1, we are starting at the start of the
+ *         string, otherwise 0)
+ *       - register 0         (Only positions must be stored in the first
+ *       - register 1          num_saved_registers_ registers)
+ *       - ...
+ *       - register num_registers-1
+ *       --- sp ---
  *
  * The first num_saved_registers_ registers are initialized to point to
  * "character -1" in the string (i.e., char_size() bytes before the first
  * character of the string). The remaining registers start out as garbage.
  *
  * The data up to the return address must be placed there by the calling
- * code and the remaining arguments are passed in registers, e.g. by calling the
- * code entry as cast to a function with the signature:
+ * code, by calling the code entry as cast to a function with the signature:
  * int (*match)(String* input_string,
  *              int start_index,
  *              Address start,
  *              Address end,
- *              Address secondary_return_address,  // Only used by native call.
  *              int* capture_output_array,
+ *              bool at_start,
  *              byte* stack_area_base,
- *              bool direct_call = false)
+ *              bool direct_call)
  * The call is performed by NativeRegExpMacroAssembler::Execute()
- * (in regexp-macro-assembler.cc) via the CALL_GENERATED_REGEXP_CODE macro
- * in arm/simulator-arm.h.
- * When calling as a non-direct call (i.e., from C++ code), the return address
- * area is overwritten with the LR register by the RegExp code. When doing a
- * direct call from generated code, the return address is placed there by
- * the calling code, as in a normal exit frame.
+ * (in regexp-macro-assembler.cc).
  */
 
 #define __ ACCESS_MASM(masm_)
@@ -426,8 +417,8 @@ void RegExpMacroAssemblerARM::CheckNotBackReference(
 
 
 void RegExpMacroAssemblerARM::CheckNotRegistersEqual(int reg1,
-                                                     int reg2,
-                                                     Label* on_not_equal) {
+                                                      int reg2,
+                                                      Label* on_not_equal) {
   __ ldr(r0, register_location(reg1));
   __ ldr(r1, register_location(reg2));
   __ cmp(r0, r1);
@@ -435,7 +426,7 @@ void RegExpMacroAssemblerARM::CheckNotRegistersEqual(int reg1,
 }
 
 
-void RegExpMacroAssemblerARM::CheckNotCharacter(unsigned c,
+void RegExpMacroAssemblerARM::CheckNotCharacter(uint32_t c,
                                                 Label* on_not_equal) {
   __ cmp(current_character(), Operand(c));
   BranchOrBacktrack(ne, on_not_equal);
@@ -451,8 +442,8 @@ void RegExpMacroAssemblerARM::CheckCharacterAfterAnd(uint32_t c,
 }
 
 
-void RegExpMacroAssemblerARM::CheckNotCharacterAfterAnd(unsigned c,
-                                                        unsigned mask,
+void RegExpMacroAssemblerARM::CheckNotCharacterAfterAnd(uint32_t c,
+                                                        uint32_t mask,
                                                         Label* on_not_equal) {
   __ and_(r0, current_character(), Operand(mask));
   __ cmp(r0, Operand(c));
@@ -607,17 +598,16 @@ Handle<Object> RegExpMacroAssemblerARM::GetCode(Handle<String> source) {
 
   // Entry code:
   __ bind(&entry_label_);
+  // Push Link register.
   // Push arguments
   // Save callee-save registers.
   // Start new stack frame.
-  // Store link register in existing stack-cell.
   // Order here should correspond to order of offset constants in header file.
   RegList registers_to_retain = r4.bit() | r5.bit() | r6.bit() |
       r7.bit() | r8.bit() | r9.bit() | r10.bit() | fp.bit();
   RegList argument_registers = r0.bit() | r1.bit() | r2.bit() | r3.bit();
   __ stm(db_w, sp, argument_registers | registers_to_retain | lr.bit());
-  // Set frame pointer in space for it if this is not a direct call
-  // from generated code.
+  // Set frame pointer just above the arguments.
   __ add(frame_pointer(), sp, Operand(4 * kPointerSize));
   __ push(r0);  // Make room for "position - 1" constant (value is irrelevant).
   __ push(r0);  // Make room for "at start" constant (value is irrelevant).
@@ -774,9 +764,10 @@ Handle<Object> RegExpMacroAssemblerARM::GetCode(Handle<String> source) {
   if (stack_overflow_label_.is_linked()) {
     SafeCallTarget(&stack_overflow_label_);
     // Reached if the backtrack-stack limit has been hit.
+
     Label grow_failed;
 
-    // Call GrowStack(backtrack_stackpointer(), &stack_base)
+    // Call GrowStack(backtrack_stackpointer())
     static const int num_arguments = 2;
     __ PrepareCallCFunction(num_arguments, r0);
     __ mov(r0, backtrack_stackpointer());

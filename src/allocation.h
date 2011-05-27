@@ -28,9 +28,6 @@
 #ifndef V8_ALLOCATION_H_
 #define V8_ALLOCATION_H_
 
-#include "checks.h"
-#include "globals.h"
-
 namespace v8 {
 namespace internal {
 

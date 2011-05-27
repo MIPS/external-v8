@@ -35,15 +35,15 @@
 using namespace v8::internal;
 
 
-static MaybeObject* AllocateAfterFailures() {
+static Object* AllocateAfterFailures() {
   static int attempts = 0;
-  if (++attempts < 3) return Failure::RetryAfterGC();
+  if (++attempts < 3) return Failure::RetryAfterGC(0);
 
   // New space.
   NewSpace* new_space = Heap::new_space();
   static const int kNewSpaceFillerSize = ByteArray::SizeFor(0);
   while (new_space->Available() > kNewSpaceFillerSize) {
-    int available_before = static_cast<int>(new_space->Available());
+    int available_before = new_space->Available();
     CHECK(!Heap::AllocateByteArray(0)->IsFailure());
     if (available_before == new_space->Available()) {
       // It seems that we are avoiding new space allocations when
@@ -60,8 +60,7 @@ static MaybeObject* AllocateAfterFailures() {
   CHECK(!Heap::AllocateFixedArray(100)->IsFailure());
   CHECK(!Heap::AllocateHeapNumber(0.42)->IsFailure());
   CHECK(!Heap::AllocateArgumentsObject(Smi::FromInt(87), 10)->IsFailure());
-  Object* object =
-      Heap::AllocateJSObject(*Top::object_function())->ToObjectChecked();
+  Object* object = Heap::AllocateJSObject(*Top::object_function());
   CHECK(!Heap::CopyJSObject(JSObject::cast(object))->IsFailure());
 
   // Old data space.
@@ -112,7 +111,7 @@ TEST(StressHandles) {
 }
 
 
-static MaybeObject* TestAccessorGet(Object* object, void*) {
+static Object* TestAccessorGet(Object* object, void*) {
   return AllocateAfterFailures();
 }
 
@@ -133,7 +132,7 @@ TEST(StressJS) {
   // Force the creation of an initial map and set the code to
   // something empty.
   Factory::NewJSObject(function);
-  function->ReplaceCode(Builtins::builtin(Builtins::EmptyFunction));
+  function->set_code(Builtins::builtin(Builtins::EmptyFunction));
   // Patch the map to have an accessor for "get".
   Handle<Map> map(function->initial_map());
   Handle<DescriptorArray> instance_descriptors(map->instance_descriptors());

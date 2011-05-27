@@ -26,10 +26,15 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
+// Initlialize namespaces.
+var devtools = devtools || {};
+devtools.profiler = devtools.profiler || {};
+
+
 /**
  * Creates a CSV lines parser.
  */
-function CsvParser() {
+devtools.profiler.CsvParser = function() {
 };
 
 
@@ -37,14 +42,14 @@ function CsvParser() {
  * A regex for matching a CSV field.
  * @private
  */
-CsvParser.CSV_FIELD_RE_ = /^"((?:[^"]|"")*)"|([^,]*)/;
+devtools.profiler.CsvParser.CSV_FIELD_RE_ = /^"((?:[^"]|"")*)"|([^,]*)/;
 
 
 /**
  * A regex for matching a double quote.
  * @private
  */
-CsvParser.DOUBLE_QUOTE_RE_ = /""/g;
+devtools.profiler.CsvParser.DOUBLE_QUOTE_RE_ = /""/g;
 
 
 /**
@@ -52,9 +57,9 @@ CsvParser.DOUBLE_QUOTE_RE_ = /""/g;
  *
  * @param {string} line Input line.
  */
-CsvParser.prototype.parseLine = function(line) {
-  var fieldRe = CsvParser.CSV_FIELD_RE_;
-  var doubleQuoteRe = CsvParser.DOUBLE_QUOTE_RE_;
+devtools.profiler.CsvParser.prototype.parseLine = function(line) {
+  var fieldRe = devtools.profiler.CsvParser.CSV_FIELD_RE_;
+  var doubleQuoteRe = devtools.profiler.CsvParser.DOUBLE_QUOTE_RE_;
   var pos = 0;
   var endPos = line.length;
   var fields = [];

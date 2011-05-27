@@ -67,9 +67,7 @@ function testAssignmentArgument(x) {
   assertEquals(7, x);
 }
 
-for (var i = 0; i < 10000; i++) {
-  testAssignmentArgument();
-}
+testAssignmentArgument();
 assertEquals(6, x);
 
 __defineSetter__('x', function() { throw 42; });

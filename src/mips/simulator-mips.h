@@ -37,7 +37,6 @@
 #define V8_MIPS_SIMULATOR_MIPS_H_
 
 #include "allocation.h"
-#include "constants-mips.h"
 
 #if !defined(USE_SIMULATOR)
 // Running without a simulator on a native mips platform.
@@ -49,18 +48,10 @@ namespace internal {
 #define CALL_GENERATED_CODE(entry, p0, p1, p2, p3, p4) \
   entry(p0, p1, p2, p3, p4)
 
-typedef int (*mips_regexp_matcher)(String*, int, const byte*, const byte*,
-                                   int*, Address, int);
-
-
-// Call the generated regexp code directly. The code at the entry address
-// should act as a function matching the type mips_regexp_matcher.
-
-// On ARM the fifth argument is a dummy that reserves the space used for
-// the return address added by the ExitFrame in native calls. It seems that
-// MIPS never included this argument.
+// Call the generated regexp code directly. The entry function pointer should
+// expect seven int/pointer sized arguments and return an int.
 #define CALL_GENERATED_REGEXP_CODE(entry, p0, p1, p2, p3, p4, p5, p6) \
-  (FUNCTION_CAST<mips_regexp_matcher>(entry)(p0, p1, p2, p3, p4, p5, p6))
+  (entry(p0, p1, p2, p3, p4, p5, p6))
 
 #define TRY_CATCH_FROM_ADDRESS(try_catch_address) \
   (reinterpret_cast<TryCatch*>(try_catch_address))
@@ -97,13 +88,18 @@ class SimulatorStack : public v8::internal::AllStatic {
 // Running with a simulator.
 
 #include "hashmap.h"
-#include "assembler.h"
 
-namespace v8 {
-namespace internal {
+namespace assembler {
+namespace mips {
 
 // -----------------------------------------------------------------------------
 // Utility functions
+
+static inline bool is_uintn(int x, int n) {
+  return (x & -(1 << n)) == 0;
+}
+
+static inline bool is_uint3(int x)  { return is_uintn(x, 3); }
 
 class CachePage {
  public:
@@ -224,10 +220,6 @@ class Simulator {
   // ICache checking.
   static void FlushICache(void* start, size_t size);
 
-  // Returns true if pc register contains one of the 'special_values' defined
-  // below (bad_ra, end_sim_pc).
-  bool has_bad_pc() const;
-
  private:
   enum special_values {
     // Known bad pc value to ensure that the simulator does not execute
@@ -274,15 +266,6 @@ class Simulator {
 
   // Executing is handled based on the instruction type.
   void DecodeTypeRegister(Instruction* instr);
-
-  // Helper function for DecodeTypeRegister.
-  void ConfigureTypeRegister(Instruction* instr,
-                             int32_t& alu_out,
-                             int64_t& i64hilo,
-                             uint64_t& u64hilo,
-                             int32_t& next_pc,
-                             bool& do_interrupt);
-
   void DecodeTypeImmediate(Instruction* instr);
   void DecodeTypeJump(Instruction* instr);
 
@@ -296,7 +279,7 @@ class Simulator {
     if (instr->IsForbiddenInBranchDelay()) {
       V8_Fatal(__FILE__, __LINE__,
                "Eror:Unexpected %i opcode in a branch delay slot.",
-               instr->OpcodeValue());
+               instr->OpcodeField());
     }
     InstructionDecode(instr);
   }
@@ -320,9 +303,8 @@ class Simulator {
   void SignalExceptions();
 
   // Runtime call support.
-  static void* RedirectExternalReference(
-      void* external_function,
-      v8::internal::ExternalReference::Type type);
+  static void* RedirectExternalReference(void* external_function,
+                                         bool fp_return);
 
   // Used for real time calls that takes two double values as arguments and
   // returns a double.
@@ -337,8 +319,6 @@ class Simulator {
   uint32_t FCSR_;
 
   // Simulator support.
-  // Allocate 1MB for stack.
-  static const size_t stack_size_ = 1 * 1024*1024;
   char* stack_;
   bool pc_modified_;
   int icount_;
@@ -353,15 +333,20 @@ class Simulator {
   Instr break_instr_;
 };
 
+} }   // namespace assembler::mips
+
+namespace v8 {
+namespace internal {
 
 // When running with the simulator transition into simulated execution at this
 // point.
 #define CALL_GENERATED_CODE(entry, p0, p1, p2, p3, p4) \
-  reinterpret_cast<Object*>(Simulator::current()->Call( \
+  reinterpret_cast<Object*>(assembler::mips::Simulator::current()->Call( \
       FUNCTION_ADDR(entry), 5, p0, p1, p2, p3, p4))
 
 #define CALL_GENERATED_REGEXP_CODE(entry, p0, p1, p2, p3, p4, p5, p6) \
-    Simulator::current()->Call(entry, 7, p0, p1, p2, p3, p4, p5, p6)
+  assembler::mips::Simulator::current()->Call( \
+      FUNCTION_ADDR(entry), 7, p0, p1, p2, p3, p4, p5, p6)
 
 #define TRY_CATCH_FROM_ADDRESS(try_catch_address) \
   try_catch_address == \
@@ -376,16 +361,16 @@ class Simulator {
 class SimulatorStack : public v8::internal::AllStatic {
  public:
   static inline uintptr_t JsLimitFromCLimit(uintptr_t c_limit) {
-    return Simulator::current()->StackLimit();
+    return assembler::mips::Simulator::current()->StackLimit();
   }
 
   static inline uintptr_t RegisterCTryCatch(uintptr_t try_catch_address) {
-    Simulator* sim = Simulator::current();
+    assembler::mips::Simulator* sim = assembler::mips::Simulator::current();
     return sim->PushAddress(try_catch_address);
   }
 
   static inline void UnregisterCTryCatch() {
-    Simulator::current()->PopAddress();
+    assembler::mips::Simulator::current()->PopAddress();
   }
 };
 

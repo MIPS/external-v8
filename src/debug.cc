@@ -35,7 +35,6 @@
 #include "compilation-cache.h"
 #include "compiler.h"
 #include "debug.h"
-#include "deoptimizer.h"
 #include "execution.h"
 #include "global-handles.h"
 #include "ic.h"
@@ -141,9 +140,7 @@ void BreakLocationIterator::Next() {
       Address target = original_rinfo()->target_address();
       Code* code = Code::GetCodeFromTargetAddress(target);
       if ((code->is_inline_cache_stub() &&
-           !code->is_binary_op_stub() &&
-           !code->is_type_recording_binary_op_stub() &&
-           !code->is_compare_ic_stub()) ||
+           code->kind() != Code::BINARY_OP_IC) ||
           RelocInfo::IsConstructCall(rmode())) {
         break_point_++;
         return;
@@ -622,7 +619,7 @@ bool Debug::disable_break_ = false;
 
 // Default call debugger on uncaught exception.
 bool Debug::break_on_exception_ = false;
-bool Debug::break_on_uncaught_exception_ = false;
+bool Debug::break_on_uncaught_exception_ = true;
 
 Handle<Context> Debug::debug_context_ = Handle<Context>();
 Code* Debug::debug_break_return_ = NULL;
@@ -764,12 +761,15 @@ bool Debug::CompileDebuggerScript(int index) {
   Handle<String> script_name = Factory::NewStringFromAscii(name);
 
   // Compile the script.
+  bool allow_natives_syntax = FLAG_allow_natives_syntax;
+  FLAG_allow_natives_syntax = true;
   Handle<SharedFunctionInfo> function_info;
   function_info = Compiler::Compile(source_code,
                                     script_name,
                                     0, 0, NULL, NULL,
                                     Handle<String>::null(),
                                     NATIVES_CODE);
+  FLAG_allow_natives_syntax = allow_natives_syntax;
 
   // Silently ignore stack overflows during compilation.
   if (function_info.is_null()) {
@@ -832,10 +832,7 @@ bool Debug::Load() {
   // Expose the builtins object in the debugger context.
   Handle<String> key = Factory::LookupAsciiSymbol("builtins");
   Handle<GlobalObject> global = Handle<GlobalObject>(context->global());
-  RETURN_IF_EMPTY_HANDLE_VALUE(
-      SetProperty(global, key, Handle<Object>(global->builtins()),
-                  NONE, kNonStrictMode),
-      false);
+  SetProperty(global, key, Handle<Object>(global->builtins()), NONE);
 
   // Compile the JavaScript for the debugger in the debugger context.
   Debugger::set_compiling_natives(true);
@@ -858,7 +855,7 @@ bool Debug::Load() {
   if (caught_exception) return false;
 
   // Debugger loaded.
-  debug_context_ = context;
+  debug_context_ = Handle<Context>::cast(GlobalHandles::Create(*context));
 
   return true;
 }
@@ -1000,24 +997,24 @@ Object* Debug::Break(Arguments args) {
 // triggered. This function returns a JSArray with the break point objects
 // which is triggered.
 Handle<Object> Debug::CheckBreakPoints(Handle<Object> break_point_objects) {
-  // Count the number of break points hit. If there are multiple break points
-  // they are in a FixedArray.
-  Handle<FixedArray> break_points_hit;
   int break_points_hit_count = 0;
+  Handle<JSArray> break_points_hit = Factory::NewJSArray(1);
+
+  // If there are multiple break points they are in a FixedArray.
   ASSERT(!break_point_objects->IsUndefined());
   if (break_point_objects->IsFixedArray()) {
     Handle<FixedArray> array(FixedArray::cast(*break_point_objects));
-    break_points_hit = Factory::NewFixedArray(array->length());
     for (int i = 0; i < array->length(); i++) {
       Handle<Object> o(array->get(i));
       if (CheckBreakPoint(o)) {
-        break_points_hit->set(break_points_hit_count++, *o);
+        SetElement(break_points_hit, break_points_hit_count++, o);
       }
     }
   } else {
-    break_points_hit = Factory::NewFixedArray(1);
     if (CheckBreakPoint(break_point_objects)) {
-      break_points_hit->set(break_points_hit_count++, *break_point_objects);
+      SetElement(break_points_hit,
+                 break_points_hit_count++,
+                 break_point_objects);
     }
   }
 
@@ -1025,10 +1022,7 @@ Handle<Object> Debug::CheckBreakPoints(Handle<Object> break_point_objects) {
   if (break_points_hit_count == 0) {
     return Factory::undefined_value();
   }
-  // Return break points hit as a JSArray.
-  Handle<JSArray> result = Factory::NewJSArrayWithElements(break_points_hit);
-  result->set_length(Smi::FromInt(break_points_hit_count));
-  return result;
+  return break_points_hit;
 }
 
 
@@ -1039,7 +1033,7 @@ bool Debug::CheckBreakPoint(Handle<Object> break_point_object) {
   // Ignore check if break point object is not a JSObject.
   if (!break_point_object->IsJSObject()) return true;
 
-  // Get the function IsBreakPointTriggered (defined in debug-debugger.js).
+  // Get the function CheckBreakPoint (defined in debug.js).
   Handle<String> is_break_point_triggered_symbol =
       Factory::LookupAsciiSymbol("IsBreakPointTriggered");
   Handle<JSFunction> check_break_point =
@@ -1666,12 +1660,6 @@ bool Debug::EnsureDebugInfo(Handle<SharedFunctionInfo> shared) {
 
   // Ensure shared in compiled. Return false if this failed.
   if (!EnsureCompiled(shared, CLEAR_EXCEPTION)) return false;
-
-  // If preparing for the first break point make sure to deoptimize all
-  // functions as debugging does not work with optimized code.
-  if (!has_break_points_) {
-    Deoptimizer::DeoptimizeAll();
-  }
 
   // Create the debug info object.
   Handle<DebugInfo> debug_info = Factory::NewDebugInfo(shared);
@@ -2743,10 +2731,8 @@ bool Debugger::StartAgent(const char* name, int port,
   }
 
   if (Socket::Setup()) {
-    if (agent_ == NULL) {
-      agent_ = new DebuggerAgent(name, port);
-      agent_->Start();
-    }
+    agent_ = new DebuggerAgent(name, port);
+    agent_->Start();
     return true;
   }
 
@@ -3042,8 +3028,7 @@ void LockingCommandMessageQueue::Clear() {
 
 
 MessageDispatchHelperThread::MessageDispatchHelperThread()
-    : Thread("v8:MsgDispHelpr"),
-      sem_(OS::CreateSemaphore(0)), mutex_(OS::CreateMutex()),
+    : sem_(OS::CreateSemaphore(0)), mutex_(OS::CreateMutex()),
       already_signalled_(false) {
 }
 

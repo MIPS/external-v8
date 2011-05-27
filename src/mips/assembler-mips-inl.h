@@ -109,11 +109,9 @@ Address RelocInfo::target_address_address() {
   // and written.  In this case the target_address_address function should
   // return the end of the instructions to be patched, allowing the
   // deserializer to deserialize the instructions as raw bytes and put them in
-  // place, ready to be patched with the target. In our case, after jump
-  // optimization, that is the address of the instruction that follows
-  // J/JAL/JR/JALR instruction.
-  return reinterpret_cast<Address>(
-    pc_ + Assembler::kInstructionsFor32BitConstant * Assembler::kInstrSize);
+  // place, ready to be patched with the target. In our case, that is the
+  // address of the instruction that follows LUI/ORI instruction pair.
+  return reinterpret_cast<Address>(pc_ + 2*Assembler::kInstrSize);
 }
 
 
@@ -164,36 +162,11 @@ Address* RelocInfo::target_reference_address() {
 }
 
 
-Handle<JSGlobalPropertyCell> RelocInfo::target_cell_handle() {
-  ASSERT(rmode_ == RelocInfo::GLOBAL_PROPERTY_CELL);
-  Address address = Memory::Address_at(pc_);
-  return Handle<JSGlobalPropertyCell>(
-      reinterpret_cast<JSGlobalPropertyCell**>(address));
-}
-
-
-JSGlobalPropertyCell* RelocInfo::target_cell() {
-  ASSERT(rmode_ == RelocInfo::GLOBAL_PROPERTY_CELL);
-  Address address = Memory::Address_at(pc_);
-  Object* object = HeapObject::FromAddress(
-      address - JSGlobalPropertyCell::kValueOffset);
-  return reinterpret_cast<JSGlobalPropertyCell*>(object);
-}
-
-
-void RelocInfo::set_target_cell(JSGlobalPropertyCell* cell) {
-  ASSERT(rmode_ == RelocInfo::GLOBAL_PROPERTY_CELL);
-  Address address = cell->address() + JSGlobalPropertyCell::kValueOffset;
-  Memory::Address_at(pc_) = address;
-}
-
-
 Address RelocInfo::call_address() {
   ASSERT((IsJSReturn(rmode()) && IsPatchedReturnSequence()) ||
          (IsDebugBreakSlot(rmode()) && IsPatchedDebugBreakSlotSequence()));
   // The pc_ offset of 0 assumes mips patched return sequence per
-  // debug-mips.cc BreakLocationIterator::SetDebugBreakAtReturn(), or
-  // debug break slot per BreakLocationIterator::SetDebugBreakAtSlot().
+  // debug-mips.cc BreakLocationIterator::SetDebugBreakAtReturn().
   return Assembler::target_address_at(pc_);
 }
 
@@ -202,8 +175,7 @@ void RelocInfo::set_call_address(Address target) {
   ASSERT((IsJSReturn(rmode()) && IsPatchedReturnSequence()) ||
          (IsDebugBreakSlot(rmode()) && IsPatchedDebugBreakSlotSequence()));
   // The pc_ offset of 0 assumes mips patched return sequence per
-  // debug-mips.cc BreakLocationIterator::SetDebugBreakAtReturn(), or
-  // debug break slot per BreakLocationIterator::SetDebugBreakAtSlot().
+  // debug-mips.cc BreakLocationIterator::SetDebugBreakAtReturn().
   Assembler::set_target_address_at(pc_, target);
 }
 
@@ -231,16 +203,15 @@ bool RelocInfo::IsPatchedReturnSequence() {
   Instr instr2 = Assembler::instr_at(pc_ + 2 * Assembler::kInstrSize);
   bool patched_return = ((instr0 & kOpcodeMask) == LUI &&
                          (instr1 & kOpcodeMask) == ORI &&
-                         ((instr2 & kOpcodeMask) == JAL ||
-                          ((instr2 & kOpcodeMask) == SPECIAL &&
-                           (instr2 & kFunctionFieldMask) == JALR)));
+                         (instr2 & kOpcodeMask) == SPECIAL &&
+                         (instr2 & kFunctionFieldMask) == JALR);
   return patched_return;
 }
 
 
 bool RelocInfo::IsPatchedDebugBreakSlotSequence() {
   Instr current_instr = Assembler::instr_at(pc_);
-  return !Assembler::IsNop(current_instr, Assembler::DEBUG_BREAK_NOP);
+  return !Assembler::is_nop(current_instr, Assembler::DEBUG_BREAK_NOP);
 }
 
 
@@ -253,8 +224,6 @@ void RelocInfo::Visit(ObjectVisitor* visitor) {
     visitor->VisitPointer(target_object_address(), this);
   } else if (RelocInfo::IsCodeTarget(mode)) {
     visitor->VisitCodeTarget(this);
-  } else if (mode == RelocInfo::GLOBAL_PROPERTY_CELL) {
-    visitor->VisitGlobalPropertyCell(this);
   } else if (mode == RelocInfo::EXTERNAL_REFERENCE) {
     // RelocInfo is needed when external-references must be serialized by
     // Serializer Visitor in serialize.cc. It is ignored by visitors that
@@ -281,8 +250,6 @@ void RelocInfo::Visit() {
     StaticVisitor::VisitPointer(target_object_address());
   } else if (RelocInfo::IsCodeTarget(mode)) {
     StaticVisitor::VisitCodeTarget(this);
-  } else if (mode == RelocInfo::GLOBAL_PROPERTY_CELL) {
-    StaticVisitor::VisitGlobalPropertyCell(this);
   } else if (mode == RelocInfo::EXTERNAL_REFERENCE) {
     StaticVisitor::VisitExternalReference(target_reference_address());
 #ifdef ENABLE_DEBUGGER_SUPPORT

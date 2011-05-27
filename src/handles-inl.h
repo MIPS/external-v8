@@ -36,14 +36,14 @@
 namespace v8 {
 namespace internal {
 
-template<typename T>
+template<class T>
 Handle<T>::Handle(T* obj) {
   ASSERT(!obj->IsFailure());
   location_ = HandleScope::CreateHandle(obj);
 }
 
 
-template <typename T>
+template <class T>
 inline T* Handle<T>::operator*() const {
   ASSERT(location_ != NULL);
   ASSERT(reinterpret_cast<Address>(*location_) != kHandleZapValue);

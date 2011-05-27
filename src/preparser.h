@@ -144,8 +144,7 @@ class PreParser {
         scope_(NULL),
         stack_limit_(stack_limit),
         stack_overflow_(false),
-        allow_lazy_(true),
-        parenthesized_function_(false) { }
+        allow_lazy_(true) { }
 
   // Preparse the program. Only called in PreParseProgram after creating
   // the instance.
@@ -217,11 +216,8 @@ class PreParser {
   Identifier ParseIdentifierName(bool* ok);
   Identifier ParseIdentifierOrGetOrSet(bool* is_get, bool* is_set, bool* ok);
 
-  // Logs the currently parsed literal as a symbol in the preparser data.
-  void LogSymbol();
-  // Log the currently parsed identifier.
   Identifier GetIdentifierSymbol();
-  // Log the currently parsed string literal.
+  unsigned int HexDigitValue(char digit);
   Expression GetStringSymbol();
 
   i::Token::Value peek() {
@@ -242,8 +238,6 @@ class PreParser {
     }
     return scanner_->Next();
   }
-
-  bool peek_any_identifier();
 
   void Consume(i::Token::Value token) { Next(); }
 
@@ -271,7 +265,6 @@ class PreParser {
   uintptr_t stack_limit_;
   bool stack_overflow_;
   bool allow_lazy_;
-  bool parenthesized_function_;
 };
 } }  // v8::preparser
 

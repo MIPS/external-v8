@@ -31,62 +31,62 @@ namespace v8 {
 namespace internal {
 
 
-#ifdef OBJECT_PRINT
-void LookupResult::Print(FILE* out) {
+#ifdef DEBUG
+void LookupResult::Print() {
   if (!IsFound()) {
-    PrintF(out, "Not Found\n");
+    PrintF("Not Found\n");
     return;
   }
 
-  PrintF(out, "LookupResult:\n");
-  PrintF(out, " -cacheable = %s\n", IsCacheable() ? "true" : "false");
-  PrintF(out, " -attributes = %x\n", GetAttributes());
+  PrintF("LookupResult:\n");
+  PrintF(" -cacheable = %s\n", IsCacheable() ? "true" : "false");
+  PrintF(" -attributes = %x\n", GetAttributes());
   switch (type()) {
     case NORMAL:
-      PrintF(out, " -type = normal\n");
-      PrintF(out, " -entry = %d", GetDictionaryEntry());
+      PrintF(" -type = normal\n");
+      PrintF(" -entry = %d", GetDictionaryEntry());
       break;
     case MAP_TRANSITION:
-      PrintF(out, " -type = map transition\n");
-      PrintF(out, " -map:\n");
-      GetTransitionMap()->Print(out);
-      PrintF(out, "\n");
+      PrintF(" -type = map transition\n");
+      PrintF(" -map:\n");
+      GetTransitionMap()->Print();
+      PrintF("\n");
       break;
     case CONSTANT_FUNCTION:
-      PrintF(out, " -type = constant function\n");
-      PrintF(out, " -function:\n");
-      GetConstantFunction()->Print(out);
-      PrintF(out, "\n");
+      PrintF(" -type = constant function\n");
+      PrintF(" -function:\n");
+      GetConstantFunction()->Print();
+      PrintF("\n");
       break;
     case FIELD:
-      PrintF(out, " -type = field\n");
-      PrintF(out, " -index = %d", GetFieldIndex());
-      PrintF(out, "\n");
+      PrintF(" -type = field\n");
+      PrintF(" -index = %d", GetFieldIndex());
+      PrintF("\n");
       break;
     case CALLBACKS:
-      PrintF(out, " -type = call backs\n");
-      PrintF(out, " -callback object:\n");
-      GetCallbackObject()->Print(out);
+      PrintF(" -type = call backs\n");
+      PrintF(" -callback object:\n");
+      GetCallbackObject()->Print();
       break;
     case INTERCEPTOR:
-      PrintF(out, " -type = lookup interceptor\n");
+      PrintF(" -type = lookup interceptor\n");
       break;
     case CONSTANT_TRANSITION:
-      PrintF(out, " -type = constant property transition\n");
+      PrintF(" -type = constant property transition\n");
       break;
     case NULL_DESCRIPTOR:
-      PrintF(out, " =type = null descriptor\n");
+      PrintF(" =type = null descriptor\n");
       break;
   }
 }
 
 
-void Descriptor::Print(FILE* out) {
-  PrintF(out, "Descriptor ");
-  GetKey()->ShortPrint(out);
-  PrintF(out, " @ ");
-  GetValue()->ShortPrint(out);
-  PrintF(out, " %d\n", GetDetails().index());
+void Descriptor::Print() {
+  PrintF("Descriptor ");
+  GetKey()->ShortPrint();
+  PrintF(" @ ");
+  GetValue()->ShortPrint();
+  PrintF(" %d\n", GetDetails().index());
 }
 
 

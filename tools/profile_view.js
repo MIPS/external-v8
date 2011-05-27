@@ -26,13 +26,18 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
+// Initlialize namespaces
+var devtools = devtools || {};
+devtools.profiler = devtools.profiler || {};
+
+
 /**
  * Creates a Profile View builder object.
  *
  * @param {number} samplingRate Number of ms between profiler ticks.
  * @constructor
  */
-function ViewBuilder(samplingRate) {
+devtools.profiler.ViewBuilder = function(samplingRate) {
   this.samplingRate = samplingRate;
 };
 
@@ -40,11 +45,11 @@ function ViewBuilder(samplingRate) {
 /**
  * Builds a profile view for the specified call tree.
  *
- * @param {CallTree} callTree A call tree.
+ * @param {devtools.profiler.CallTree} callTree A call tree.
  * @param {boolean} opt_bottomUpViewWeights Whether remapping
  *     of self weights for a bottom up view is needed.
  */
-ViewBuilder.prototype.buildView = function(
+devtools.profiler.ViewBuilder.prototype.buildView = function(
     callTree, opt_bottomUpViewWeights) {
   var head;
   var samplingRate = this.samplingRate;
@@ -75,11 +80,11 @@ ViewBuilder.prototype.buildView = function(
 /**
  * Factory method for a profile view.
  *
- * @param {ProfileView.Node} head View head node.
- * @return {ProfileView} Profile view.
+ * @param {devtools.profiler.ProfileView.Node} head View head node.
+ * @return {devtools.profiler.ProfileView} Profile view.
  */
-ViewBuilder.prototype.createView = function(head) {
-  return new ProfileView(head);
+devtools.profiler.ViewBuilder.prototype.createView = function(head) {
+  return new devtools.profiler.ProfileView(head);
 };
 
 
@@ -92,12 +97,12 @@ ViewBuilder.prototype.createView = function(head) {
  *     profile they can be either callees or callers.)
  * @param {number} selfTime Amount of time that application spent in the
  *     corresponding function only.
- * @param {ProfileView.Node} head Profile view head.
- * @return {ProfileView.Node} Profile view node.
+ * @param {devtools.profiler.ProfileView.Node} head Profile view head.
+ * @return {devtools.profiler.ProfileView.Node} Profile view node.
  */
-ViewBuilder.prototype.createViewNode = function(
+devtools.profiler.ViewBuilder.prototype.createViewNode = function(
     funcName, totalTime, selfTime, head) {
-  return new ProfileView.Node(
+  return new devtools.profiler.ProfileView.Node(
       funcName, totalTime, selfTime, head);
 };
 
@@ -106,10 +111,10 @@ ViewBuilder.prototype.createViewNode = function(
  * Creates a Profile View object. It allows to perform sorting
  * and filtering actions on the profile.
  *
- * @param {ProfileView.Node} head Head (root) node.
+ * @param {devtools.profiler.ProfileView.Node} head Head (root) node.
  * @constructor
  */
-function ProfileView(head) {
+devtools.profiler.ProfileView = function(head) {
   this.head = head;
 };
 
@@ -117,11 +122,11 @@ function ProfileView(head) {
 /**
  * Sorts the profile view using the specified sort function.
  *
- * @param {function(ProfileView.Node,
- *     ProfileView.Node):number} sortFunc A sorting
+ * @param {function(devtools.profiler.ProfileView.Node,
+ *     devtools.profiler.ProfileView.Node):number} sortFunc A sorting
  *     functions. Must comply with Array.sort sorting function requirements.
  */
-ProfileView.prototype.sort = function(sortFunc) {
+devtools.profiler.ProfileView.prototype.sort = function(sortFunc) {
   this.traverse(function (node) {
     node.sortChildren(sortFunc);
   });
@@ -131,9 +136,9 @@ ProfileView.prototype.sort = function(sortFunc) {
 /**
  * Traverses profile view nodes in preorder.
  *
- * @param {function(ProfileView.Node)} f Visitor function.
+ * @param {function(devtools.profiler.ProfileView.Node)} f Visitor function.
  */
-ProfileView.prototype.traverse = function(f) {
+devtools.profiler.ProfileView.prototype.traverse = function(f) {
   var nodesToTraverse = new ConsArray();
   nodesToTraverse.concat([this.head]);
   while (!nodesToTraverse.atEnd()) {
@@ -154,10 +159,10 @@ ProfileView.prototype.traverse = function(f) {
  *     profile they can be either callees or callers.)
  * @param {number} selfTime Amount of time that application spent in the
  *     corresponding function only.
- * @param {ProfileView.Node} head Profile view head.
+ * @param {devtools.profiler.ProfileView.Node} head Profile view head.
  * @constructor
  */
-ProfileView.Node = function(
+devtools.profiler.ProfileView.Node = function(
     internalFuncName, totalTime, selfTime, head) {
   this.internalFuncName = internalFuncName;
   this.totalTime = totalTime;
@@ -171,7 +176,7 @@ ProfileView.Node = function(
 /**
  * Returns a share of the function's total time in application's total time.
  */
-ProfileView.Node.prototype.__defineGetter__(
+devtools.profiler.ProfileView.Node.prototype.__defineGetter__(
     'totalPercent',
     function() { return this.totalTime /
       (this.head ? this.head.totalTime : this.totalTime) * 100.0; });
@@ -180,7 +185,7 @@ ProfileView.Node.prototype.__defineGetter__(
 /**
  * Returns a share of the function's self time in application's total time.
  */
-ProfileView.Node.prototype.__defineGetter__(
+devtools.profiler.ProfileView.Node.prototype.__defineGetter__(
     'selfPercent',
     function() { return this.selfTime /
       (this.head ? this.head.totalTime : this.totalTime) * 100.0; });
@@ -189,7 +194,7 @@ ProfileView.Node.prototype.__defineGetter__(
 /**
  * Returns a share of the function's total time in its parent's total time.
  */
-ProfileView.Node.prototype.__defineGetter__(
+devtools.profiler.ProfileView.Node.prototype.__defineGetter__(
     'parentTotalPercent',
     function() { return this.totalTime /
       (this.parent ? this.parent.totalTime : this.totalTime) * 100.0; });
@@ -198,9 +203,9 @@ ProfileView.Node.prototype.__defineGetter__(
 /**
  * Adds a child to the node.
  *
- * @param {ProfileView.Node} node Child node.
+ * @param {devtools.profiler.ProfileView.Node} node Child node.
  */
-ProfileView.Node.prototype.addChild = function(node) {
+devtools.profiler.ProfileView.Node.prototype.addChild = function(node) {
   node.parent = this;
   this.children.push(node);
 };
@@ -209,11 +214,11 @@ ProfileView.Node.prototype.addChild = function(node) {
 /**
  * Sorts all the node's children recursively.
  *
- * @param {function(ProfileView.Node,
- *     ProfileView.Node):number} sortFunc A sorting
+ * @param {function(devtools.profiler.ProfileView.Node,
+ *     devtools.profiler.ProfileView.Node):number} sortFunc A sorting
  *     functions. Must comply with Array.sort sorting function requirements.
  */
-ProfileView.Node.prototype.sortChildren = function(
+devtools.profiler.ProfileView.Node.prototype.sortChildren = function(
     sortFunc) {
   this.children.sort(sortFunc);
 };

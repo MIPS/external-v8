@@ -48,22 +48,13 @@ namespace internal {
 
 
 void CPU::Setup() {
-  CpuFeatures::Probe(true);
-  // For now just disable lithium/crankshaft.
-  if (true || !CpuFeatures::IsSupported(FPU) || Serializer::enabled()) {
-    V8::DisableCrankshaft();
-  }
+  CpuFeatures::Probe();
 }
 
 
 void CPU::FlushICache(void* start, size_t size) {
-  // Nothing to do flushing no instructions.
-  if (size == 0) {
-    return;
-  }
+#ifdef __mips
 
-#if !defined (USE_SIMULATOR)
- 
 #if defined(ANDROID)
   char *end = reinterpret_cast<char *>(start) + size;
   cacheflush(reinterpret_cast<intptr_t>(start), reinterpret_cast<intptr_t>(end), 0);
@@ -83,7 +74,7 @@ void CPU::FlushICache(void* start, size_t size) {
   // that the Icache was flushed.
   // None of this code ends up in the snapshot so there are no issues
   // around whether or not to generate the code when building snapshots.
-  Simulator::FlushICache(start, size);
+  assembler::mips::Simulator::FlushICache(start, size);
 #endif    // #ifdef __mips
 }
 

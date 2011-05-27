@@ -297,13 +297,13 @@ void PrettyPrinter::VisitSlot(Slot* node) {
       Print("parameter[%d]", node->index());
       break;
     case Slot::LOCAL:
-      Print("local[%d]", node->index());
+      Print("frame[%d]", node->index());
       break;
     case Slot::CONTEXT:
-      Print("context[%d]", node->index());
+      Print(".context[%d]", node->index());
       break;
     case Slot::LOOKUP:
-      Print("lookup[");
+      Print(".context[");
       PrintLiteral(node->var()->name(), false);
       Print("]");
       break;
@@ -999,7 +999,24 @@ void AstPrinter::VisitCatchExtensionObject(CatchExtensionObject* node) {
 
 void AstPrinter::VisitSlot(Slot* node) {
   PrintIndented("SLOT ");
-  PrettyPrinter::VisitSlot(node);
+  switch (node->type()) {
+    case Slot::PARAMETER:
+      Print("parameter[%d]", node->index());
+      break;
+    case Slot::LOCAL:
+      Print("frame[%d]", node->index());
+      break;
+    case Slot::CONTEXT:
+      Print(".context[%d]", node->index());
+      break;
+    case Slot::LOOKUP:
+      Print(".context[");
+      PrintLiteral(node->var()->name(), false);
+      Print("]");
+      break;
+    default:
+      UNREACHABLE();
+  }
   Print("\n");
 }
 

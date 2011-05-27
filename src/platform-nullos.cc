@@ -35,7 +35,6 @@
 #include "v8.h"
 
 #include "platform.h"
-#include "vm-state-inl.h"
 
 
 namespace v8 {
@@ -125,19 +124,6 @@ void OS::Print(const char* format, ...) {
 void OS::VPrint(const char* format, va_list args) {
   // Minimalistic implementation for bootstrapping.
   vfprintf(stdout, format, args);
-}
-
-
-void OS::FPrint(FILE* out, const char* format, ...) {
-  va_list args;
-  va_start(args, format);
-  VFPrint(out, format, args);
-  va_end(args);
-}
-
-
-void OS::VFPrint(FILE* out, const char* format, va_list args) {
-  vfprintf(out, format, args);
 }
 
 
@@ -242,12 +228,6 @@ void OS::DebugBreak() {
 }
 
 
-OS::MemoryMappedFile* OS::MemoryMappedFile::open(const char* name) {
-  UNIMPLEMENTED();
-  return NULL;
-}
-
-
 OS::MemoryMappedFile* OS::MemoryMappedFile::create(const char* name, int size,
     void* initial) {
   UNIMPLEMENTED();
@@ -341,25 +321,12 @@ bool ThreadHandle::IsValid() const {
 
 
 Thread::Thread() : ThreadHandle(ThreadHandle::INVALID) {
-  set_name("v8:<unknown>");
-  UNIMPLEMENTED();
-}
-
-
-Thread::Thread(const char* name) : ThreadHandle(ThreadHandle::INVALID) {
-  set_name(name);
   UNIMPLEMENTED();
 }
 
 
 Thread::~Thread() {
   UNIMPLEMENTED();
-}
-
-
-void Thread::set_name(const char* name) {
-  strncpy(name_, name, sizeof(name_));
-  name_[sizeof(name_) - 1] = '\0';
 }
 
 

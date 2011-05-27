@@ -1,4 +1,4 @@
-// Copyright 2011 the V8 project authors. All rights reserved.
+// Copyright 2010 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -36,6 +36,12 @@
 #include "debug.h"
 #include "runtime.h"
 
+#ifdef _MIPS_ARCH_MIPS32R2
+  #define mips32r2 1
+#else
+  #define mips32r2 0
+#endif
+
 namespace v8 {
 namespace internal {
 
@@ -53,51 +59,58 @@ MacroAssembler::MacroAssembler(void* buffer, int size)
 
 #define REGISTER_TARGET_BODY(Name) \
 void MacroAssembler::Name(Register target, \
-                          BranchDelaySlot bd) { \
-  Name(Operand(target), bd); \
+                          bool ProtectBranchDelaySlot) { \
+  Name(Operand(target), ProtectBranchDelaySlot); \
 } \
 void MacroAssembler::Name(Register target, COND_TYPED_ARGS, \
-                          BranchDelaySlot bd) { \
-  Name(Operand(target), COND_ARGS, bd); \
+                          bool ProtectBranchDelaySlot) { \
+  Name(Operand(target), COND_ARGS, ProtectBranchDelaySlot); \
 }
 
 
 #define INT_PTR_TARGET_BODY(Name) \
 void MacroAssembler::Name(intptr_t target, RelocInfo::Mode rmode, \
-                          BranchDelaySlot bd) { \
-  Name(Operand(target, rmode), bd); \
+                          bool ProtectBranchDelaySlot) { \
+  Name(Operand(target, rmode), ProtectBranchDelaySlot); \
 } \
 void MacroAssembler::Name(intptr_t target, \
                           RelocInfo::Mode rmode, \
                           COND_TYPED_ARGS, \
-                          BranchDelaySlot bd) { \
-  Name(Operand(target, rmode), COND_ARGS, bd); \
+                          bool ProtectBranchDelaySlot) { \
+  Name(Operand(target, rmode), COND_ARGS, ProtectBranchDelaySlot); \
 }
 
 
 #define BYTE_PTR_TARGET_BODY(Name) \
 void MacroAssembler::Name(byte* target, RelocInfo::Mode rmode, \
-                          BranchDelaySlot bd) { \
-  Name(reinterpret_cast<intptr_t>(target), rmode, bd); \
+                          bool ProtectBranchDelaySlot) { \
+  Name(reinterpret_cast<intptr_t>(target), rmode, ProtectBranchDelaySlot); \
 } \
 void MacroAssembler::Name(byte* target, \
                           RelocInfo::Mode rmode, \
                           COND_TYPED_ARGS, \
-                          BranchDelaySlot bd) { \
-  Name(reinterpret_cast<intptr_t>(target), rmode, COND_ARGS, bd); \
+                          bool ProtectBranchDelaySlot) { \
+  Name(reinterpret_cast<intptr_t>(target), \
+       rmode, \
+       COND_ARGS, \
+       ProtectBranchDelaySlot); \
 }
 
 
 #define CODE_TARGET_BODY(Name) \
 void MacroAssembler::Name(Handle<Code> target, RelocInfo::Mode rmode, \
-                          BranchDelaySlot bd) { \
-  Name(reinterpret_cast<intptr_t>(target.location()), rmode, bd); \
+                          bool ProtectBranchDelaySlot) { \
+  Name(reinterpret_cast<intptr_t>(target.location()), \
+       rmode, ProtectBranchDelaySlot); \
 } \
 void MacroAssembler::Name(Handle<Code> target, \
                           RelocInfo::Mode rmode, \
                           COND_TYPED_ARGS, \
-                          BranchDelaySlot bd) { \
-  Name(reinterpret_cast<intptr_t>(target.location()), rmode, COND_ARGS, bd); \
+                          bool ProtectBranchDelaySlot) { \
+  Name(reinterpret_cast<intptr_t>(target.location()), \
+       rmode, \
+       COND_ARGS, \
+       ProtectBranchDelaySlot); \
 }
 
 
@@ -117,14 +130,14 @@ CODE_TARGET_BODY(Call)
 #undef CODE_TARGET_BODY
 
 
-void MacroAssembler::Ret(BranchDelaySlot bd) {
-  Jump(Operand(ra), bd);
+void MacroAssembler::Ret(bool ProtectBranchDelaySlot) {
+  Jump(Operand(ra), ProtectBranchDelaySlot);
 }
 
 
 void MacroAssembler::Ret(Condition cond, Register r1, const Operand& r2,
-    BranchDelaySlot bd) {
-  Jump(Operand(ra), cond, r1, r2, bd);
+    bool ProtectBranchDelaySlot) {
+  Jump(Operand(ra), cond, r1, r2, ProtectBranchDelaySlot);
 }
 
 
@@ -161,7 +174,7 @@ void MacroAssembler::StoreRoot(Register source,
 void MacroAssembler::RecordWriteHelper(Register object,
                                        Register address,
                                        Register scratch) {
-  if (emit_debug_code()) {
+  if (FLAG_debug_code) {
     // Check that the object is not in new space.
     Label not_in_new_space;
     InNewSpace(object, scratch, ne, &not_in_new_space);
@@ -229,7 +242,7 @@ void MacroAssembler::RecordWrite(Register object,
 
   // Clobber all input registers when running with the debug-code flag
   // turned on to provoke errors.
-  if (emit_debug_code()) {
+  if (FLAG_debug_code) {
     li(object, Operand(BitCast<int32_t>(kZapValue)));
     li(scratch0, Operand(BitCast<int32_t>(kZapValue)));
     li(scratch1, Operand(BitCast<int32_t>(kZapValue)));
@@ -261,7 +274,7 @@ void MacroAssembler::RecordWrite(Register object,
 
   // Clobber all input registers when running with the debug-code flag
   // turned on to provoke errors.
-  if (emit_debug_code()) {
+  if (FLAG_debug_code) {
     li(object, Operand(BitCast<int32_t>(kZapValue)));
     li(address, Operand(BitCast<int32_t>(kZapValue)));
     li(scratch, Operand(BitCast<int32_t>(kZapValue)));
@@ -296,7 +309,7 @@ void MacroAssembler::CheckAccessGlobalProxy(Register holder_reg,
   lw(scratch, FieldMemOperand(scratch, GlobalObject::kGlobalContextOffset));
 
   // Check the context is a global context.
-  if (emit_debug_code()) {
+  if (FLAG_debug_code) {
     // TODO(119): Avoid push(holder_reg)/pop(holder_reg).
     Push(holder_reg);  // Temporarily save holder on the stack.
     // Read the first word and compare to the global_context_map.
@@ -312,7 +325,7 @@ void MacroAssembler::CheckAccessGlobalProxy(Register holder_reg,
   Branch(&same_contexts, eq, scratch, Operand(at));
 
   // Check the context is a global context.
-  if (emit_debug_code()) {
+  if (FLAG_debug_code) {
     // TODO(119): Avoid push(holder_reg)/pop(holder_reg).
     Push(holder_reg);  // Temporarily save holder on the stack.
     mov(holder_reg, at);  // Move at to its holding place.
@@ -566,13 +579,13 @@ void MacroAssembler::li(Register rd, Operand j, bool gen2instr) {
     // Normal load of an immediate value which does not need Relocation Info.
     if (is_int16(j.imm32_)) {
       addiu(rd, zero_reg, j.imm32_);
-    } else if (!(j.imm32_ & kHiMask)) {
+    } else if (!(j.imm32_ & HIMask)) {
       ori(rd, zero_reg, j.imm32_);
-    } else if (!(j.imm32_ & kImm16Mask)) {
-      lui(rd, (j.imm32_ & kHiMask) >> kLuiShift);
+    } else if (!(j.imm32_ & LOMask)) {
+      lui(rd, (HIMask & j.imm32_) >> 16);
     } else {
-      lui(rd, (j.imm32_ & kHiMask) >> kLuiShift);
-      ori(rd, rd, (j.imm32_ & kImm16Mask));
+      lui(rd, (HIMask & j.imm32_) >> 16);
+      ori(rd, rd, (LOMask & j.imm32_));
     }
   } else if (MustUseReg(j.rmode_) || gen2instr) {
     if (MustUseReg(j.rmode_)) {
@@ -580,8 +593,19 @@ void MacroAssembler::li(Register rd, Operand j, bool gen2instr) {
     }
     // We need always the same number of instructions as we may need to patch
     // this code to load another value which may need 2 instructions to load.
-    lui(rd, (j.imm32_ & kHiMask) >> kLuiShift);
-    ori(rd, rd, (j.imm32_ & kImm16Mask));
+    if (is_int16(j.imm32_)) {
+      nop();
+      addiu(rd, zero_reg, j.imm32_);
+    } else if (!(j.imm32_ & HIMask)) {
+      nop();
+      ori(rd, zero_reg, j.imm32_);
+    } else if (!(j.imm32_ & LOMask)) {
+      nop();
+      lui(rd, (HIMask & j.imm32_) >> 16);
+    } else {
+      lui(rd, (HIMask & j.imm32_) >> 16);
+      ori(rd, rd, (LOMask & j.imm32_));
+    }
   }
 }
 
@@ -797,7 +821,6 @@ void MacroAssembler::ConvertToInt32(Register source,
                                     Register dest,
                                     Register scratch,
                                     Register scratch2,
-                                    FPURegister double_scratch,
                                     Label *not_int32) {
   Label right_exponent, done;
   // Get exponent word (ENDIAN issues).
@@ -842,10 +865,10 @@ void MacroAssembler::ConvertToInt32(Register source,
     // conversion using round to zero. Since the FP value was qualified
     // above, the resulting integer should be a legal int32.
     // The original 'Exponent' word is still in scratch.
-    lwc1(double_scratch, FieldMemOperand(source, HeapNumber::kMantissaOffset));
-    mtc1(scratch, FPURegister::from_code(double_scratch.code() + 1));
-    trunc_w_d(double_scratch, double_scratch);
-    mfc1(dest, double_scratch);
+    lwc1(f12, FieldMemOperand(source, HeapNumber::kMantissaOffset));
+    mtc1(scratch, f13);
+    trunc_w_d(f0, f12);
+    mfc1(dest, f0);
   } else {
     // On entry, dest has final downshift, scratch has original sign/exp/mant.
     // Save sign bit in top bit of dest.
@@ -886,20 +909,6 @@ void MacroAssembler::ConvertToInt32(Register source,
 }
 
 
-void MacroAssembler::GetLeastBitsFromSmi(Register dst,
-                                         Register src,
-                                         int num_least_bits) {
-  Ext(dst, src, kSmiTagSize, num_least_bits);
-}
-
-
-void MacroAssembler::GetLeastBitsFromInt32(Register dst,
-                                           Register src,
-                                           int num_least_bits) {
-  And(dst, src, Operand((1 << num_least_bits) - 1));
-}
-
-
 // Emulated condtional branches do not emit a nop in the branch delay slot.
 //
 // BRANCH_ARGS_CHECK checks that conditional jump arguments are correct.
@@ -908,18 +917,19 @@ void MacroAssembler::GetLeastBitsFromInt32(Register dst,
     (cond != cc_always && (!rs.is(zero_reg) || !rt.rm().is(zero_reg))))
 
 
-void MacroAssembler::Branch(int16_t offset, BranchDelaySlot bdslot) {
+void MacroAssembler::Branch(int16_t offset,
+                            bool ProtectBranchDelaySlot) {
   b(offset);
 
   // Emit a nop in the branch delay slot if required.
-  if (bdslot == PROTECT)
+  if (ProtectBranchDelaySlot)
     nop();
 }
 
 
 void MacroAssembler::Branch(int16_t offset, Condition cond, Register rs,
                             const Operand& rt,
-                            BranchDelaySlot bdslot) {
+                            bool ProtectBranchDelaySlot) {
   BRANCH_ARGS_CHECK(cond, rs, rt);
   ASSERT(!rs.is(zero_reg));
   Register r2 = no_reg;
@@ -1129,26 +1139,27 @@ void MacroAssembler::Branch(int16_t offset, Condition cond, Register rs,
     }
   }
   // Emit a nop in the branch delay slot if required.
-  if (bdslot == PROTECT)
+  if (ProtectBranchDelaySlot)
     nop();
 }
 
 
-void MacroAssembler::Branch(Label* L, BranchDelaySlot bdslot) {
+void MacroAssembler::Branch(Label* L,
+                            bool ProtectBranchDelaySlot) {
   // We use branch_offset as an argument for the branch instructions to be sure
   // it is called just before generating the branch instruction, as needed.
 
   b(shifted_branch_offset(L, false));
 
   // Emit a nop in the branch delay slot if required.
-  if (bdslot == PROTECT)
+  if (ProtectBranchDelaySlot)
     nop();
 }
 
 
 void MacroAssembler::Branch(Label* L, Condition cond, Register rs,
                             const Operand& rt,
-                            BranchDelaySlot bdslot) {
+                            bool ProtectBranchDelaySlot) {
   BRANCH_ARGS_CHECK(cond, rs, rt);
 
   int32_t offset;
@@ -1399,7 +1410,7 @@ void MacroAssembler::Branch(Label* L, Condition cond, Register rs,
   // Check that offset could actually hold on an int16_t.
   ASSERT(is_int16(offset));
   // Emit a nop in the branch delay slot if required.
-  if (bdslot == PROTECT)
+  if (ProtectBranchDelaySlot)
     nop();
 }
 
@@ -1408,18 +1419,18 @@ void MacroAssembler::Branch(Label* L, Condition cond, Register rs,
 // slt instructions. We could use sub or add instead but we would miss overflow
 // cases, so we keep slt and add an intermediate third instruction.
 void MacroAssembler::BranchAndLink(int16_t offset,
-                                   BranchDelaySlot bdslot) {
+                                   bool ProtectBranchDelaySlot) {
   bal(offset);
 
   // Emit a nop in the branch delay slot if required.
-  if (bdslot == PROTECT)
+  if (ProtectBranchDelaySlot)
     nop();
 }
 
 
 void MacroAssembler::BranchAndLink(int16_t offset, Condition cond, Register rs,
                                    const Operand& rt,
-                                   BranchDelaySlot bdslot) {
+                                   bool ProtectBranchDelaySlot) {
   BRANCH_ARGS_CHECK(cond, rs, rt);
   Register r2 = no_reg;
   Register scratch = at;
@@ -1494,23 +1505,24 @@ void MacroAssembler::BranchAndLink(int16_t offset, Condition cond, Register rs,
       UNREACHABLE();
   }
   // Emit a nop in the branch delay slot if required.
-  if (bdslot == PROTECT)
+  if (ProtectBranchDelaySlot)
     nop();
 }
 
 
-void MacroAssembler::BranchAndLink(Label* L, BranchDelaySlot bdslot) {
+void MacroAssembler::BranchAndLink(Label* L,
+                                   bool ProtectBranchDelaySlot) {
   bal(shifted_branch_offset(L, false));
 
   // Emit a nop in the branch delay slot if required.
-  if (bdslot == PROTECT)
+  if (ProtectBranchDelaySlot)
     nop();
 }
 
 
 void MacroAssembler::BranchAndLink(Label* L, Condition cond, Register rs,
                                    const Operand& rt,
-                                   BranchDelaySlot bdslot) {
+                                   bool ProtectBranchDelaySlot) {
   BRANCH_ARGS_CHECK(cond, rs, rt);
 
   int32_t offset;
@@ -1601,72 +1613,80 @@ void MacroAssembler::BranchAndLink(Label* L, Condition cond, Register rs,
   ASSERT(is_int16(offset));
 
   // Emit a nop in the branch delay slot if required.
-  if (bdslot == PROTECT)
+  if (ProtectBranchDelaySlot)
     nop();
 }
 
 
-void MacroAssembler::Jump(const Operand& target, BranchDelaySlot bdslot) {
-  BlockTrampolinePoolScope block_trampoline_pool(this);
+void MacroAssembler::Jump(const Operand& target,
+                          bool ProtectBranchDelaySlot) {
   if (target.is_reg()) {
-    jr(target.rm());
-  } else {
-    // For Mips, all calls are relocatable => MustUseReg must be true.
-    ASSERT(MustUseReg(target.rmode_));
-    li(t9, target);
-    jr(t9);
-    //j_or_jr(target.imm32_, t9);  // this generates 1 instr + 1 delay slot
+      jr(target.rm());
+  } else {    // !target.is_reg()
+    if (!MustUseReg(target.rmode_)) {
+        j(target.imm32_);
+    } else {  // MustUseReg(target)
+      li(t9, target);
+      jr(t9);
+    }
   }
   // Emit a nop in the branch delay slot if required.
-  if (bdslot == PROTECT)
+  if (ProtectBranchDelaySlot)
     nop();
 }
 
 
 void MacroAssembler::Jump(const Operand& target,
                           Condition cond, Register rs, const Operand& rt,
-                          BranchDelaySlot bdslot) {
-  BlockTrampolinePoolScope block_trampoline_pool(this);
+                          bool ProtectBranchDelaySlot) {
   BRANCH_ARGS_CHECK(cond, rs, rt);
   if (target.is_reg()) {
-    if (cond != cc_always) {
+    if (cond == cc_always) {
+      jr(target.rm());
+    } else {
       Branch(2, NegateCondition(cond), rs, rt);
+      jr(target.rm());
     }
-    jr(target.rm());
-  } else {  // Not register target.
-    // For Mips, all calls are relocatable => MustUseReg must be true.
-    ASSERT(MustUseReg(target.rmode_));
-    if (cond != cc_always) {
-      Branch(4, NegateCondition(cond), rs, rt);
+  } else {    // !target.is_reg()
+    if (!MustUseReg(target.rmode_)) {
+      if (cond == cc_always) {
+        j(target.imm32_);
+      } else {
+        Branch(2, NegateCondition(cond), rs, rt);
+        j(target.imm32_);  // Will generate only one instruction.
+      }
+    } else {  // MustUseReg(target)
+      li(t9, target);
+      if (cond == cc_always) {
+        jr(t9);
+      } else {
+        Branch(2, NegateCondition(cond), rs, rt);
+        jr(t9);  // Will generate only one instruction.
+      }
     }
-    li(t9, target);
-    jr(t9);
-    //j_or_jr(target.imm32_, t9);  // this generates 1 instr + 1 delay slot
   }
   // Emit a nop in the branch delay slot if required.
-  if (bdslot == PROTECT)
+  if (ProtectBranchDelaySlot)
     nop();
 }
 
 
 // Note: To call gcc-compiled C code on mips, you must call thru t9.
-void MacroAssembler::Call(const Operand& target, BranchDelaySlot bdslot) {
+void MacroAssembler::Call(const Operand& target,
+                          bool ProtectBranchDelaySlot) {
   BlockTrampolinePoolScope block_trampoline_pool(this);
   if (target.is_reg()) {
       jalr(target.rm());
   } else {    // !target.is_reg()
-    // For Mips, all calls are relocatable => MustUseReg must be true.
-    ASSERT(MustUseReg(target.rmode_));
-
-    // Must record previous source positions before the
-    // li() generates a new code target.
-    positions_recorder()->WriteRecordedPositions();
-    li(t9, target);
-    jalr(t9);
-    //jal_or_jalr(target.imm32_, t9);  // this generates 1 instr + 1 delay slot
+    if (!MustUseReg(target.rmode_)) {
+      jal(target.imm32_);
+    } else {  // MustUseReg(target)
+      li(t9, target);
+      jalr(t9);
+    }
   }
   // Emit a nop in the branch delay slot if required.
-  if (bdslot == PROTECT)
+  if (ProtectBranchDelaySlot)
     nop();
 }
 
@@ -1674,27 +1694,43 @@ void MacroAssembler::Call(const Operand& target, BranchDelaySlot bdslot) {
 // Note: To call gcc-compiled C code on mips, you must call thru t9.
 void MacroAssembler::Call(const Operand& target,
                           Condition cond, Register rs, const Operand& rt,
-                          BranchDelaySlot bdslot) {
-  BlockTrampolinePoolScope block_trampoline_pool(this);
+                          bool ProtectBranchDelaySlot) {
   BRANCH_ARGS_CHECK(cond, rs, rt);
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   if (target.is_reg()) {
-    if (cond != cc_always) {
+    if (cond == cc_always) {
+      jalr(target.rm());
+    } else {
       Branch(2, NegateCondition(cond), rs, rt);
+      jalr(target.rm());
     }
-    jalr(target.rm());
   } else {    // !target.is_reg()
-    // For Mips, all calls are relocatable => MustUseReg must be true.
-    ASSERT(MustUseReg(target.rmode_));
-    if (cond != cc_always) {
-      Branch(4, NegateCondition(cond), rs, rt);
+    if (!MustUseReg(target.rmode_)) {
+      if (cond == cc_always) {
+        jal(target.imm32_);
+      } else {
+        Branch(2, NegateCondition(cond), rs, rt);
+        jal(target.imm32_);  // Will generate only one instruction.
+      }
+    } else {  // MustUseReg(target)
+      li(t9, target);
+      if (cond == cc_always) {
+        jalr(t9);
+      } else {
+        Branch(2, NegateCondition(cond), rs, rt);
+        jalr(t9);  // Will generate only one instruction.
+      }
     }
-    li(t9, target);
-    jalr(t9);
-    //jal_or_jalr(target.imm32_, t9);  // this generates 1 instr + 1 delay slot
   }
   // Emit a nop in the branch delay slot if required.
-  if (bdslot == PROTECT)
+  if (ProtectBranchDelaySlot)
     nop();
+}
+
+
+void MacroAssembler::StackLimitCheck(Label* on_stack_overflow) {
+  LoadRoot(at, Heap::kStackLimitRootIndex);
+  Branch(on_stack_overflow, lo, sp, Operand(at));
 }
 
 
@@ -1722,27 +1758,6 @@ void MacroAssembler::Drop(int count,
 }
 
 
-void MacroAssembler::DropAndRet(int drop,
-                                Condition cond,
-                                Register r1,
-                                const Operand& r2) {
-  // This is a workaround to make sure only one branch instruction is
-  // generated. It relies on Drop and Ret not creating branches if
-  // cond == cc_always.
-  Label skip;
-  if (cond != cc_always) {
-    Branch(&skip, NegateCondition(cond), r1, r2);
-  }
-
-  Drop(drop);
-  Ret();
-
-  if (cond != cc_always) {
-    bind(&skip);
-  }
-}
-
-
 void MacroAssembler::Swap(Register reg1,
                           Register reg2,
                           Register scratch) {
@@ -1759,7 +1774,7 @@ void MacroAssembler::Swap(Register reg1,
 
 
 void MacroAssembler::Call(Label* target) {
-  BranchAndLink(target);
+  BranchAndLink(cc_always, target);
 }
 
 
@@ -1859,7 +1874,7 @@ void MacroAssembler::AllocateInNewSpace(int object_size,
                                         Label* gc_required,
                                         AllocationFlags flags) {
   if (!FLAG_inline_new) {
-    if (emit_debug_code()) {
+    if (FLAG_debug_code) {
       // Trash the registers to simulate an allocation failure.
       li(result, 0x7091);
       li(scratch1, 0x7191);
@@ -1872,9 +1887,7 @@ void MacroAssembler::AllocateInNewSpace(int object_size,
   ASSERT(!result.is(scratch1));
   ASSERT(!result.is(scratch2));
   ASSERT(!scratch1.is(scratch2));
-  ASSERT(!scratch1.is(t9));
-  ASSERT(!scratch2.is(t9));
-  ASSERT(!result.is(t9));
+  ASSERT(!scratch1.is(t9) && !scratch2.is(t9) && !result.is(t9));
 
   // Make object size into bytes.
   if ((flags & SIZE_IN_WORDS) != 0) {
@@ -1907,7 +1920,7 @@ void MacroAssembler::AllocateInNewSpace(int object_size,
     lw(result, MemOperand(topaddr));
     lw(t9, MemOperand(topaddr, kPointerSize));
   } else {
-    if (emit_debug_code()) {
+    if (FLAG_debug_code) {
       // Assert that result actually contains top on entry. t9 is used
       // immediately below so this use of t9 does not cause difference with
       // respect to register content between debug and release mode.
@@ -1938,7 +1951,7 @@ void MacroAssembler::AllocateInNewSpace(Register object_size,
                                         Label* gc_required,
                                         AllocationFlags flags) {
   if (!FLAG_inline_new) {
-    if (emit_debug_code()) {
+    if (FLAG_debug_code) {
       // Trash the registers to simulate an allocation failure.
       li(result, 0x7091);
       li(scratch1, 0x7191);
@@ -1976,7 +1989,7 @@ void MacroAssembler::AllocateInNewSpace(Register object_size,
     lw(result, MemOperand(topaddr));
     lw(t9, MemOperand(topaddr, kPointerSize));
   } else {
-    if (emit_debug_code()) {
+    if (FLAG_debug_code) {
       // Assert that result actually contains top on entry. t9 is used
       // immediately below so this use of t9 does not cause difference with
       // respect to register content between debug and release mode.
@@ -1999,7 +2012,7 @@ void MacroAssembler::AllocateInNewSpace(Register object_size,
   Branch(gc_required, Ugreater, scratch2, Operand(t9));
 
   // Update allocation top. result temporarily holds the new top.
-  if (emit_debug_code()) {
+  if (FLAG_debug_code) {
     And(t9, scratch2, Operand(kObjectAlignmentMask));
     Check(eq, "Unaligned allocation in new space", t9, Operand(zero_reg));
   }
@@ -2056,10 +2069,10 @@ void MacroAssembler::AllocateTwoByteString(Register result,
 
   // Set the map, length and hash field.
   InitializeNewString(result,
-                      length,
-                      Heap::kStringMapRootIndex,
-                      scratch1,
-                      scratch2);
+                     length,
+                     Heap::kStringMapRootIndex,
+                     scratch1,
+                     scratch2);
 }
 
 
@@ -2086,10 +2099,10 @@ void MacroAssembler::AllocateAsciiString(Register result,
 
   // Set the map, length and hash field.
   InitializeNewString(result,
-                      length,
-                      Heap::kAsciiStringMapRootIndex,
-                      scratch1,
-                      scratch2);
+                     length,
+                     Heap::kAsciiStringMapRootIndex,
+                     scratch1,
+                     scratch2);
 }
 
 
@@ -2105,10 +2118,10 @@ void MacroAssembler::AllocateTwoByteConsString(Register result,
                      gc_required,
                      TAG_OBJECT);
   InitializeNewString(result,
-                      length,
-                      Heap::kConsStringMapRootIndex,
-                      scratch1,
-                      scratch2);
+                     length,
+                     Heap::kConsStringMapRootIndex,
+                     scratch1,
+                     scratch2);
 }
 
 
@@ -2124,28 +2137,45 @@ void MacroAssembler::AllocateAsciiConsString(Register result,
                      gc_required,
                      TAG_OBJECT);
   InitializeNewString(result,
-                      length,
-                      Heap::kConsAsciiStringMapRootIndex,
-                      scratch1,
-                      scratch2);
+                    length,
+                    Heap::kConsAsciiStringMapRootIndex,
+                    scratch1,
+                    scratch2);
 }
 
 
 // Allocates a heap number or jumps to the label if the young space is full and
 // a scavenge is needed.
 void MacroAssembler::AllocateHeapNumber(Register result,
-                                        Register scratch1,
-                                        Register scratch2,
-                                        Register heap_number_map,
-                                        Label* need_gc) {
+                               Register scratch1,
+                               Register scratch2,
+                               Register heap_number_map,
+                               Label* need_gc) {
   // Allocate an object in the heap for the heap number and tag it as a heap
   // object.
+  // We ask for four more bytes to align it as we need and align the result.
+  // (HeapNumber::kSize is modified to be 4-byte bigger)
   AllocateInNewSpace(HeapNumber::kSize,
-                     result,
-                     scratch1,
-                     scratch2,
-                     need_gc,
-                     TAG_OBJECT);
+                        result,
+                        scratch1,
+                        scratch2,
+                        need_gc,
+                        TAG_OBJECT);
+
+  // Align to 8 bytes. [Commented out pending code review.]
+  // __ addiu(result, result, 7-1);  // -1 because result is tagged.
+  // __ And(result, result, Operand(~7));
+  // __ Or(result, result, Operand(1));  // Tag it back.
+
+#ifdef DEBUG
+//  // TODO(MIPS.6)
+//  // Check that the result is 8-byte aligned.
+//  andi(scratch2, result, Operand(7));
+//  xori(scratch2, scratch2, Operand(1));  // Fail if the tag is missing.
+//  Check(eq,
+//          "Error in HeapNumber alloc (not 8-byte aligned or tag missing)",
+//          scratch2, Operand(zero_reg));
+#endif
 
   // Store heap number map in the allocated object.
   AssertRegisterIsRoot(heap_number_map, Heap::kHeapNumberMapRootIndex);
@@ -2196,7 +2226,7 @@ void MacroAssembler::CheckMap(Register obj,
                               Label* fail,
                               bool is_heap_object) {
   if (!is_heap_object) {
-    JumpIfSmi(obj, fail);
+    BranchOnSmi(obj, fail);
   }
   lw(scratch, FieldMemOperand(obj, HeapObject::kMapOffset));
   li(at, Operand(map));
@@ -2210,23 +2240,11 @@ void MacroAssembler::CheckMap(Register obj,
                               Label* fail,
                               bool is_heap_object) {
   if (!is_heap_object) {
-    JumpIfSmi(obj, fail);
+    BranchOnSmi(obj, fail);
   }
   lw(scratch, FieldMemOperand(obj, HeapObject::kMapOffset));
   LoadRoot(at, index);
   Branch(fail, ne, scratch, Operand(at));
-}
-
-
-void MacroAssembler::GetCFunctionDoubleResult(const DoubleRegister dst) {
-  if (IsMipsSoftFloatABI) {
-    mtc1(v0, dst);
-    mtc1(v1, FPURegister::from_code(dst.code() + 1));
-  } else {
-    if (!dst.is(f0)) {
-      mov_d(dst, f0);  // Reg f0 is o32 ABI FP return value.
-    }
-  }
 }
 
 
@@ -2238,8 +2256,7 @@ void MacroAssembler::InvokePrologue(const ParameterCount& expected,
                                     Handle<Code> code_constant,
                                     Register code_reg,
                                     Label* done,
-                                    InvokeFlag flag,
-                                    PostCallGenerator* post_call_generator) {
+                                    InvokeFlag flag) {
   bool definitely_matches = false;
   Label regular_invoke;
 
@@ -2287,14 +2304,13 @@ void MacroAssembler::InvokePrologue(const ParameterCount& expected,
       addiu(a3, a3, Code::kHeaderSize - kHeapObjectTag);
     }
 
-    Handle<Code> adaptor =
-        Handle<Code>(Builtins::builtin(Builtins::ArgumentsAdaptorTrampoline));
+    ExternalReference adaptor(Builtins::ArgumentsAdaptorTrampoline);
     if (flag == CALL_FUNCTION) {
-      Call(adaptor, RelocInfo::CODE_TARGET);
-      if (post_call_generator != NULL) post_call_generator->Generate();
+      CallBuiltin(adaptor);
       jmp(done);
     } else {
-      Jump(adaptor, RelocInfo::CODE_TARGET);
+      JumpToBuiltin(adaptor);
+      // break_(__LINE__);
     }
     bind(&regular_invoke);
   }
@@ -2304,12 +2320,10 @@ void MacroAssembler::InvokePrologue(const ParameterCount& expected,
 void MacroAssembler::InvokeCode(Register code,
                                 const ParameterCount& expected,
                                 const ParameterCount& actual,
-                                InvokeFlag flag,
-                                PostCallGenerator* post_call_generator) {
+                                InvokeFlag flag) {
   Label done;
 
-  InvokePrologue(expected, actual, Handle<Code>::null(), code, &done, flag,
-                 post_call_generator);
+  InvokePrologue(expected, actual, Handle<Code>::null(), code, &done, flag);
   if (flag == CALL_FUNCTION) {
     Call(code);
   } else {
@@ -2343,8 +2357,7 @@ void MacroAssembler::InvokeCode(Handle<Code> code,
 
 void MacroAssembler::InvokeFunction(Register function,
                                     const ParameterCount& actual,
-                                    InvokeFlag flag,
-                                    PostCallGenerator* post_call_generator) {
+                                    InvokeFlag flag) {
   // Contract with called JS functions requires that function is passed in a1.
   ASSERT(function.is(a1));
   Register expected_reg = a2;
@@ -2359,7 +2372,7 @@ void MacroAssembler::InvokeFunction(Register function,
   lw(code_reg, FieldMemOperand(a1, JSFunction::kCodeEntryOffset));
 
   ParameterCount expected(expected_reg);
-  InvokeCode(code_reg, expected, actual, flag, post_call_generator);
+  InvokeCode(code_reg, expected, actual, flag);
 }
 
 
@@ -2375,54 +2388,19 @@ void MacroAssembler::InvokeFunction(JSFunction* function,
   // Invoke the cached code.
   Handle<Code> code(function->code());
   ParameterCount expected(function->shared()->formal_parameter_count());
-  if (V8::UseCrankshaft()) {
-    UNIMPLEMENTED_MIPS();
-  } else {
-    InvokeCode(code, expected, actual, RelocInfo::CODE_TARGET, flag);
-  }
-}
-
-
-void MacroAssembler::IsObjectJSObjectType(Register heap_object,
-                                          Register map,
-                                          Register scratch,
-                                          Label* fail) {
-  lw(map, FieldMemOperand(heap_object, HeapObject::kMapOffset));
-  IsInstanceJSObjectType(map, scratch, fail);
-}
-
-
-void MacroAssembler::IsInstanceJSObjectType(Register map,
-                                            Register scratch,
-                                            Label* fail) {
-  lbu(scratch, FieldMemOperand(map, Map::kInstanceTypeOffset));
-  Branch(fail, lt, scratch, Operand(FIRST_JS_OBJECT_TYPE));
-  Branch(fail, gt, scratch, Operand(LAST_JS_OBJECT_TYPE));
-}
-
-
-void MacroAssembler::IsObjectJSStringType(Register object,
-                                          Register scratch,
-                                          Label* fail) {
-  ASSERT(kNotStringTag != 0);
-
-  lw(scratch, FieldMemOperand(object, HeapObject::kMapOffset));
-  lbu(scratch, FieldMemOperand(scratch, Map::kInstanceTypeOffset));
-  And(scratch, scratch, Operand(kIsNotStringMask));
-  Branch(fail, ne, scratch, Operand(zero_reg));
+  InvokeCode(code, expected, actual, RelocInfo::CODE_TARGET, flag);
 }
 
 
 // ---------------------------------------------------------------------------
 // Support functions.
 
-
 void MacroAssembler::TryGetFunctionPrototype(Register function,
                                              Register result,
                                              Register scratch,
                                              Label* miss) {
   // Check that the receiver isn't a smi.
-  JumpIfSmi(function, miss);
+  BranchOnSmi(function, miss);
 
   // Check that the function really is a function.  Load map into result reg.
   GetObjectType(function, result, scratch);
@@ -2436,7 +2414,7 @@ void MacroAssembler::TryGetFunctionPrototype(Register function,
 
   // Get the prototype or initial map from the function.
   lw(result,
-     FieldMemOperand(function, JSFunction::kPrototypeOrInitialMapOffset));
+      FieldMemOperand(function, JSFunction::kPrototypeOrInitialMapOffset));
 
   // If the prototype or initial map is the hole, don't return it and
   // simply miss the cache instead. This will allow us to allocate a
@@ -2468,6 +2446,69 @@ void MacroAssembler::GetObjectType(Register object,
                                    Register type_reg) {
   lw(map, FieldMemOperand(object, HeapObject::kMapOffset));
   lbu(type_reg, FieldMemOperand(map, Map::kInstanceTypeOffset));
+}
+
+
+void MacroAssembler::CallBuiltin(ExternalReference builtin_entry) {
+  // Load builtin address.
+  LoadExternalReference(t9, builtin_entry);
+  lw(t9, MemOperand(t9));  // Deref address.
+  addiu(t9, t9, Code::kHeaderSize - kHeapObjectTag);
+  // Call and allocate arguments slots.
+  jalr(t9);
+  // Use the branch delay slot to allocated argument slots.
+  addiu(sp, sp, -StandardFrameConstants::kBArgsSlotsSize);
+  addiu(sp, sp, StandardFrameConstants::kBArgsSlotsSize);
+}
+
+
+void MacroAssembler::CallBuiltin(Register target) {
+  // Target already holds target address.
+  // Call and allocate arguments slots.
+  jalr(target);
+  // Use the branch delay slot to allocated argument slots.
+  addiu(sp, sp, -StandardFrameConstants::kBArgsSlotsSize);
+  addiu(sp, sp, StandardFrameConstants::kBArgsSlotsSize);
+}
+
+
+void MacroAssembler::CallBuiltin(Handle<Code> code, RelocInfo::Mode rmode) {
+  ASSERT(RelocInfo::IsCodeTarget(rmode));
+  // Jump but do not protect the branch delay slot.
+  Call(false, code, rmode);
+  // Use the branch delay slot to allocated argument slots.
+  addiu(sp, sp, -StandardFrameConstants::kBArgsSlotsSize);
+  addiu(sp, sp, StandardFrameConstants::kBArgsSlotsSize);
+}
+
+
+void MacroAssembler::JumpToBuiltin(ExternalReference builtin_entry) {
+  // Load builtin address.
+  LoadExternalReference(t9, builtin_entry);
+  lw(t9, MemOperand(t9));  // Deref address.
+  addiu(t9, t9, Code::kHeaderSize - kHeapObjectTag);
+  // Call and allocate arguments slots.
+  jr(t9);
+  // Use the branch delay slot to allocated argument slots.
+  addiu(sp, sp, -StandardFrameConstants::kBArgsSlotsSize);
+}
+
+
+void MacroAssembler::JumpToBuiltin(Register target) {
+  // t9 already holds target address.
+  // Call and allocate arguments slots.
+  jr(t9);
+  // Use the branch delay slot to allocated argument slots.
+  addiu(sp, sp, -StandardFrameConstants::kBArgsSlotsSize);
+}
+
+
+void MacroAssembler::JumpToBuiltin(Handle<Code> code, RelocInfo::Mode rmode) {
+  ASSERT(RelocInfo::IsCodeTarget(rmode));
+  // Jump but do not protect the branch delay slot.
+  Jump(false, code, rmode);
+  // Use the branch delay slot to allocated argument slots.
+  addiu(sp, sp, -StandardFrameConstants::kBArgsSlotsSize);
 }
 
 
@@ -2521,7 +2562,7 @@ void MacroAssembler::ObjectToDoubleFPURegister(Register object,
   Label done;
   if ((flags & OBJECT_NOT_SMI) == 0) {
     Label not_smi;
-    JumpIfNotSmi(object, &not_smi);
+    BranchOnNotSmi(object, &not_smi);
     // Remove smi tag and convert to double.
     sra(scratch1, object, kSmiTagSize);
     mtc1(scratch1, result);
@@ -2531,19 +2572,35 @@ void MacroAssembler::ObjectToDoubleFPURegister(Register object,
   }
   // Check for heap number and load double value from it.
   lw(scratch1, FieldMemOperand(object, HeapObject::kMapOffset));
+  Subu(scratch2, object, Operand(kHeapObjectTag));
   Branch(not_number, ne, scratch1, Operand(heap_number_map));
 
   if ((flags & AVOID_NANS_AND_INFINITIES) != 0) {
     // If exponent is all ones the number is either a NaN or +/-Infinity.
-    Register exponent = scratch1;
-    Register mask_reg = scratch2;
-    lw(exponent, FieldMemOperand(object, HeapNumber::kExponentOffset));
-    li(mask_reg, HeapNumber::kExponentMask);
+    lw(scratch1, FieldMemOperand(object, HeapNumber::kExponentOffset));
+    {
+      // Signed bitfield extraction, based on ARM's Sbfx macro.
+      // We cannot use the ext instruction, because it doesn't sign-extend.
+      int lsb = HeapNumber::kExponentShift;
+      int width = HeapNumber::kExponentBits;
+      Register dst = scratch1;
+      Register src = scratch1;
 
-    And(exponent, exponent, mask_reg);
-    Branch(not_number, eq, exponent, Operand(mask_reg));
+      int mask = (1 << (width + lsb)) - 1 - ((1 << lsb) - 1);
+      And(dst, src, mask);
+      int shift_up = 32 - lsb - width;
+      int shift_down = lsb + shift_up;
+      if (shift_up != 0) {
+        sll(dst, dst, shift_up);
+      }
+      if (shift_down != 0) {
+        sra(dst, dst, shift_down);
+      }
+    }
+    // All-one value sign extend to -1.
+    Branch(not_number, eq, scratch1, Operand(-1));
   }
-  ldc1(result, FieldMemOperand(object, HeapNumber::kValueOffset));
+  ldc1(result, MemOperand(scratch2, HeapNumber::kValueOffset));
   bind(&done);
 }
 
@@ -2575,16 +2632,6 @@ void MacroAssembler::CallRuntime(Runtime::Function* f, int num_arguments) {
   li(a0, num_arguments);
   LoadExternalReference(a1, ExternalReference(f));
   CEntryStub stub(1);
-  CallStub(&stub);
-}
-
-
-void MacroAssembler::CallRuntimeSaveDoubles(Runtime::FunctionId id) {
-  Runtime::Function* function = Runtime::FunctionForId(id);
-  li(a0, Operand(function->nargs));
-  li(a1, Operand(ExternalReference(function)));
-  CEntryStub stub(1);
-  stub.SaveDoubles();
   CallStub(&stub);
 }
 
@@ -2631,12 +2678,10 @@ void MacroAssembler::JumpToExternalReference(const ExternalReference& builtin) {
 
 
 void MacroAssembler::InvokeBuiltin(Builtins::JavaScript id,
-                                   InvokeJSFlags flags,
-                                   PostCallGenerator* post_call_generator) {
+                                   InvokeJSFlags flags) {
   GetBuiltinEntry(t9, id);
   if (flags == CALL_JS) {
     Call(t9);
-    if (post_call_generator != NULL) post_call_generator->Generate();
   } else {
     ASSERT(flags == JUMP_JS);
     Jump(t9);
@@ -2702,14 +2747,14 @@ void MacroAssembler::DecrementCounter(StatsCounter* counter, int value,
 
 void MacroAssembler::Assert(Condition cc, const char* msg,
                             Register rs, Operand rt) {
-  if (emit_debug_code())
+  if (FLAG_debug_code)
     Check(cc, msg, rs, rt);
 }
 
 
 void MacroAssembler::AssertRegisterIsRoot(Register reg,
                                           Heap::RootListIndex index) {
-  if (emit_debug_code()) {
+  if (FLAG_debug_code) {
     LoadRoot(at, index);
     Check(eq, "Register did not match expected root", reg, Operand(at));
   }
@@ -2717,7 +2762,7 @@ void MacroAssembler::AssertRegisterIsRoot(Register reg,
 
 
 void MacroAssembler::AssertFastElements(Register elements) {
-  if (emit_debug_code()) {
+  if (FLAG_debug_code) {
     ASSERT(!elements.is(at));
     Label ok;
     Push(elements);
@@ -2761,7 +2806,7 @@ void MacroAssembler::Abort(const char* msg) {
   }
 #endif
   // Disable stub call restrictions to always allow calls to abort.
-  AllowStubCallsScope allow_scope(this, true);
+  set_allow_stub_calls(true);
 
   li(a0, Operand(p0));
   Push(a0);
@@ -2795,25 +2840,13 @@ void MacroAssembler::LoadContext(Register dst, int context_chain_length) {
       lw(dst, MemOperand(dst, Context::SlotOffset(Context::CLOSURE_INDEX)));
       lw(dst, FieldMemOperand(dst, JSFunction::kContextOffset));
     }
-  } else {
-    // Slot is in the current function context.  Move it into the
-    // destination register in case we store into it (the write barrier
-    // cannot be allowed to destroy the context in esi).
-    Move(dst, cp);
-  }
-
-  // We should not have found a 'with' context by walking the context chain
-  // (i.e., the static scope chain and runtime context chain do not agree).
-  // A variable occurring in such a scope should have slot type LOOKUP and
-  // not CONTEXT.
-  if (emit_debug_code()) {
-    lw(t9, MemOperand(dst, Context::SlotOffset(Context::FCONTEXT_INDEX)));
-    Check(eq, "Yo dawg, I heard you liked function contexts "
-              "so I put function contexts in all your contexts",
-               dst, Operand(t9));
+    // The context may be an intermediate context, not a function context.
+    lw(dst, MemOperand(dst, Context::SlotOffset(Context::FCONTEXT_INDEX)));
+  } else {  // Slot is in the current function context.
+    // The context may be an intermediate context, not a function context.
+    lw(dst, MemOperand(cp, Context::SlotOffset(Context::FCONTEXT_INDEX)));
   }
 }
-
 
 void MacroAssembler::LoadGlobalFunction(int index, Register function) {
   // Load the global or builtins object from the current context.
@@ -2831,7 +2864,7 @@ void MacroAssembler::LoadGlobalFunctionInitialMap(Register function,
                                                   Register scratch) {
   // Load the initial map. The global functions all have initial maps.
   lw(map, FieldMemOperand(function, JSFunction::kPrototypeOrInitialMapOffset));
-  if (emit_debug_code()) {
+  if (FLAG_debug_code) {
     Label ok, fail;
     CheckMap(map, scratch, Heap::kMetaMapRootIndex, &fail, false);
     Branch(&ok);
@@ -2840,7 +2873,6 @@ void MacroAssembler::LoadGlobalFunctionInitialMap(Register function,
     bind(&ok);
   }
 }
-
 
 void MacroAssembler::EnterFrame(StackFrame::Type type) {
   addiu(sp, sp, -5 * kPointerSize);
@@ -2863,49 +2895,33 @@ void MacroAssembler::LeaveFrame(StackFrame::Type type) {
 }
 
 
-void MacroAssembler::EnterExitFrame(const Operand& argc,
-                                    bool save_doubles,
-                                    int stack_space) {
+void MacroAssembler::EnterExitFrame(Register hold_argc,
+                                    Register hold_argv,
+                                    Register hold_function) {
+  // Compute the argv pointer and keep it in a callee-saved register.
+  // a0 is argc.
+  sll(t8, a0, kPointerSizeLog2);
+  addu(hold_argv, sp, t8);
+  addiu(hold_argv, hold_argv, -kPointerSize);
+
   // Compute callee's stack pointer before making changes and save it as
   // t9 register so that it is restored as sp register on exit, thereby
   // popping the args.
   // t9 = sp + kPointerSize * #args
-  if (argc.is_reg()) {
-    sll(t9, argc.rm(), kPointerSizeLog2);
-    addu(t9, sp, t9);
-  } else {
-    addiu(t9, sp, argc.imm32_ * kPointerSize);
-  }
+  addu(t9, sp, t8);
 
-  // Setup the frame structure on the stack.
-  STATIC_ASSERT(3 * kPointerSize == ExitFrameConstants::kCallerSPDisplacement);
-  STATIC_ASSERT(2 * kPointerSize == ExitFrameConstants::kCallerSPOffset);
-  STATIC_ASSERT(1 * kPointerSize == ExitFrameConstants::kCallerPCOffset);
-  STATIC_ASSERT(0 * kPointerSize == ExitFrameConstants::kCallerFPOffset);
-
-  // This is how the stack will look:
-  // fp + 3 (==kCallerSPDisplacement) - old stack's end
-  // [fp + 2 (==kCallerSPOffset)] - saved old sp (as calculated above into t9).
-  // [fp + 1 (==kCallerPCOffset)] - saved old ra
-  // [fp + 0 (==kCallerFPOffset)] - saved old fp
-  // [fp - 1 (==kSPOffset)] - sp of the called function
-  // [fp - 2 (==kCodeOffset)] - CodeObject
-  // fp - (2 + stack_space + alignment) == sp == [fp - kSPOffset] - stack of
-  //   the called function
+  // Align the stack at this point.
+  AlignStack(0);
 
   // Save registers.
-  addiu(sp, sp, -5 * kPointerSize);
-  sw(t9, MemOperand(sp, 4 * kPointerSize));
-  sw(ra, MemOperand(sp, 3 * kPointerSize));
-  sw(fp, MemOperand(sp, 2 * kPointerSize));
-  addiu(fp, sp, 2 * kPointerSize);  // Setup new frame pointer.
+  addiu(sp, sp, -12);
+  sw(t9, MemOperand(sp, 8));
+  sw(ra, MemOperand(sp, 4));
+  sw(fp, MemOperand(sp, 0));
+  mov(fp, sp);  // Setup new frame pointer.
 
-  if (emit_debug_code()) {
-    sw(zero_reg, MemOperand(fp, ExitFrameConstants::kSPOffset));
-  }
-
-  li(t8, Operand(CodeObject()));  // Accessed from ExitFrame::code_slot.
-  sw(t8, MemOperand(fp, ExitFrameConstants::kCodeOffset));
+  li(t8, Operand(CodeObject()));
+  Push(t8);  // Accessed from ExitFrame::code_slot.
 
   // Save the frame pointer and the context in top.
   LoadExternalReference(t8, ExternalReference(Top::k_c_entry_fp_address));
@@ -2913,30 +2929,19 @@ void MacroAssembler::EnterExitFrame(const Operand& argc,
   LoadExternalReference(t8, ExternalReference(Top::k_context_address));
   sw(cp, MemOperand(t8));
 
-  // Reserve place for the return address and stack space and align the frame
-  // preparing for calling the runtime function.
-  const int frame_alignment = MacroAssembler::ActivationFrameAlignment();
-  ASSERT(stack_space >= 0);
-  Subu(sp, sp, Operand((stack_space + 1) * kPointerSize));
-  if (frame_alignment > 0) {
-    ASSERT(IsPowerOf2(frame_alignment));
-    And(sp, sp, Operand(-frame_alignment));  // Align stack.
-  }
-
-  // Set the exit frame sp value to point just before the return address
-  // location.
-  addiu(at, sp, kPointerSize);
-  sw(at, MemOperand(fp, ExitFrameConstants::kSPOffset));
+  // Setup argc and the builtin function in callee-saved registers.
+  mov(hold_argc, a0);
+  mov(hold_function, a1);
 }
 
 
-void MacroAssembler::LeaveExitFrame(bool save_doubles) {
+void MacroAssembler::LeaveExitFrame() {
   // Clear top frame.
-  li(t8, Operand(ExternalReference(Top::k_c_entry_fp_address)));
+  LoadExternalReference(t8, ExternalReference(Top::k_c_entry_fp_address));
   sw(zero_reg, MemOperand(t8));
 
   // Restore current context from top and clear it in debug mode.
-  li(t8, Operand(ExternalReference(Top::k_context_address)));
+  LoadExternalReference(t8, ExternalReference(Top::k_context_address));
   lw(cp, MemOperand(t8));
 #ifdef DEBUG
   sw(a3, MemOperand(t8));
@@ -2944,9 +2949,9 @@ void MacroAssembler::LeaveExitFrame(bool save_doubles) {
 
   // Pop the arguments, restore registers, and return.
   mov(sp, fp);  // Respect ABI stack constraint.
-  lw(fp, MemOperand(sp, ExitFrameConstants::kCallerFPOffset));
-  lw(ra, MemOperand(sp, ExitFrameConstants::kCallerPCOffset));
-  lw(sp, MemOperand(sp, ExitFrameConstants::kCallerSPOffset));
+  lw(fp, MemOperand(sp, 0));
+  lw(ra, MemOperand(sp, 4));
+  lw(sp, MemOperand(sp, 8));
   jr(ra);
   nop();  // Branch delay slot nop.
 }
@@ -3015,23 +3020,10 @@ void MacroAssembler::AlignStack(int offset) {
 }
 
 
-
-void MacroAssembler::JumpIfNotPowerOfTwoOrZero(
-    Register reg,
-    Register scratch,
-    Label* not_power_of_two_or_zero) {
-  Subu(scratch, reg, Operand(1));
-  Branch(USE_DELAY_SLOT, not_power_of_two_or_zero, lt,
-         scratch, Operand(zero_reg));
-  and_(at, scratch, reg);  // In the delay slot.
-  Branch(not_power_of_two_or_zero, ne, at, Operand(zero_reg));
-}
-
-
 void MacroAssembler::JumpIfNotBothSmi(Register reg1,
                                       Register reg2,
                                       Label* on_not_both_smi) {
-  STATIC_ASSERT(kSmiTag == 0);
+  ASSERT_EQ(0, kSmiTag);
   ASSERT_EQ(1, kSmiTagMask);
   or_(at, reg1, reg2);
   andi(at, at, kSmiTagMask);
@@ -3042,7 +3034,7 @@ void MacroAssembler::JumpIfNotBothSmi(Register reg1,
 void MacroAssembler::JumpIfEitherSmi(Register reg1,
                                      Register reg2,
                                      Label* on_either_smi) {
-  STATIC_ASSERT(kSmiTag == 0);
+  ASSERT_EQ(0, kSmiTag);
   ASSERT_EQ(1, kSmiTagMask);
   // Both Smi tags must be 1 (not Smi).
   and_(at, reg1, reg2);
@@ -3052,47 +3044,9 @@ void MacroAssembler::JumpIfEitherSmi(Register reg1,
 
 
 void MacroAssembler::AbortIfSmi(Register object) {
-  STATIC_ASSERT(kSmiTag == 0);
+  ASSERT_EQ(0, kSmiTag);
   andi(at, object, kSmiTagMask);
   Assert(ne, "Operand is a smi", at, Operand(zero_reg));
-}
-
-
-void MacroAssembler::AbortIfNotSmi(Register object) {
-  STATIC_ASSERT(kSmiTag == 0);
-  andi(at, object, kSmiTagMask);
-  Assert(eq, "Operand is a smi", at, Operand(zero_reg));
-}
-
-
-void MacroAssembler::AbortIfNotString(Register object) {
-  STATIC_ASSERT(kSmiTag == 0);
-  And(t0, object, Operand(kSmiTagMask));
-  Assert(ne, "Operand is not a string", t0, Operand(zero_reg));
-  push(object);
-  lw(object, FieldMemOperand(object, HeapObject::kMapOffset));
-  lbu(object, FieldMemOperand(object, Map::kInstanceTypeOffset));
-  Assert(lo, "Operand is not a string", object, Operand(FIRST_NONSTRING_TYPE));
-  pop(object);
-}
-
-
-void MacroAssembler::AbortIfNotRootValue(Register src,
-                                         Heap::RootListIndex root_value_index,
-                                         const char* message) {
-  ASSERT(!src.is(at));
-  LoadRoot(at, root_value_index);
-  Assert(eq, message, src, Operand(at));
-}
-
-
-void MacroAssembler::JumpIfNotHeapNumber(Register object,
-                                         Register heap_number_map,
-                                         Register scratch,
-                                         Label* on_not_heap_number) {
-  lw(scratch, FieldMemOperand(object, HeapObject::kMapOffset));
-  AssertRegisterIsRoot(heap_number_map, Heap::kHeapNumberMapRootIndex);
-  Branch(on_not_heap_number, ne, scratch, Operand(heap_number_map));
 }
 
 
@@ -3123,7 +3077,7 @@ void MacroAssembler::JumpIfNotBothSequentialAsciiStrings(Register first,
                                                          Register scratch2,
                                                          Label* failure) {
   // Check that neither is a smi.
-  STATIC_ASSERT(kSmiTag == 0);
+  ASSERT_EQ(0, kSmiTag);
   And(scratch1, first, Operand(second));
   And(scratch1, scratch1, Operand(kSmiTagMask));
   Branch(failure, eq, scratch1, Operand(zero_reg));
@@ -3202,7 +3156,7 @@ void MacroAssembler::CallCFunction(Register function, int num_arguments) {
   // The argument stots are presumed to have been set up by
   // PrepareCallCFunction. The C function must be called via t9, for mips ABI.
 #if defined(V8_HOST_ARCH_MIPS)
-  if (emit_debug_code()) {
+  if (FLAG_debug_code) {
     int frame_alignment = OS::ActivationFrameAlignment();
     int frame_alignment_mask = frame_alignment - 1;
     if (frame_alignment > kPointerSize) {

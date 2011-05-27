@@ -58,13 +58,23 @@
 
 #if defined(V8_TARGET_ARCH_MIPS)
 
-#include "mips/constants-mips.h"
+#include "constants-mips.h"
 #include "disasm.h"
 #include "macro-assembler.h"
 #include "platform.h"
 
-namespace v8 {
-namespace internal {
+#ifdef _MIPS_ARCH_MIPS32R2
+  #define mips32r2 1
+#else
+  #define mips32r2 0
+#endif
+
+namespace assembler {
+namespace mips {
+
+
+namespace v8i = v8::internal;
+
 
 //------------------------------------------------------------------------------
 
@@ -110,7 +120,7 @@ class Decoder {
   void PrintUImm16(Instruction* instr);
   void PrintSImm16(Instruction* instr);
   void PrintXImm16(Instruction* instr);
-  void PrintXImm26(Instruction* instr);
+  void PrintImm26(Instruction* instr);
   void PrintCode(Instruction* instr);   // For break and trap instructions.
   // Printing of instruction name.
   void PrintInstructionName(Instruction* instr);
@@ -164,19 +174,19 @@ void Decoder::PrintRegister(int reg) {
 
 
 void Decoder::PrintRs(Instruction* instr) {
-  int reg = instr->RsValue();
+  int reg = instr->RsField();
   PrintRegister(reg);
 }
 
 
 void Decoder::PrintRt(Instruction* instr) {
-  int reg = instr->RtValue();
+  int reg = instr->RtField();
   PrintRegister(reg);
 }
 
 
 void Decoder::PrintRd(Instruction* instr) {
-  int reg = instr->RdValue();
+  int reg = instr->RdField();
   PrintRegister(reg);
 }
 
@@ -188,76 +198,84 @@ void Decoder::PrintFPURegister(int freg) {
 
 
 void Decoder::PrintFs(Instruction* instr) {
-  int freg = instr->RsValue();
+  int freg = instr->RsField();
   PrintFPURegister(freg);
 }
 
 
 void Decoder::PrintFt(Instruction* instr) {
-  int freg = instr->RtValue();
+  int freg = instr->RtField();
   PrintFPURegister(freg);
 }
 
 
 void Decoder::PrintFd(Instruction* instr) {
-  int freg = instr->RdValue();
+  int freg = instr->RdField();
   PrintFPURegister(freg);
 }
 
 
 // Print the integer value of the sa field.
 void Decoder::PrintSa(Instruction* instr) {
-  int sa = instr->SaValue();
-  out_buffer_pos_ += OS::SNPrintF(out_buffer_ + out_buffer_pos_, "%d", sa);
+  int sa = instr->SaField();
+  out_buffer_pos_ += v8i::OS::SNPrintF(out_buffer_ + out_buffer_pos_,
+                                       "%d", sa);
 }
 
 
 // Print the integer value of the rd field, (when it is not used as reg).
 void Decoder::PrintSd(Instruction* instr) {
-  int sd = instr->RdValue();
-  out_buffer_pos_ += OS::SNPrintF(out_buffer_ + out_buffer_pos_, "%d", sd);
+  int sd = instr->RdField();
+  out_buffer_pos_ += v8i::OS::SNPrintF(out_buffer_ + out_buffer_pos_,
+                                       "%d", sd);
 }
 
 
 // Print the integer value of the cc field for the bc1t/f instructions.
 void Decoder::PrintBc(Instruction* instr) {
-  int cc = instr->FBccValue();
-  out_buffer_pos_ += OS::SNPrintF(out_buffer_ + out_buffer_pos_, "%d", cc);
+  int cc = instr->FBccField();
+  out_buffer_pos_ += v8i::OS::SNPrintF(out_buffer_ + out_buffer_pos_,
+                                       "%d", cc);
 }
 
 
 // Print the integer value of the cc field for the FP compare instructions.
 void Decoder::PrintCc(Instruction* instr) {
-  int cc = instr->FCccValue();
-  out_buffer_pos_ += OS::SNPrintF(out_buffer_ + out_buffer_pos_, "cc(%d)", cc);
+  int cc = instr->FCccField();
+  out_buffer_pos_ += v8i::OS::SNPrintF(out_buffer_ + out_buffer_pos_,
+                                       "cc(%d)", cc);
 }
 
 
 // Print 16-bit unsigned immediate value.
 void Decoder::PrintUImm16(Instruction* instr) {
-  int32_t imm = instr->Imm16Value();
-  out_buffer_pos_ += OS::SNPrintF(out_buffer_ + out_buffer_pos_, "%u", imm);
+  int32_t imm = instr->Imm16Field();
+  out_buffer_pos_ += v8i::OS::SNPrintF(out_buffer_ + out_buffer_pos_,
+                                       "%u", imm);
 }
 
 
 // Print 16-bit signed immediate value.
 void Decoder::PrintSImm16(Instruction* instr) {
-  int32_t imm = ((instr->Imm16Value())<<16)>>16;
-  out_buffer_pos_ += OS::SNPrintF(out_buffer_ + out_buffer_pos_, "%d", imm);
+  int32_t imm = ((instr->Imm16Field())<<16)>>16;
+  out_buffer_pos_ += v8i::OS::SNPrintF(out_buffer_ + out_buffer_pos_,
+                                       "%d", imm);
 }
 
 
 // Print 16-bit hexa immediate value.
 void Decoder::PrintXImm16(Instruction* instr) {
-  int32_t imm = instr->Imm16Value();
-  out_buffer_pos_ += OS::SNPrintF(out_buffer_ + out_buffer_pos_, "0x%x", imm);
+  int32_t imm = instr->Imm16Field();
+  out_buffer_pos_ += v8i::OS::SNPrintF(out_buffer_ + out_buffer_pos_,
+                                       "0x%x", imm);
 }
 
 
 // Print 26-bit immediate value.
-void Decoder::PrintXImm26(Instruction* instr) {
-  uint32_t imm = instr->Imm26Value() << kImmFieldShift;
-  out_buffer_pos_ += OS::SNPrintF(out_buffer_ + out_buffer_pos_, "0x%x", imm);
+void Decoder::PrintImm26(Instruction* instr) {
+  int32_t imm = instr->Imm26Field();
+  out_buffer_pos_ += v8i::OS::SNPrintF(out_buffer_ + out_buffer_pos_,
+                                       "%d", imm);
 }
 
 
@@ -268,8 +286,9 @@ void Decoder::PrintCode(Instruction* instr) {
   switch (instr->FunctionFieldRaw()) {
     case BREAK: {
       int32_t code = instr->Bits(25, 6);
-      out_buffer_pos_ += OS::SNPrintF(out_buffer_ + out_buffer_pos_,
-                                      "0x%05x (%d)", code, code);
+      out_buffer_pos_ +=
+          v8i::OS::SNPrintF(out_buffer_ + out_buffer_pos_, "0x%05x (%d)",
+              code, code);
       break;
                 }
     case TGE:
@@ -280,7 +299,7 @@ void Decoder::PrintCode(Instruction* instr) {
     case TNE: {
       int32_t code = instr->Bits(15, 6);
       out_buffer_pos_ +=
-          OS::SNPrintF(out_buffer_ + out_buffer_pos_, "0x%03x", code);
+          v8i::OS::SNPrintF(out_buffer_ + out_buffer_pos_, "0x%03x", code);
       break;
     }
     default:  // Not a break or trap instruction.
@@ -299,15 +318,15 @@ void Decoder::PrintInstructionName(Instruction* instr) {
 int Decoder::FormatRegister(Instruction* instr, const char* format) {
   ASSERT(format[0] == 'r');
   if (format[1] == 's') {  // 'rs: Rs register
-    int reg = instr->RsValue();
+    int reg = instr->RsField();
     PrintRegister(reg);
     return 2;
   } else if (format[1] == 't') {  // 'rt: rt register
-    int reg = instr->RtValue();
+    int reg = instr->RtField();
     PrintRegister(reg);
     return 2;
   } else if (format[1] == 'd') {  // 'rd: rd register
-    int reg = instr->RdValue();
+    int reg = instr->RdField();
     PrintRegister(reg);
     return 2;
   }
@@ -321,15 +340,15 @@ int Decoder::FormatRegister(Instruction* instr, const char* format) {
 int Decoder::FormatFPURegister(Instruction* instr, const char* format) {
   ASSERT(format[0] == 'f');
   if (format[1] == 's') {  // 'fs: fs register
-    int reg = instr->FsValue();
+    int reg = instr->FsField();
     PrintFPURegister(reg);
     return 2;
   } else if (format[1] == 't') {  // 'ft: ft register
-    int reg = instr->FtValue();
+    int reg = instr->FtField();
     PrintFPURegister(reg);
     return 2;
   } else if (format[1] == 'd') {  // 'fd: fd register
-    int reg = instr->FdValue();
+    int reg = instr->FdField();
     PrintFPURegister(reg);
     return 2;
   }
@@ -365,9 +384,9 @@ int Decoder::FormatOption(Instruction* instr, const char* format) {
         }
         return 6;
       } else {
-        ASSERT(STRING_STARTS_WITH(format, "imm26x"));
-        PrintXImm26(instr);
-        return 6;
+        ASSERT(STRING_STARTS_WITH(format, "imm26"));
+        PrintImm26(instr);
+        return 5;
       }
     }
     case 'r': {   // 'r: registers
@@ -491,8 +510,8 @@ void Decoder::DecodeTypeRegister(Instruction* instr) {
               } else {
                 Unknown(instr);
               }
+              }
               break;
-            }
             case TRUNC_W_D:
               Format(instr, "trunc.w.d 'fd, 'fs");
               break;
@@ -502,8 +521,8 @@ void Decoder::DecodeTypeRegister(Instruction* instr) {
               } else {
                 Unknown(instr);
               }
+              }
               break;
-            }
             case ROUND_W_D:
               Format(instr, "round.w.d 'fd, 'fs");
               break;
@@ -543,7 +562,7 @@ void Decoder::DecodeTypeRegister(Instruction* instr) {
             default:
               Format(instr, "unknown.cop1.d");
               break;
-          }
+          };
           break;
         case S:
           UNIMPLEMENTED_MIPS();
@@ -558,7 +577,7 @@ void Decoder::DecodeTypeRegister(Instruction* instr) {
               break;
             default:
               UNREACHABLE();
-          }
+          };
           break;
         case L:
           switch (instr->FunctionFieldRaw()) {
@@ -568,16 +587,16 @@ void Decoder::DecodeTypeRegister(Instruction* instr) {
               } else {
                 Unknown(instr);
               }
+              }
               break;
-            }
             case CVT_S_L: {
               if (mips32r2) {
                 Format(instr, "cvt.s.l 'fd, 'fs");
               } else {
                 Unknown(instr);
               }
+              }
               break;
-            }
             default:
               UNREACHABLE();
           }
@@ -587,7 +606,7 @@ void Decoder::DecodeTypeRegister(Instruction* instr) {
           break;
         default:
           UNREACHABLE();
-      }
+      };
       break;
     case SPECIAL:
       switch (instr->FunctionFieldRaw()) {
@@ -604,7 +623,7 @@ void Decoder::DecodeTypeRegister(Instruction* instr) {
             Format(instr, "sll  'rd, 'rt, 'sa");
           break;
         case SRL:
-          if (instr->RsValue() == 0) {
+          if (instr->RsField() == 0) {
             Format(instr, "srl  'rd, 'rt, 'sa");
           } else {
             if (mips32r2) {
@@ -621,7 +640,7 @@ void Decoder::DecodeTypeRegister(Instruction* instr) {
           Format(instr, "sllv 'rd, 'rt, 'rs");
           break;
         case SRLV:
-          if (instr->SaValue() == 0) {
+          if (instr->SaField() == 0) {
             Format(instr, "srlv 'rd, 'rt, 'rs");
           } else {
             if (mips32r2) {
@@ -668,9 +687,9 @@ void Decoder::DecodeTypeRegister(Instruction* instr) {
           Format(instr, "and  'rd, 'rs, 'rt");
           break;
         case OR:
-          if (0 == instr->RsValue()) {
+          if (0 == instr->RsField()) {
             Format(instr, "mov  'rd, 'rt");
-          } else if (0 == instr->RtValue()) {
+          } else if (0 == instr->RtField()) {
             Format(instr, "mov  'rd, 'rs");
           } else {
             Format(instr, "or   'rd, 'rs, 'rt");
@@ -724,7 +743,7 @@ void Decoder::DecodeTypeRegister(Instruction* instr) {
           break;
         default:
           UNREACHABLE();
-      }
+      };
       break;
     case SPECIAL2:
       switch (instr->FunctionFieldRaw()) {
@@ -736,7 +755,7 @@ void Decoder::DecodeTypeRegister(Instruction* instr) {
           break;
         default:
           UNREACHABLE();
-      }
+      };
       break;
     case SPECIAL3:
       switch (instr->FunctionFieldRaw()) {
@@ -746,23 +765,23 @@ void Decoder::DecodeTypeRegister(Instruction* instr) {
           } else {
             Unknown(instr);
           }
+          }
           break;
-        }
         case EXT: {
           if (mips32r2) {
             Format(instr, "ext  'rt, 'rs, 'sd, 'sa");
           } else {
             Unknown(instr);
           }
+          }
           break;
-        }
         default:
           UNREACHABLE();
-      }
+      };
       break;
     default:
       UNREACHABLE();
-  }
+  };
 }
 
 
@@ -772,7 +791,7 @@ void Decoder::DecodeTypeImmediate(Instruction* instr) {
     case COP1:
       switch (instr->RsFieldRaw()) {
         case BC1:
-          if (instr->FBtrueValue()) {
+          if (instr->FBtrueField()) {
             Format(instr, "bc1t    'bc, 'imm16u");
           } else {
             Format(instr, "bc1f    'bc, 'imm16u");
@@ -798,7 +817,7 @@ void Decoder::DecodeTypeImmediate(Instruction* instr) {
           break;
         default:
           UNREACHABLE();
-      }
+      };
     break;  // Case REGIMM.
     // ------------- Branch instructions.
     case BEQ:
@@ -897,10 +916,10 @@ void Decoder::DecodeTypeImmediate(Instruction* instr) {
 void Decoder::DecodeTypeJump(Instruction* instr) {
   switch (instr->OpcodeFieldRaw()) {
     case J:
-      Format(instr, "j       'imm26x");
+      Format(instr, "j    'imm26");
       break;
     case JAL:
-      Format(instr, "jal     'imm26x");
+      Format(instr, "jal  'imm26");
       break;
     default:
       UNREACHABLE();
@@ -912,7 +931,7 @@ void Decoder::DecodeTypeJump(Instruction* instr) {
 int Decoder::InstructionDecode(byte_* instr_ptr) {
   Instruction* instr = Instruction::At(instr_ptr);
   // Print raw instruction bytes.
-  out_buffer_pos_ += OS::SNPrintF(out_buffer_ + out_buffer_pos_,
+  out_buffer_pos_ += v8i::OS::SNPrintF(out_buffer_ + out_buffer_pos_,
                                        "%08x       ",
                                        instr->InstructionBits());
   switch (instr->InstructionType()) {
@@ -932,11 +951,11 @@ int Decoder::InstructionDecode(byte_* instr_ptr) {
       UNSUPPORTED_MIPS();
     }
   }
-  return Instruction::kInstrSize;
+  return Instruction::kInstructionSize;
 }
 
 
-} }  // namespace v8::internal
+} }  // namespace assembler::mips
 
 
 
@@ -944,7 +963,8 @@ int Decoder::InstructionDecode(byte_* instr_ptr) {
 
 namespace disasm {
 
-using v8::internal::byte_;
+namespace v8i = v8::internal;
+
 
 const char* NameConverter::NameOfAddress(byte_* addr) const {
   static v8::internal::EmbeddedVector<char, 32> tmp_buffer;
@@ -959,12 +979,12 @@ const char* NameConverter::NameOfConstant(byte_* addr) const {
 
 
 const char* NameConverter::NameOfCPURegister(int reg) const {
-  return v8::internal::Registers::Name(reg);
+  return assembler::mips::Registers::Name(reg);
 }
 
 
 const char* NameConverter::NameOfXMMRegister(int reg) const {
-  return v8::internal::FPURegisters::Name(reg);
+  return assembler::mips::FPURegisters::Name(reg);
 }
 
 
@@ -992,7 +1012,7 @@ Disassembler::~Disassembler() {}
 
 int Disassembler::InstructionDecode(v8::internal::Vector<char> buffer,
                                     byte_* instruction) {
-  v8::internal::Decoder d(converter_, buffer);
+  assembler::mips::Decoder d(converter_, buffer);
   return d.InstructionDecode(instruction);
 }
 

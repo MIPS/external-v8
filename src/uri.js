@@ -90,13 +90,11 @@ function URIEncodePair(cc1 , cc2, result, index) {
 }
 
 
-function URIHexCharsToCharCode(highChar, lowChar) {
-  var highCode = HexValueOf(highChar);
-  var lowCode = HexValueOf(lowChar);
-  if (highCode == -1 || lowCode == -1) {
+function URIHexCharsToCharCode(ch1, ch2) {
+  if (HexValueOf(ch1) == -1 || HexValueOf(ch2) == -1) {
     throw new $URIError("URI malformed");
   }
-  return (highCode << 4) | lowCode;
+  return HexStrToCharCode(ch1 + ch2);
 }
 
 
@@ -198,7 +196,7 @@ function Decode(uri, reserved) {
     var ch = uri.charAt(k);
     if (ch == '%') {
       if (k + 2 >= uriLength) throw new $URIError("URI malformed");
-      var cc = URIHexCharsToCharCode(uri.charCodeAt(++k), uri.charCodeAt(++k));
+      var cc = URIHexCharsToCharCode(uri.charAt(++k), uri.charAt(++k));
       if (cc >> 7) {
         var n = 0;
         while (((cc << ++n) & 0x80) != 0) ;
@@ -207,8 +205,8 @@ function Decode(uri, reserved) {
         octets[0] = cc;
         if (k + 3 * (n - 1) >= uriLength) throw new $URIError("URI malformed");
         for (var i = 1; i < n; i++) {
-          if (uri.charAt(++k) != '%') throw new $URIError("URI malformed");
-          octets[i] = URIHexCharsToCharCode(uri.charCodeAt(++k), uri.charCodeAt(++k));
+          k++;
+          octets[i] = URIHexCharsToCharCode(uri.charAt(++k), uri.charAt(++k));
         }
         index = URIDecodeOctets(octets, result, index);
       } else {
@@ -327,7 +325,9 @@ function URIEncodeComponent(component) {
 }
 
 
-function HexValueOf(code) {
+function HexValueOf(c) {
+  var code = c.charCodeAt(0);
+
   // 0-9
   if (code >= 48 && code <= 57) return code - 48;
   // A-F
@@ -351,6 +351,18 @@ function CharCodeToHex4Str(cc) {
     var c = hexCharArray[cc & 0x0F];
     r = c + r;
     cc = cc >>> 4;
+  }
+  return r;
+}
+
+
+// Converts hex string to char code. Not efficient.
+function HexStrToCharCode(s) {
+  var m = 0;
+  var r = 0;
+  for (var i = s.length - 1; i >= 0; --i) {
+    r = r + (HexValueOf(s.charAt(i)) << m);
+    m = m + 4;
   }
   return r;
 }
@@ -400,3 +412,4 @@ function SetupURI() {
 }
 
 SetupURI();
+

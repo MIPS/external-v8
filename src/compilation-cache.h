@@ -51,8 +51,7 @@ class CompilationCache {
   // contain a script for the given source string.
   static Handle<SharedFunctionInfo> LookupEval(Handle<String> source,
                                                Handle<Context> context,
-                                               bool is_global,
-                                               StrictModeFlag strict_mode);
+                                               bool is_global);
 
   // Returns the regexp data associated with the given regexp if it
   // is in cache, otherwise an empty handle.
@@ -77,19 +76,8 @@ class CompilationCache {
                         JSRegExp::Flags flags,
                         Handle<FixedArray> data);
 
-  // Support for eager optimization tracking.
-  static bool ShouldOptimizeEagerly(Handle<JSFunction> function);
-  static void MarkForEagerOptimizing(Handle<JSFunction> function);
-  static void MarkForLazyOptimizing(Handle<JSFunction> function);
-
-  // Reset the eager optimization tracking data.
-  static void ResetEagerOptimizingData();
-
   // Clear the cache - also used to initialize the cache at startup.
   static void Clear();
-
-  // Remove given shared function info from all caches.
-  static void Remove(Handle<SharedFunctionInfo> function_info);
 
   // GC support.
   static void Iterate(ObjectVisitor* v);

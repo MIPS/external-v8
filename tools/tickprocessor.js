@@ -26,21 +26,16 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-function inherits(childCtor, parentCtor) {
-  childCtor.prototype.__proto__ = parentCtor.prototype;
-};
-
-
-function V8Profile(separateIc) {
-  Profile.call(this);
+function Profile(separateIc) {
+  devtools.profiler.Profile.call(this);
   if (!separateIc) {
-    this.skipThisFunction = function(name) { return V8Profile.IC_RE.test(name); };
+    this.skipThisFunction = function(name) { return Profile.IC_RE.test(name); };
   }
 };
-inherits(V8Profile, Profile);
+Profile.prototype = devtools.profiler.Profile.prototype;
 
 
-V8Profile.IC_RE =
+Profile.IC_RE =
     /^(?:CallIC|LoadIC|StoreIC)|(?:Builtin: (?:Keyed)?(?:Call|Load|Store)IC_)/;
 
 
@@ -57,37 +52,29 @@ function readFile(fileName) {
 }
 
 
-/**
- * Parser for dynamic code optimization state.
- */
-function parseState(s) {
-  switch (s) {
-  case "": return Profile.CodeState.COMPILED;
-  case "~": return Profile.CodeState.OPTIMIZABLE;
-  case "*": return Profile.CodeState.OPTIMIZED;
-  }
-  throw new Error("unknown code state: " + s);
-}
+function inherits(childCtor, parentCtor) {
+  childCtor.prototype.__proto__ = parentCtor.prototype;
+};
 
 
 function SnapshotLogProcessor() {
-  LogReader.call(this, {
+  devtools.profiler.LogReader.call(this, {
       'code-creation': {
-          parsers: [null, parseInt, parseInt, null, 'var-args'],
-          processor: this.processCodeCreation },
-      'code-move': { parsers: [parseInt, parseInt],
-          processor: this.processCodeMove },
-      'code-delete': { parsers: [parseInt],
-          processor: this.processCodeDelete },
+          parsers: [null, this.createAddressParser('code'), parseInt, null],
+          processor: this.processCodeCreation, backrefs: true },
+      'code-move': { parsers: [this.createAddressParser('code'),
+          this.createAddressParser('code-move-to')],
+          processor: this.processCodeMove, backrefs: true },
+      'code-delete': { parsers: [this.createAddressParser('code')],
+          processor: this.processCodeDelete, backrefs: true },
       'function-creation': null,
       'function-move': null,
       'function-delete': null,
-      'sfi-move': null,
-      'snapshot-pos': { parsers: [parseInt, parseInt],
-          processor: this.processSnapshotPosition }});
+      'snapshot-pos': { parsers: [this.createAddressParser('code'), parseInt],
+          processor: this.processSnapshotPosition, backrefs: true }});
 
-  V8Profile.prototype.handleUnknownCode = function(operation, addr) {
-    var op = Profile.Operation;
+  Profile.prototype.handleUnknownCode = function(operation, addr) {
+    var op = devtools.profiler.Profile.Operation;
     switch (operation) {
       case op.MOVE:
         print('Snapshot: Code move event for unknown code: 0x' +
@@ -100,21 +87,16 @@ function SnapshotLogProcessor() {
     }
   };
 
-  this.profile_ = new V8Profile();
+  this.profile_ = new Profile();
   this.serializedEntries_ = [];
 }
-inherits(SnapshotLogProcessor, LogReader);
+inherits(SnapshotLogProcessor, devtools.profiler.LogReader);
 
 
 SnapshotLogProcessor.prototype.processCodeCreation = function(
-    type, start, size, name, maybe_func) {
-  if (maybe_func.length) {
-    var funcAddr = parseInt(maybe_func[0]);
-    var state = parseState(maybe_func[1]);
-    this.profile_.addFuncCode(type, name, start, size, funcAddr, state);
-  } else {
-    this.profile_.addCode(type, name, start, size);
-  }
+    type, start, size, name) {
+  var entry = this.profile_.addCode(
+      this.expandAlias(type), name, start, size);
 };
 
 
@@ -147,33 +129,39 @@ SnapshotLogProcessor.prototype.getSerializedEntryName = function(pos) {
 
 function TickProcessor(
     cppEntriesProvider, separateIc, ignoreUnknown, stateFilter, snapshotLogProcessor) {
-  LogReader.call(this, {
+  devtools.profiler.LogReader.call(this, {
       'shared-library': { parsers: [null, parseInt, parseInt],
           processor: this.processSharedLibrary },
       'code-creation': {
-          parsers: [null, parseInt, parseInt, null, 'var-args'],
-          processor: this.processCodeCreation },
-      'code-move': { parsers: [parseInt, parseInt],
-          processor: this.processCodeMove },
-      'code-delete': { parsers: [parseInt],
-          processor: this.processCodeDelete },
-      'sfi-move': { parsers: [parseInt, parseInt],
-          processor: this.processFunctionMove },
-      'snapshot-pos': { parsers: [parseInt, parseInt],
-          processor: this.processSnapshotPosition },
-      'tick': { parsers: [parseInt, parseInt, parseInt, parseInt, 'var-args'],
-          processor: this.processTick },
+          parsers: [null, this.createAddressParser('code'), parseInt, null],
+          processor: this.processCodeCreation, backrefs: true },
+      'code-move': { parsers: [this.createAddressParser('code'),
+          this.createAddressParser('code-move-to')],
+          processor: this.processCodeMove, backrefs: true },
+      'code-delete': { parsers: [this.createAddressParser('code')],
+          processor: this.processCodeDelete, backrefs: true },
+      'function-creation': { parsers: [this.createAddressParser('code'),
+          this.createAddressParser('function-obj')],
+          processor: this.processFunctionCreation, backrefs: true },
+      'function-move': { parsers: [this.createAddressParser('code'),
+          this.createAddressParser('code-move-to')],
+          processor: this.processFunctionMove, backrefs: true },
+      'function-delete': { parsers: [this.createAddressParser('code')],
+          processor: this.processFunctionDelete, backrefs: true },
+      'snapshot-pos': { parsers: [this.createAddressParser('code'), parseInt],
+          processor: this.processSnapshotPosition, backrefs: true },
+      'tick': { parsers: [this.createAddressParser('code'),
+          this.createAddressParser('stack'),
+          this.createAddressParser('func'), parseInt, 'var-args'],
+          processor: this.processTick, backrefs: true },
       'heap-sample-begin': { parsers: [null, null, parseInt],
           processor: this.processHeapSampleBegin },
       'heap-sample-end': { parsers: [null, null],
           processor: this.processHeapSampleEnd },
       'heap-js-prod-item': { parsers: [null, 'var-args'],
-          processor: this.processJSProducer },
+          processor: this.processJSProducer, backrefs: true },
       // Ignored events.
       'profiler': null,
-      'function-creation': null,
-      'function-move': null,
-      'function-delete': null,
       'heap-sample-stats': null,
       'heap-sample-item': null,
       'heap-js-cons-item': null,
@@ -191,9 +179,9 @@ function TickProcessor(
   var ticks = this.ticks_ =
     { total: 0, unaccounted: 0, excluded: 0, gc: 0 };
 
-  V8Profile.prototype.handleUnknownCode = function(
+  Profile.prototype.handleUnknownCode = function(
       operation, addr, opt_stackPos) {
-    var op = Profile.Operation;
+    var op = devtools.profiler.Profile.Operation;
     switch (operation) {
       case op.MOVE:
         print('Code move event for unknown code: 0x' + addr.toString(16));
@@ -212,16 +200,16 @@ function TickProcessor(
     }
   };
 
-  this.profile_ = new V8Profile(separateIc);
+  this.profile_ = new Profile(separateIc);
   this.codeTypes_ = {};
   // Count each tick as a time unit.
-  this.viewBuilder_ = new ViewBuilder(1);
+  this.viewBuilder_ = new devtools.profiler.ViewBuilder(1);
   this.lastLogFileName_ = null;
 
   this.generation_ = 1;
   this.currentProducerProfile_ = null;
 };
-inherits(TickProcessor, LogReader);
+inherits(TickProcessor, devtools.profiler.LogReader);
 
 
 TickProcessor.VmStates = {
@@ -304,15 +292,10 @@ TickProcessor.prototype.processSharedLibrary = function(
 
 
 TickProcessor.prototype.processCodeCreation = function(
-    type, start, size, name, maybe_func) {
+    type, start, size, name) {
   name = this.deserializedEntriesNames_[start] || name;
-  if (maybe_func.length) {
-    var funcAddr = parseInt(maybe_func[0]);
-    var state = parseState(maybe_func[1]);
-    this.profile_.addFuncCode(type, name, start, size, funcAddr, state);
-  } else {
-    this.profile_.addCode(type, name, start, size);
-  }
+  var entry = this.profile_.addCode(
+      this.expandAlias(type), name, start, size);
 };
 
 
@@ -326,8 +309,19 @@ TickProcessor.prototype.processCodeDelete = function(start) {
 };
 
 
+TickProcessor.prototype.processFunctionCreation = function(
+    functionAddr, codeAddr) {
+  this.profile_.addCodeAlias(functionAddr, codeAddr);
+};
+
+
 TickProcessor.prototype.processFunctionMove = function(from, to) {
-  this.profile_.moveFunc(from, to);
+  this.profile_.safeMoveDynamicCode(from, to);
+};
+
+
+TickProcessor.prototype.processFunctionDelete = function(start) {
+  this.profile_.safeDeleteDynamicCode(start);
 };
 
 
@@ -344,7 +338,7 @@ TickProcessor.prototype.includeTick = function(vmState) {
 };
 
 
-TickProcessor.prototype.processTick = function(pc, sp, tos, vmState, stack) {
+TickProcessor.prototype.processTick = function(pc, sp, func, vmState, stack) {
   this.ticks_.total++;
   if (vmState == TickProcessor.VmStates.GC) this.ticks_.gc++;
   if (!this.includeTick(vmState)) {
@@ -352,20 +346,25 @@ TickProcessor.prototype.processTick = function(pc, sp, tos, vmState, stack) {
     return;
   }
 
-  if (tos) {
-    var funcEntry = this.profile_.findEntry(tos);
+  if (func) {
+    var funcEntry = this.profile_.findEntry(func);
     if (!funcEntry || !funcEntry.isJSFunction || !funcEntry.isJSFunction()) {
-      tos = 0;
+      func = 0;
+    } else {
+      var currEntry = this.profile_.findEntry(pc);
+      if (!currEntry || !currEntry.isJSFunction || currEntry.isJSFunction()) {
+        func = 0;
+      }
     }
   }
 
-  this.profile_.recordTick(this.processStack(pc, tos, stack));
+  this.profile_.recordTick(this.processStack(pc, func, stack));
 };
 
 
 TickProcessor.prototype.processHeapSampleBegin = function(space, state, ticks) {
   if (space != 'Heap') return;
-  this.currentProducerProfile_ = new CallTree();
+  this.currentProducerProfile_ = new devtools.profiler.CallTree();
 };
 
 

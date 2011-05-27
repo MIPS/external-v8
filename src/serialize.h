@@ -297,11 +297,9 @@ class Deserializer: public SerializerDeserializer {
 #endif
 
  private:
-  virtual void VisitPointers(Object** start, Object** end,
-                             RelocInfo* rinfo = 0);
+  virtual void VisitPointers(Object** start, Object** end);
 
-  virtual void VisitExternalReferences(Address* start, Address* end,
-                                       RelocInfo* rinfo = 0) {
+  virtual void VisitExternalReferences(Address* start, Address* end) {
     UNREACHABLE();
   }
 
@@ -404,7 +402,7 @@ class Serializer : public SerializerDeserializer {
  public:
   explicit Serializer(SnapshotByteSink* sink);
   ~Serializer();
-  void VisitPointers(Object** start, Object** end, RelocInfo* rinfo = 0);
+  void VisitPointers(Object** start, Object** end);
   // You can call this after serialization to find out how much space was used
   // in each space.
   int CurrentAllocationAddress(int space) {
@@ -447,12 +445,20 @@ class Serializer : public SerializerDeserializer {
         reference_representation_(how_to_code + where_to_point),
         bytes_processed_so_far_(0) { }
     void Serialize();
-    void VisitPointers(Object** start, Object** end, RelocInfo* rinfo = 0);
-    void VisitExternalReferences(Address* start, Address* end,
-                                 RelocInfo* rinfo = 0);
+    void VisitPointers(Object** start, Object** end);
+    // Variant of VisitPointer(). Reloc info is needed to obtain address of
+    // the object pointer in the code (if pointer is mixed into instruction
+    // bits of several instructions).
+    void VisitPointer(Object** obj, RelocInfo* rinfo);
+    void VisitPointers(Object** start, Object** end, RelocInfo* rinfo);
+    void VisitExternalReferences(Address* start, Address* end);
+    // Variant of VisitExternalReference(). Reloc info is needed to obtain
+    // address of the ExternalReference pointer in the code (if pointer is
+    // mixed into instruction bits of several instructions).
+    void VisitExternalReference(Address* adr, RelocInfo* r);
+    void VisitExternalReferences(Address* start, Address* end, RelocInfo* r);
     void VisitCodeTarget(RelocInfo* target);
     void VisitCodeEntry(Address entry_address);
-    void VisitGlobalPropertyCell(RelocInfo* rinfo);
     void VisitRuntimeEntry(RelocInfo* reloc);
     // Used for seralizing the external strings that hold the natives source.
     void VisitExternalAsciiString(

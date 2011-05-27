@@ -67,8 +67,13 @@
 (function() {
   var array;
   for (var i = 0; i < 7; i++) {
+    // SpiderMonkey and JSC return undefined in the case where no
+    // arguments are given instead of using the implicit undefined
+    // arguments.  This does not follow ECMA-262, but we do the same for
+    // compatibility.
+    // TraceMonkey follows ECMA-262 though.
     array = [1, 2, 3]
-    assertEquals([], array.splice());
+    assertEquals(undefined, array.splice());
     assertEquals([1, 2, 3], array);
 
     // SpiderMonkey, TraceMonkey and JSC treat the case where no delete count is
@@ -335,20 +340,6 @@
     assertFalse(array.hasOwnProperty(63), "array.hasOwnProperty(63)");
     assertFalse(array.hasOwnProperty(2 << 32 - 1),
                 "array.hasOwnProperty(2 << 31 - 1)");
-  }
-})();
-
-
-// Check the case of JS builtin .splice()
-(function() {
-  for (var i = 0; i < 7; i++) {
-    var array = [1, 2, 3, 4];
-    Array.prototype[3] = 'foo';  // To force JS builtin.
-
-    var spliced = array.splice();
-
-    assertEquals([], spliced);
-    assertEquals([1, 2, 3, 4], array);
   }
 })();
 

@@ -26,31 +26,36 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
+// Initlialize namespaces
+var devtools = devtools || {};
+devtools.profiler = devtools.profiler || {};
+
+
 /**
  * Constructs a mapper that maps addresses into code entries.
  *
  * @constructor
  */
-function CodeMap() {
+devtools.profiler.CodeMap = function() {
   /**
    * Dynamic code entries. Used for JIT compiled code.
    */
-  this.dynamics_ = new SplayTree();
+  this.dynamics_ = new goog.structs.SplayTree();
 
   /**
    * Name generator for entries having duplicate names.
    */
-  this.dynamicsNameGen_ = new CodeMap.NameGenerator();
+  this.dynamicsNameGen_ = new devtools.profiler.CodeMap.NameGenerator();
 
   /**
    * Static code entries. Used for statically compiled code.
    */
-  this.statics_ = new SplayTree();
+  this.statics_ = new goog.structs.SplayTree();
 
   /**
    * Libraries entries. Used for the whole static code libraries.
    */
-  this.libraries_ = new SplayTree();
+  this.libraries_ = new goog.structs.SplayTree();
 
   /**
    * Map of memory pages occupied with static code.
@@ -62,23 +67,23 @@ function CodeMap() {
 /**
  * The number of alignment bits in a page address.
  */
-CodeMap.PAGE_ALIGNMENT = 12;
+devtools.profiler.CodeMap.PAGE_ALIGNMENT = 12;
 
 
 /**
  * Page size in bytes.
  */
-CodeMap.PAGE_SIZE =
-    1 << CodeMap.PAGE_ALIGNMENT;
+devtools.profiler.CodeMap.PAGE_SIZE =
+    1 << devtools.profiler.CodeMap.PAGE_ALIGNMENT;
 
 
 /**
  * Adds a dynamic (i.e. moveable and discardable) code entry.
  *
  * @param {number} start The starting address.
- * @param {CodeMap.CodeEntry} codeEntry Code entry object.
+ * @param {devtools.profiler.CodeMap.CodeEntry} codeEntry Code entry object.
  */
-CodeMap.prototype.addCode = function(start, codeEntry) {
+devtools.profiler.CodeMap.prototype.addCode = function(start, codeEntry) {
   this.dynamics_.insert(start, codeEntry);
 };
 
@@ -90,7 +95,7 @@ CodeMap.prototype.addCode = function(start, codeEntry) {
  * @param {number} from The starting address of the entry being moved.
  * @param {number} to The destination address.
  */
-CodeMap.prototype.moveCode = function(from, to) {
+devtools.profiler.CodeMap.prototype.moveCode = function(from, to) {
   var removedNode = this.dynamics_.remove(from);
   this.dynamics_.insert(to, removedNode.value);
 };
@@ -102,7 +107,7 @@ CodeMap.prototype.moveCode = function(from, to) {
  *
  * @param {number} start The starting address of the entry being deleted.
  */
-CodeMap.prototype.deleteCode = function(start) {
+devtools.profiler.CodeMap.prototype.deleteCode = function(start) {
   var removedNode = this.dynamics_.remove(start);
 };
 
@@ -111,9 +116,9 @@ CodeMap.prototype.deleteCode = function(start) {
  * Adds a library entry.
  *
  * @param {number} start The starting address.
- * @param {CodeMap.CodeEntry} codeEntry Code entry object.
+ * @param {devtools.profiler.CodeMap.CodeEntry} codeEntry Code entry object.
  */
-CodeMap.prototype.addLibrary = function(
+devtools.profiler.CodeMap.prototype.addLibrary = function(
     start, codeEntry) {
   this.markPages_(start, start + codeEntry.size);
   this.libraries_.insert(start, codeEntry);
@@ -124,9 +129,9 @@ CodeMap.prototype.addLibrary = function(
  * Adds a static code entry.
  *
  * @param {number} start The starting address.
- * @param {CodeMap.CodeEntry} codeEntry Code entry object.
+ * @param {devtools.profiler.CodeMap.CodeEntry} codeEntry Code entry object.
  */
-CodeMap.prototype.addStaticCode = function(
+devtools.profiler.CodeMap.prototype.addStaticCode = function(
     start, codeEntry) {
   this.statics_.insert(start, codeEntry);
 };
@@ -135,10 +140,10 @@ CodeMap.prototype.addStaticCode = function(
 /**
  * @private
  */
-CodeMap.prototype.markPages_ = function(start, end) {
+devtools.profiler.CodeMap.prototype.markPages_ = function(start, end) {
   for (var addr = start; addr <= end;
-       addr += CodeMap.PAGE_SIZE) {
-    this.pages_[addr >>> CodeMap.PAGE_ALIGNMENT] = 1;
+       addr += devtools.profiler.CodeMap.PAGE_SIZE) {
+    this.pages_[addr >>> devtools.profiler.CodeMap.PAGE_ALIGNMENT] = 1;
   }
 };
 
@@ -146,7 +151,7 @@ CodeMap.prototype.markPages_ = function(start, end) {
 /**
  * @private
  */
-CodeMap.prototype.isAddressBelongsTo_ = function(addr, node) {
+devtools.profiler.CodeMap.prototype.isAddressBelongsTo_ = function(addr, node) {
   return addr >= node.key && addr < (node.key + node.value.size);
 };
 
@@ -154,7 +159,7 @@ CodeMap.prototype.isAddressBelongsTo_ = function(addr, node) {
 /**
  * @private
  */
-CodeMap.prototype.findInTree_ = function(tree, addr) {
+devtools.profiler.CodeMap.prototype.findInTree_ = function(tree, addr) {
   var node = tree.findGreatestLessThan(addr);
   return node && this.isAddressBelongsTo_(addr, node) ? node.value : null;
 };
@@ -166,8 +171,8 @@ CodeMap.prototype.findInTree_ = function(tree, addr) {
  *
  * @param {number} addr Address.
  */
-CodeMap.prototype.findEntry = function(addr) {
-  var pageAddr = addr >>> CodeMap.PAGE_ALIGNMENT;
+devtools.profiler.CodeMap.prototype.findEntry = function(addr) {
+  var pageAddr = addr >>> devtools.profiler.CodeMap.PAGE_ALIGNMENT;
   if (pageAddr in this.pages_) {
     // Static code entries can contain "holes" of unnamed code.
     // In this case, the whole library is assigned to this address.
@@ -195,7 +200,7 @@ CodeMap.prototype.findEntry = function(addr) {
  *
  * @param {number} addr Address.
  */
-CodeMap.prototype.findDynamicEntryByStartAddress =
+devtools.profiler.CodeMap.prototype.findDynamicEntryByStartAddress =
     function(addr) {
   var node = this.dynamics_.find(addr);
   return node ? node.value : null;
@@ -205,7 +210,7 @@ CodeMap.prototype.findDynamicEntryByStartAddress =
 /**
  * Returns an array of all dynamic code entries.
  */
-CodeMap.prototype.getAllDynamicEntries = function() {
+devtools.profiler.CodeMap.prototype.getAllDynamicEntries = function() {
   return this.dynamics_.exportValues();
 };
 
@@ -213,7 +218,7 @@ CodeMap.prototype.getAllDynamicEntries = function() {
 /**
  * Returns an array of all static code entries.
  */
-CodeMap.prototype.getAllStaticEntries = function() {
+devtools.profiler.CodeMap.prototype.getAllStaticEntries = function() {
   return this.statics_.exportValues();
 };
 
@@ -221,7 +226,7 @@ CodeMap.prototype.getAllStaticEntries = function() {
 /**
  * Returns an array of all libraries entries.
  */
-CodeMap.prototype.getAllLibrariesEntries = function() {
+devtools.profiler.CodeMap.prototype.getAllLibrariesEntries = function() {
   return this.libraries_.exportValues();
 };
 
@@ -233,29 +238,29 @@ CodeMap.prototype.getAllLibrariesEntries = function() {
  * @param {string} opt_name Code entry name.
  * @constructor
  */
-CodeMap.CodeEntry = function(size, opt_name) {
+devtools.profiler.CodeMap.CodeEntry = function(size, opt_name) {
   this.size = size;
   this.name = opt_name || '';
   this.nameUpdated_ = false;
 };
 
 
-CodeMap.CodeEntry.prototype.getName = function() {
+devtools.profiler.CodeMap.CodeEntry.prototype.getName = function() {
   return this.name;
 };
 
 
-CodeMap.CodeEntry.prototype.toString = function() {
+devtools.profiler.CodeMap.CodeEntry.prototype.toString = function() {
   return this.name + ': ' + this.size.toString(16);
 };
 
 
-CodeMap.NameGenerator = function() {
+devtools.profiler.CodeMap.NameGenerator = function() {
   this.knownNames_ = {};
 };
 
 
-CodeMap.NameGenerator.prototype.getName = function(name) {
+devtools.profiler.CodeMap.NameGenerator.prototype.getName = function(name) {
   if (!(name in this.knownNames_)) {
     this.knownNames_[name] = 0;
     return name;

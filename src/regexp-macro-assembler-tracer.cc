@@ -213,7 +213,7 @@ void RegExpMacroAssemblerTracer::CheckCharacterGT(uc16 limit,
 }
 
 
-void RegExpMacroAssemblerTracer::CheckCharacter(unsigned c, Label* on_equal) {
+void RegExpMacroAssemblerTracer::CheckCharacter(uint32_t c, Label* on_equal) {
   PrintF(" CheckCharacter(c='u%04x', label[%08x]);\n",
          c, LabelToInt(on_equal));
   assembler_->CheckCharacter(c, on_equal);
@@ -232,7 +232,7 @@ void RegExpMacroAssemblerTracer::CheckNotAtStart(Label* on_not_at_start) {
 }
 
 
-void RegExpMacroAssemblerTracer::CheckNotCharacter(unsigned c,
+void RegExpMacroAssemblerTracer::CheckNotCharacter(uint32_t c,
                                                    Label* on_not_equal) {
   PrintF(" CheckNotCharacter(c='u%04x', label[%08x]);\n",
          c, LabelToInt(on_not_equal));
@@ -241,8 +241,8 @@ void RegExpMacroAssemblerTracer::CheckNotCharacter(unsigned c,
 
 
 void RegExpMacroAssemblerTracer::CheckCharacterAfterAnd(
-    unsigned c,
-    unsigned mask,
+    uint32_t c,
+    uint32_t mask,
     Label* on_equal) {
   PrintF(" CheckCharacterAfterAnd(c='u%04x', mask=0x%04x, label[%08x]);\n",
          c,
@@ -253,8 +253,8 @@ void RegExpMacroAssemblerTracer::CheckCharacterAfterAnd(
 
 
 void RegExpMacroAssemblerTracer::CheckNotCharacterAfterAnd(
-    unsigned c,
-    unsigned mask,
+    uint32_t c,
+    uint32_t mask,
     Label* on_not_equal) {
   PrintF(" CheckNotCharacterAfterAnd(c='u%04x', mask=0x%04x, label[%08x]);\n",
          c,

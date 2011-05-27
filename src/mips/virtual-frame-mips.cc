@@ -71,8 +71,6 @@ void VirtualFrame::MergeTo(const VirtualFrame* expected,
                            Register r1,
                            const Operand& r2) {
   if (Equals(expected)) return;
-  ASSERT((expected->tos_known_smi_map_ & tos_known_smi_map_) ==
-         expected->tos_known_smi_map_);
   ASSERT(expected->IsCompatibleWith(this));
   MergeTOSTo(expected->top_of_stack_state_, cond, r1, r2);
   ASSERT(register_allocation_map_ == expected->register_allocation_map_);
@@ -84,7 +82,7 @@ void VirtualFrame::MergeTo(VirtualFrame* expected,
                            Register r1,
                            const Operand& r2) {
   if (Equals(expected)) return;
-  tos_known_smi_map_ &= expected->tos_known_smi_map_;
+  expected->tos_known_smi_map_ &= tos_known_smi_map_;
   MergeTOSTo(expected->top_of_stack_state_, cond, r1, r2);
   ASSERT(register_allocation_map_ == expected->register_allocation_map_);
 }
@@ -207,7 +205,7 @@ void VirtualFrame::Enter() {
   // on a2 being available for use.
   if (FLAG_debug_code) {
     Label map_check, done;
-    __ JumpIfNotSmi(a1, &map_check, t1);
+    __ BranchOnNotSmi(a1, &map_check, t1);
     __ stop("VirtualFrame::Enter - a1 is not a function (smi check).");
     __ bind(&map_check);
     __ GetObjectType(a1, a2, a2);
@@ -262,8 +260,8 @@ void VirtualFrame::AllocateStackSlots() {
       __ bind(&alloc_locals_loop);
       __ sw(t0, MemOperand(a2, 0));
       __ Subu(a1, a1, Operand(1));
-      __ Branch(USE_DELAY_SLOT, &alloc_locals_loop, gt, a1, Operand(zero_reg));
-      __ Addu(a2, a2, Operand(kPointerSize));  // In branch-delay slot.
+      __ Branch(false, &alloc_locals_loop, gt, a1, Operand(zero_reg));
+      __ Addu(a2, a2, Operand(kPointerSize));  // Use branch-delay slot.
     }
   }
   // Call the stub if lower.
@@ -348,25 +346,18 @@ void VirtualFrame::CallLoadIC(Handle<String> name, RelocInfo::Mode mode) {
 }
 
 
-void VirtualFrame::CallStoreIC(Handle<String> name,
-                               bool is_contextual,
-                               StrictModeFlag strict_mode) {
-  Handle<Code> ic(Builtins::builtin(
-      (strict_mode == kStrictMode) ? Builtins::StoreIC_Initialize_Strict
-                                   : Builtins::StoreIC_Initialize));
+void VirtualFrame::CallStoreIC(Handle<String> name, bool is_contextual) {
+  Handle<Code> ic(Builtins::builtin(Builtins::StoreIC_Initialize));
   PopToA0();
-  RelocInfo::Mode mode;
   if (is_contextual) {
     SpillAll();
     __ lw(a1, MemOperand(cp, Context::SlotOffset(Context::GLOBAL_INDEX)));
-    mode = RelocInfo::CODE_TARGET_CONTEXT;
   } else {
     EmitPop(a1);
     SpillAll();
-    mode = RelocInfo::CODE_TARGET;
   }
   __ li(a2, Operand(name));
-  CallCodeObject(ic, mode, 0);
+  CallCodeObject(ic, RelocInfo::CODE_TARGET, 0);
 }
 
 
@@ -378,10 +369,8 @@ void VirtualFrame::CallKeyedLoadIC() {
 }
 
 
-void VirtualFrame::CallKeyedStoreIC(StrictModeFlag strict_mode) {
-  Handle<Code> ic(Builtins::builtin(
-      (strict_mode == kStrictMode) ? Builtins::KeyedStoreIC_Initialize_Strict
-                                   : Builtins::KeyedStoreIC_Initialize));
+void VirtualFrame::CallKeyedStoreIC() {
+  Handle<Code> ic(Builtins::builtin(Builtins::KeyedStoreIC_Initialize));
   PopToA1A0();
   SpillAll();
   EmitPop(a2);
@@ -395,7 +384,11 @@ void VirtualFrame::CallCodeObject(Handle<Code> code,
   switch (code->kind()) {
     case Code::CALL_IC:
     case Code::KEYED_CALL_IC:
+      break;
+
     case Code::FUNCTION:
+      UNIMPLEMENTED_MIPS();
+      __ break_(__LINE__);
       break;
 
     case Code::KEYED_LOAD_IC:

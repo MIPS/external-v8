@@ -411,7 +411,7 @@ Mirror.prototype.allocateTransientHandle_ = function() {
 
 Mirror.prototype.toText = function() {
   // Simpel to text which is used when on specialization in subclass.
-  return "#<" + this.constructor.name + ">";
+  return "#<" + builtins.GetInstanceName(this.constructor.name) + ">";
 }
 
 
@@ -425,7 +425,7 @@ Mirror.prototype.toText = function() {
  * @extends Mirror
  */
 function ValueMirror(type, value, transient) {
-  %_CallFunction(this, type, Mirror);
+  Mirror.call(this, type);
   this.value_ = value;
   if (!transient) {
     this.allocateHandle_();
@@ -470,7 +470,7 @@ ValueMirror.prototype.value = function() {
  * @extends ValueMirror
  */
 function UndefinedMirror() {
-  %_CallFunction(this, UNDEFINED_TYPE, void 0, ValueMirror);
+  ValueMirror.call(this, UNDEFINED_TYPE, void 0);
 }
 inherits(UndefinedMirror, ValueMirror);
 
@@ -486,7 +486,7 @@ UndefinedMirror.prototype.toText = function() {
  * @extends ValueMirror
  */
 function NullMirror() {
-  %_CallFunction(this, NULL_TYPE, null, ValueMirror);
+  ValueMirror.call(this, NULL_TYPE, null);
 }
 inherits(NullMirror, ValueMirror);
 
@@ -503,7 +503,7 @@ NullMirror.prototype.toText = function() {
  * @extends ValueMirror
  */
 function BooleanMirror(value) {
-  %_CallFunction(this, BOOLEAN_TYPE, value, ValueMirror);
+  ValueMirror.call(this, BOOLEAN_TYPE, value);
 }
 inherits(BooleanMirror, ValueMirror);
 
@@ -520,7 +520,7 @@ BooleanMirror.prototype.toText = function() {
  * @extends ValueMirror
  */
 function NumberMirror(value) {
-  %_CallFunction(this, NUMBER_TYPE, value, ValueMirror);
+  ValueMirror.call(this, NUMBER_TYPE, value);
 }
 inherits(NumberMirror, ValueMirror);
 
@@ -537,7 +537,7 @@ NumberMirror.prototype.toText = function() {
  * @extends ValueMirror
  */
 function StringMirror(value) {
-  %_CallFunction(this, STRING_TYPE, value, ValueMirror);
+  ValueMirror.call(this, STRING_TYPE, value);
 }
 inherits(StringMirror, ValueMirror);
 
@@ -568,7 +568,7 @@ StringMirror.prototype.toText = function() {
  * @extends ValueMirror
  */
 function ObjectMirror(value, type, transient) {
-  %_CallFunction(this, type || OBJECT_TYPE, value, transient, ValueMirror);
+  ValueMirror.call(this, type || OBJECT_TYPE, value, transient);
 }
 inherits(ObjectMirror, ValueMirror);
 
@@ -767,7 +767,7 @@ ObjectMirror.prototype.toText = function() {
       name = this.className();
     }
   }
-  return '#<' + name + '>';
+  return '#<' + builtins.GetInstanceName(name) + '>';
 };
 
 
@@ -778,7 +778,7 @@ ObjectMirror.prototype.toText = function() {
  * @extends ObjectMirror
  */
 function FunctionMirror(value) {
-  %_CallFunction(this, value, FUNCTION_TYPE, ObjectMirror);
+  ObjectMirror.call(this, value, FUNCTION_TYPE);
   this.resolved_ = true;
 }
 inherits(FunctionMirror, ObjectMirror);
@@ -908,7 +908,7 @@ FunctionMirror.prototype.toText = function() {
 function UnresolvedFunctionMirror(value) {
   // Construct this using the ValueMirror as an unresolved function is not a
   // real object but just a string.
-  %_CallFunction(this, FUNCTION_TYPE, value, ValueMirror);
+  ValueMirror.call(this, FUNCTION_TYPE, value);
   this.propertyCount_ = 0;
   this.elementCount_ = 0;
   this.resolved_ = false;
@@ -958,7 +958,7 @@ UnresolvedFunctionMirror.prototype.propertyNames = function(kind, limit) {
  * @extends ObjectMirror
  */
 function ArrayMirror(value) {
-  %_CallFunction(this, value, ObjectMirror);
+  ObjectMirror.call(this, value);
 }
 inherits(ArrayMirror, ObjectMirror);
 
@@ -994,7 +994,7 @@ ArrayMirror.prototype.indexedPropertiesFromRange = function(opt_from_index, opt_
  * @extends ObjectMirror
  */
 function DateMirror(value) {
-  %_CallFunction(this, value, ObjectMirror);
+  ObjectMirror.call(this, value);
 }
 inherits(DateMirror, ObjectMirror);
 
@@ -1012,7 +1012,7 @@ DateMirror.prototype.toText = function() {
  * @extends ObjectMirror
  */
 function RegExpMirror(value) {
-  %_CallFunction(this, value, REGEXP_TYPE, ObjectMirror);
+  ObjectMirror.call(this, value, REGEXP_TYPE);
 }
 inherits(RegExpMirror, ObjectMirror);
 
@@ -1066,7 +1066,7 @@ RegExpMirror.prototype.toText = function() {
  * @extends ObjectMirror
  */
 function ErrorMirror(value) {
-  %_CallFunction(this, value, ERROR_TYPE, ObjectMirror);
+  ObjectMirror.call(this, value, ERROR_TYPE);
 }
 inherits(ErrorMirror, ObjectMirror);
 
@@ -1084,9 +1084,9 @@ ErrorMirror.prototype.toText = function() {
   // Use the same text representation as in messages.js.
   var text;
   try {
-    str = %_CallFunction(this.value_, builtins.errorToString);
+    str = builtins.ToDetailString(this.value_);
   } catch (e) {
-    str = '#<Error>';
+    str = '#<an Error>';
   }
   return str;
 }
@@ -1101,7 +1101,7 @@ ErrorMirror.prototype.toText = function() {
  * @extends Mirror
  */
 function PropertyMirror(mirror, name, details) {
-  %_CallFunction(this, PROPERTY_TYPE, Mirror);
+  Mirror.call(this, PROPERTY_TYPE);
   this.mirror_ = mirror;
   this.name_ = name;
   this.value_ = details[0];
@@ -1397,7 +1397,7 @@ FrameDetails.prototype.scopeCount = function() {
  * @extends Mirror
  */
 function FrameMirror(break_id, index) {
-  %_CallFunction(this, FRAME_TYPE, Mirror);
+  Mirror.call(this, FRAME_TYPE);
   this.break_id_ = break_id;
   this.index_ = index;
   this.details_ = new FrameDetails(break_id, index);
@@ -1533,9 +1533,9 @@ FrameMirror.prototype.scope = function(index) {
 };
 
 
-FrameMirror.prototype.evaluate = function(source, disable_break, opt_context_object) {
+FrameMirror.prototype.evaluate = function(source, disable_break) {
   var result = %DebugEvaluate(this.break_id_, this.details_.frameId(),
-                              source, Boolean(disable_break), opt_context_object);
+                              source, Boolean(disable_break));
   return MakeMirror(result);
 };
 
@@ -1712,7 +1712,7 @@ ScopeDetails.prototype.object = function() {
  * @extends Mirror
  */
 function ScopeMirror(frame, index) {
-  %_CallFunction(this, SCOPE_TYPE, Mirror);
+  Mirror.call(this, SCOPE_TYPE);
   this.frame_index_ = frame.index_;
   this.scope_index_ = index;
   this.details_ = new ScopeDetails(frame, index);
@@ -1752,7 +1752,7 @@ ScopeMirror.prototype.scopeObject = function() {
  * @extends Mirror
  */
 function ScriptMirror(script) {
-  %_CallFunction(this, SCRIPT_TYPE, Mirror);
+  Mirror.call(this, SCRIPT_TYPE);
   this.script_ = script;
   this.context_ = new ContextMirror(script.context_data);
   this.allocateHandle_();
@@ -1868,7 +1868,7 @@ ScriptMirror.prototype.toText = function() {
  * @extends Mirror
  */
 function ContextMirror(data) {
-  %_CallFunction(this, CONTEXT_TYPE, Mirror);
+  Mirror.call(this, CONTEXT_TYPE);
   this.data_ = data;
   this.allocateHandle_();
 }
@@ -2369,7 +2369,7 @@ function NumberToJSON_(value) {
   if (isNaN(value)) {
     return 'NaN';
   }
-  if (!NUMBER_IS_FINITE(value)) {
+  if (!isFinite(value)) {
     if (value > 0) {
       return 'Infinity';
     } else {

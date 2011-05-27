@@ -55,10 +55,7 @@ var ZERO = (function() {
 assertEquals(0, ZERO);
 assertEquals(Infinity, 1/ZERO);
 assertEquals(-Infinity, 1/-ZERO);
-// Here we would like to have assertFalse(%_IsSmi(ZERO));  This is, however,
-// unreliable, since a new space exhaustion at a critical moment could send
-// us into the runtime system, which would quite legitimately put a Smi zero
-// here.
+assertFalse(%_IsSmi(ZERO));
 assertFalse(%_IsSmi(-ZERO));
 
 var o = {};

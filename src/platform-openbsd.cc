@@ -52,7 +52,6 @@
 #include "v8.h"
 
 #include "platform.h"
-#include "vm-state-inl.h"
 
 
 namespace v8 {
@@ -213,25 +212,11 @@ class PosixMemoryMappedFile : public OS::MemoryMappedFile {
     : file_(file), memory_(memory), size_(size) { }
   virtual ~PosixMemoryMappedFile();
   virtual void* memory() { return memory_; }
-  virtual int size() { return size_; }
  private:
   FILE* file_;
   void* memory_;
   int size_;
 };
-
-
-OS::MemoryMappedFile* OS::MemoryMappedFile::open(const char* name) {
-  FILE* file = fopen(name, "r+");
-  if (file == NULL) return NULL;
-
-  fseek(file, 0, SEEK_END);
-  int size = ftell(file);
-
-  void* memory =
-      mmap(0, size, PROT_READ | PROT_WRITE, MAP_SHARED, fileno(file), 0);
-  return new PosixMemoryMappedFile(file, memory, size);
-}
 
 
 OS::MemoryMappedFile* OS::MemoryMappedFile::create(const char* name, int size,
@@ -401,12 +386,6 @@ bool ThreadHandle::IsValid() const {
 
 
 Thread::Thread() : ThreadHandle(ThreadHandle::INVALID) {
-  set_name("v8:<unknown>");
-}
-
-
-Thread::Thread(const char* name) : ThreadHandle(ThreadHandle::INVALID) {
-  set_name(name);
 }
 
 
@@ -423,12 +402,6 @@ static void* ThreadEntry(void* arg) {
   ASSERT(thread->IsValid());
   thread->Run();
   return NULL;
-}
-
-
-void Thread::set_name(const char* name) {
-  strncpy(name_, name, sizeof(name_));
-  name_[sizeof(name_) - 1] = '\0';
 }
 
 
@@ -598,9 +571,10 @@ class Sampler::PlatformData : public Malloced {
 };
 
 
-Sampler::Sampler(int interval)
+Sampler::Sampler(int interval, bool profiling)
     : interval_(interval),
-      profiling_(false),
+      profiling_(profiling),
+      synchronous_(profiling),
       active_(false),
       samples_taken_(0) {
   data_ = new PlatformData();

@@ -380,8 +380,7 @@ ContextSwitcher* ContextSwitcher::singleton_ = NULL;
 
 
 ContextSwitcher::ContextSwitcher(int every_n_ms)
-  : Thread("v8:CtxtSwitcher"),
-    keep_going_(true),
+  : keep_going_(true),
     sleep_ms_(every_n_ms) {
 }
 

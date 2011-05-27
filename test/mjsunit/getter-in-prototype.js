@@ -31,11 +31,9 @@
 var o = {};
 var p = {};
 p.__defineGetter__('x', function(){});
-p.__defineGetter__(0, function(){});
 o.__proto__ = p;
 
 assertThrows("o.x = 42");
-assertThrows("o[0] = 42");
 
 function f() {
   with(o) {
@@ -50,9 +48,3 @@ function g() {
   x = 42;
 }
 assertThrows("g()");
-
-__proto__ = p;
-function g2() {
-  this[0] = 42;
-}
-assertThrows("g2()");

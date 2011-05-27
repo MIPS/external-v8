@@ -58,7 +58,7 @@ function countNodes(profile, traverseFunc) {
 
 
 function ProfileTestDriver() {
-  this.profile = new Profile();
+  this.profile = new devtools.profiler.Profile();
   this.stack_ = [];
   this.addFunctions_();
 };

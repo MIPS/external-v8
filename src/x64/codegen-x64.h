@@ -1,4 +1,4 @@
-// Copyright 2011 the V8 project authors. All rights reserved.
+// Copyright 2010 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -308,9 +308,6 @@ class CodeGenerator: public AstVisitor {
                                        Code::Flags flags,
                                        CompilationInfo* info);
 
-  // Print the code after compiling it.
-  static void PrintCode(Handle<Code> code, CompilationInfo* info);
-
 #ifdef ENABLE_LOGGING_AND_PROFILING
   static bool ShouldGenerateLog(Expression* type);
 #endif
@@ -357,7 +354,6 @@ class CodeGenerator: public AstVisitor {
   // Accessors
   inline bool is_eval();
   inline Scope* scope();
-  inline StrictModeFlag strict_mode_flag();
 
   // Generating deferred code.
   void ProcessDeferred();
@@ -374,9 +370,8 @@ class CodeGenerator: public AstVisitor {
   // Node visitors.
   void VisitStatements(ZoneList<Statement*>* statements);
 
-  virtual void VisitSlot(Slot* node);
-#define DEF_VISIT(type)                         \
-  virtual void Visit##type(type* node);
+#define DEF_VISIT(type) \
+  void Visit##type(type* node);
   AST_NODE_LIST(DEF_VISIT)
 #undef DEF_VISIT
 

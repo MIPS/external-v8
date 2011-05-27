@@ -60,5 +60,4 @@ TEST(SemaphoreTimeout) {
   sem->Signal();
   ok = sem->Wait(1000);
   CHECK(ok);
-  delete sem;
 }

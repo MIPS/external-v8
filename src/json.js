@@ -27,6 +27,11 @@
 
 var $JSON = global.JSON;
 
+function ParseJSONUnfiltered(text) {
+  var s = $String(text);
+  return %ParseJson(s);
+}
+
 function Revive(holder, name, reviver) {
   var val = holder[name];
   if (IS_OBJECT(val)) {
@@ -38,7 +43,7 @@ function Revive(holder, name, reviver) {
       }
     } else {
       for (var p in val) {
-        if (%_CallFunction(val, p, ObjectHasOwnProperty)) {
+        if (ObjectHasOwnProperty.call(val, p)) {
           var newElement = Revive(val, p, reviver);
           if (IS_UNDEFINED(newElement)) {
             delete val[p];
@@ -49,11 +54,11 @@ function Revive(holder, name, reviver) {
       }
     }
   }
-  return %_CallFunction(holder, name, val, reviver);
+  return reviver.call(holder, name, val);
 }
 
 function JSONParse(text, reviver) {
-  var unfiltered = %ParseJson(TO_STRING_INLINE(text));
+  var unfiltered = ParseJSONUnfiltered(text);
   if (IS_FUNCTION(reviver)) {
     return Revive({'': unfiltered}, '', reviver);
   } else {
@@ -61,13 +66,24 @@ function JSONParse(text, reviver) {
   }
 }
 
-function SerializeArray(value, replacer, stack, indent, gap) {
-  if (!%PushIfAbsent(stack, value)) {
-    throw MakeTypeError('circular_structure', $Array());
+function StackContains(stack, val) {
+  var length = stack.length;
+  for (var i = 0; i < length; i++) {
+    if (stack[i] === val) {
+      return true;
+    }
   }
+  return false;
+}
+
+function SerializeArray(value, replacer, stack, indent, gap) {
+  if (StackContains(stack, value)) {
+    throw MakeTypeError('circular_structure', []);
+  }
+  stack.push(value);
   var stepback = indent;
   indent += gap;
-  var partial = new InternalArray();
+  var partial = [];
   var len = value.length;
   for (var i = 0; i < len; i++) {
     var strP = JSONSerialize($String(i), value, replacer, stack,
@@ -92,16 +108,17 @@ function SerializeArray(value, replacer, stack, indent, gap) {
 }
 
 function SerializeObject(value, replacer, stack, indent, gap) {
-  if (!%PushIfAbsent(stack, value)) {
-    throw MakeTypeError('circular_structure', $Array());
+  if (StackContains(stack, value)) {
+    throw MakeTypeError('circular_structure', []);
   }
+  stack.push(value);
   var stepback = indent;
   indent += gap;
-  var partial = new InternalArray();
+  var partial = [];
   if (IS_ARRAY(replacer)) {
     var length = replacer.length;
     for (var i = 0; i < length; i++) {
-      if (%_CallFunction(replacer, i, ObjectHasOwnProperty)) {
+      if (ObjectHasOwnProperty.call(replacer, i)) {
         var p = replacer[i];
         var strP = JSONSerialize(p, value, replacer, stack, indent, gap);
         if (!IS_UNDEFINED(strP)) {
@@ -114,7 +131,7 @@ function SerializeObject(value, replacer, stack, indent, gap) {
     }
   } else {
     for (var p in value) {
-      if (%_CallFunction(value, p, ObjectHasOwnProperty)) {
+      if (ObjectHasOwnProperty.call(value, p)) {
         var strP = JSONSerialize(p, value, replacer, stack, indent, gap);
         if (!IS_UNDEFINED(strP)) {
           var member = %QuoteJSONString(p) + ":";
@@ -141,195 +158,138 @@ function SerializeObject(value, replacer, stack, indent, gap) {
 
 function JSONSerialize(key, holder, replacer, stack, indent, gap) {
   var value = holder[key];
-  if (IS_SPEC_OBJECT(value)) {
+  if (IS_OBJECT(value) && value) {
     var toJSON = value.toJSON;
     if (IS_FUNCTION(toJSON)) {
-      value = %_CallFunction(value, key, toJSON);
+      value = toJSON.call(value, key);
     }
   }
   if (IS_FUNCTION(replacer)) {
-    value = %_CallFunction(holder, key, value, replacer);
+    value = replacer.call(holder, key, value);
   }
-  if (IS_STRING(value)) {
-    return %QuoteJSONString(value);
-  } else if (IS_NUMBER(value)) {
-    return NUMBER_IS_FINITE(value) ? $String(value) : "null";
-  } else if (IS_BOOLEAN(value)) {
-    return value ? "true" : "false";
-  } else if (IS_NULL(value)) {
-    return "null";
-  } else if (IS_SPEC_OBJECT(value) && !(typeof value == "function")) {
-    // Non-callable object. If it's a primitive wrapper, it must be unwrapped.
-    if (IS_ARRAY(value)) {
-      return SerializeArray(value, replacer, stack, indent, gap);
-    } else if (IS_NUMBER_WRAPPER(value)) {
-      value = ToNumber(value);
-      return NUMBER_IS_FINITE(value) ? ToString(value) : "null";
-    } else if (IS_STRING_WRAPPER(value)) {
-      return %QuoteJSONString(ToString(value));
-    } else if (IS_BOOLEAN_WRAPPER(value)) {
-      return %_ValueOf(value) ? "true" : "false";
-    } else {
-      return SerializeObject(value, replacer, stack, indent, gap);
-    }
-  }
-  // Undefined or a callable object.
-  return void 0;
-}
-
-
-function BasicSerializeArray(value, stack, builder) {
-  var len = value.length;
-  if (len == 0) {
-    builder.push("[]");
-    return;
-  }
-  if (!%PushIfAbsent(stack, value)) {
-    throw MakeTypeError('circular_structure', $Array());
-  }
-  builder.push("[");
-  var val = value[0];
-  if (IS_STRING(val)) {
-    // First entry is a string. Remaining entries are likely to be strings too.
-    builder.push(%QuoteJSONString(val));
-    for (var i = 1; i < len; i++) {
-      val = value[i];
-      if (IS_STRING(val)) {
-        builder.push(%QuoteJSONStringComma(val));
-      } else {
-        builder.push(",");
-        var before = builder.length;
-        BasicJSONSerialize(i, value[i], stack, builder);
-        if (before == builder.length) builder[before - 1] = ",null";
-      }
-    }
-  } else if (IS_NUMBER(val)) {
-    // First entry is a number. Remaining entries are likely to be numbers too.
-    builder.push(NUMBER_IS_FINITE(val) ? %_NumberToString(val) : "null");
-    for (var i = 1; i < len; i++) {
-      builder.push(",");
-      val = value[i];
-      if (IS_NUMBER(val)) {
-        builder.push(NUMBER_IS_FINITE(val) 
-                     ? %_NumberToString(val) 
-                     : "null");
-      } else {
-        var before = builder.length;
-        BasicJSONSerialize(i, value[i], stack, builder);
-        if (before == builder.length) builder[before - 1] = ",null";
-      }
-    }
-  } else {
-    var before = builder.length;
-    BasicJSONSerialize(0, val, stack, builder);
-    if (before == builder.length) builder.push("null");
-    for (var i = 1; i < len; i++) {
-      builder.push(",");
-      before = builder.length;
-      val = value[i];
-      BasicJSONSerialize(i, val, stack, builder);
-      if (before == builder.length) builder[before - 1] = ",null";
-    }
-  }
-  stack.pop();
-  builder.push("]"); 
-}
-
-
-function BasicSerializeObject(value, stack, builder) {
-  if (!%PushIfAbsent(stack, value)) {
-    throw MakeTypeError('circular_structure', $Array());
-  }
-  builder.push("{");
-  var first = true;
-  for (var p in value) {
-    if (%HasLocalProperty(value, p)) {
-      if (!first) {
-        builder.push(%QuoteJSONStringComma(p));
-      } else {
-        builder.push(%QuoteJSONString(p));
-      }
-      builder.push(":");
-      var before = builder.length;
-      BasicJSONSerialize(p, value[p], stack, builder);
-      if (before == builder.length) {
-        builder.pop();
-        builder.pop();
-      } else {
-        first = false;
-      }
-    }
-  }
-  stack.pop();
-  builder.push("}");
-}
-
-
-function BasicJSONSerialize(key, value, stack, builder) {
-  if (IS_SPEC_OBJECT(value)) {
-    var toJSON = value.toJSON;
-    if (IS_FUNCTION(toJSON)) {
-      value = %_CallFunction(value, ToString(key), toJSON);
-    }
-  }
-  if (IS_STRING(value)) {
-    builder.push(%QuoteJSONString(value));
-  } else if (IS_NUMBER(value)) {
-    builder.push(NUMBER_IS_FINITE(value) ? %_NumberToString(value) : "null");
-  } else if (IS_BOOLEAN(value)) {
-    builder.push(value ? "true" : "false");
-  } else if (IS_NULL(value)) {
-    builder.push("null");
-  } else if (IS_SPEC_OBJECT(value) && !(typeof value == "function")) {
-    // Value is a non-callable object.
-    // Unwrap value if necessary
+  // Unwrap value if necessary
+  if (IS_OBJECT(value)) {
     if (IS_NUMBER_WRAPPER(value)) {
-      value = ToNumber(value);
-      builder.push(NUMBER_IS_FINITE(value) ? %_NumberToString(value) : "null");
+      value = $Number(value);
     } else if (IS_STRING_WRAPPER(value)) {
-      builder.push(%QuoteJSONString(ToString(value)));
+      value = $String(value);
     } else if (IS_BOOLEAN_WRAPPER(value)) {
-      builder.push(%_ValueOf(value) ? "true" : "false");
-    } else if (IS_ARRAY(value)) {
-      BasicSerializeArray(value, stack, builder);
-    } else {
-      BasicSerializeObject(value, stack, builder);
+      value =  %_ValueOf(value);
     }
+  }
+  switch (typeof value) {
+    case "string":
+      return %QuoteJSONString(value);
+    case "object":
+      if (!value) {
+        return "null";
+      } else if (IS_ARRAY(value)) {
+        return SerializeArray(value, replacer, stack, indent, gap);
+      } else {
+        return SerializeObject(value, replacer, stack, indent, gap);
+      }
+    case "number":
+      return $isFinite(value) ? $String(value) : "null";
+    case "boolean":
+      return value ? "true" : "false";
   }
 }
 
+function BasicSerializeArray(value, stack) {
+  if (StackContains(stack, value)) {
+    throw MakeTypeError('circular_structure', []);
+  }
+  stack.push(value);
+  var partial = [];
+  var len = value.length;
+  for (var i = 0; i < len; i++) {
+    var strP = BasicJSONSerialize($String(i), value, stack);
+    if (IS_UNDEFINED(strP)) strP = "null";
+    partial.push(strP);
+  }
+  stack.pop();
+  return "[" + partial.join() + "]";
+}
+
+function BasicSerializeObject(value, stack) {
+  if (StackContains(stack, value)) {
+    throw MakeTypeError('circular_structure', []);
+  }
+  stack.push(value);
+  var partial = [];
+  for (var p in value) {
+    if (ObjectHasOwnProperty.call(value, p)) {
+      var strP = BasicJSONSerialize(p, value, stack);
+      if (!IS_UNDEFINED(strP)) partial.push(%QuoteJSONString(p) + ":" + strP);
+    }
+  }
+  stack.pop();
+  return "{" + partial.join() + "}";
+}
+
+function BasicJSONSerialize(key, holder, stack) {
+  var value = holder[key];
+  if (IS_OBJECT(value) && value) {
+    var toJSON = value.toJSON;
+    if (IS_FUNCTION(toJSON)) value = toJSON.call(value, key);
+  }
+  // Unwrap value if necessary
+  if (IS_OBJECT(value)) {
+    if (IS_NUMBER_WRAPPER(value)) {
+      value = $Number(value);
+    } else if (IS_STRING_WRAPPER(value)) {
+      value = $String(value);
+    } else if (IS_BOOLEAN_WRAPPER(value)) {
+      value =  %_ValueOf(value);
+    }
+  }
+  switch (typeof value) {
+    case "string":
+      return %QuoteJSONString(value);
+    case "object":
+      if (!value) {
+        return "null";
+      } else if (IS_ARRAY(value)) {
+        return BasicSerializeArray(value, stack);
+      } else {
+        return BasicSerializeObject(value, stack);
+      }
+    case "number":
+      return $isFinite(value) ? $String(value) : "null";
+    case "boolean":
+      return value ? "true" : "false";
+  }
+}
 
 function JSONStringify(value, replacer, space) {
-  if (%_ArgumentsLength() == 1) {
-    var builder = new InternalArray();
-    BasicJSONSerialize('', value, new InternalArray(), builder);
-    if (builder.length == 0) return;
-    var result = %_FastAsciiArrayJoin(builder, "");
-    if (!IS_UNDEFINED(result)) return result;
-    return %StringBuilderConcat(builder, builder.length, "");
+  if (IS_UNDEFINED(replacer) && IS_UNDEFINED(space)) {
+    return BasicJSONSerialize('', {'': value}, []);
   }
   if (IS_OBJECT(space)) {
     // Unwrap 'space' if it is wrapped
     if (IS_NUMBER_WRAPPER(space)) {
-      space = ToNumber(space);
+      space = $Number(space);
     } else if (IS_STRING_WRAPPER(space)) {
-      space = ToString(space);
+      space = $String(space);
     }
   }
   var gap;
   if (IS_NUMBER(space)) {
-    space = MathMax(0, MathMin(ToInteger(space), 10));
-    gap = SubString("          ", 0, space);
+    space = $Math.min(ToInteger(space), 10);
+    gap = "";
+    for (var i = 0; i < space; i++) {
+      gap += " ";
+    }
   } else if (IS_STRING(space)) {
     if (space.length > 10) {
-      gap = SubString(space, 0, 10);
+      gap = space.substring(0, 10);
     } else {
       gap = space;
     }
   } else {
     gap = "";
   }
-  return JSONSerialize('', {'': value}, replacer, new InternalArray(), "", gap);
+  return JSONSerialize('', {'': value}, replacer, [], "", gap);
 }
 
 function SetupJSON() {

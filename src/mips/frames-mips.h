@@ -1,4 +1,4 @@
-// Copyright 2011 the V8 project authors. All rights reserved.
+// Copyright 2010 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -65,18 +65,6 @@ static const RegList kCalleeSaved =
 static const int kNumCalleeSaved = 11;
 
 
-// Number of registers for which space is reserved in safepoints. Must be a
-// multiple of 8.
-// TODO(mips): Only 8 registers may actually be sufficient. Revisit.
-static const int kNumSafepointRegisters = 16;
-
-// Define the list of registers actually saved at safepoints.
-// Note that the number of saved registers may be smaller than the reserved
-// space, i.e. kNumSafepointSavedRegisters <= kNumSafepointRegisters.
-static const RegList kSafepointSavedRegisters = kJSCallerSaved | kCalleeSaved;
-static const int kNumSafepointSavedRegisters =
-    kNumJSCallerSaved + kNumCalleeSaved;
-
 typedef Object* JSCallerSavedBuffer[kNumJSCallerSaved];
 
 
@@ -101,18 +89,17 @@ class EntryFrameConstants : public AllStatic {
 
 class ExitFrameConstants : public AllStatic {
  public:
-  // See some explanation in MacroAssembler::EnterExitFrame.
-  static const int kCodeOffset = -2 * kPointerSize;
-
+  static const int kDebugMarkOffset = -1 * kPointerSize;
+  // Must be the same as kDebugMarkOffset. Alias introduced when upgrading.
+  static const int kCodeOffset = -1 * kPointerSize;
   static const int kSPOffset = -1 * kPointerSize;
+
+  static const int kSavedRegistersOffset = 0 * kPointerSize;
 
   // The caller fields are below the frame pointer on the stack.
   static const int kCallerFPOffset = +0 * kPointerSize;
   // The calling JS function is between FP and PC.
   static const int kCallerPCOffset = +1 * kPointerSize;
-
-  // MIPS-specific: a pointer to the old sp to avoid unnecessary calculations.
-  static const int kCallerSPOffset = +2 * kPointerSize;
 
   // FP-relative displacement of the caller's SP.
   static const int kCallerSPDisplacement = +3 * kPointerSize;
@@ -134,8 +121,7 @@ class StandardFrameConstants : public AllStatic {
   static const int kRegularArgsSlotsSize = kRArgsSlotsSize;
 
   // C/C++ argument slots size.
-  static const int kCArgSlotCount = 4;
-  static const int kCArgsSlotsSize = kCArgSlotCount * kPointerSize;
+  static const int kCArgsSlotsSize = 4 * kPointerSize;
   // JS argument slots size.
   static const int kJSArgsSlotsSize = 0 * kPointerSize;
   // Assembly builtins argument slots size.
@@ -172,7 +158,6 @@ inline Object* JavaScriptFrame::function_slot_object() const {
   const int offset = JavaScriptFrameConstants::kFunctionOffset;
   return Memory::Object_at(fp() + offset);
 }
-
 
 } }  // namespace v8::internal
 

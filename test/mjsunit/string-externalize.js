@@ -25,7 +25,7 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// Flags: --expose-externalize-string --expose-gc
+// Flags: --expose-externalize-string
 
 var size = 1024;
 
@@ -93,7 +93,3 @@ function test() {
 for (var i = 0; i < 10; i++) {
   test();
 }
-
-// Clean up string to make Valgrind happy.
-gc();
-gc();

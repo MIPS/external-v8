@@ -118,9 +118,8 @@ var knownProblems = {
   "Abort": true,
 
   // Avoid calling the concat operation, because weird lengths
-  // may lead to out-of-memory.  Ditto for StringBuilderJoin.
+  // may lead to out-of-memory.
   "StringBuilderConcat": true,
-  "StringBuilderJoin": true,
 
   // These functions use pseudo-stack-pointers and are not robust
   // to unexpected integer values.
@@ -130,6 +129,7 @@ var knownProblems = {
   // which means that we have to propagate errors back.
   "SetFunctionBreakPoint": true,
   "SetScriptBreakPoint": true,
+  "ChangeBreakOnException": true,
   "PrepareStep": true,
 
   // Too slow.
@@ -145,9 +145,6 @@ var knownProblems = {
   "NewArgumentsFast": true,
   "PushContext": true,
   "LazyCompile": true,
-  "LazyRecompile": true,
-  "NotifyDeoptimized": true,
-  "NotifyOSR": true,
   "CreateObjectLiteralBoilerplate": true,
   "CloneLiteralBoilerplate": true,
   "CloneShallowLiteralBoilerplate": true,
@@ -179,11 +176,7 @@ var knownProblems = {
   "_GetFromCache": true,
 
   // This function expects its first argument to be a non-smi.
-  "_IsStringWrapperSafeForDefaultValueOf" : true,
-
-  // Only applicable to strings.
-  "_HasCachedArrayIndex": true,
-  "_GetCachedArrayIndex": true
+  "_IsStringWrapperSafeForDefaultValueOf" : true
 };
 
 var currentlyUncallable = {

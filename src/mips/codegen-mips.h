@@ -245,9 +245,6 @@ class CodeGenerator: public AstVisitor {
                                        Code::Flags flags,
                                        CompilationInfo* info);
 
-  // Print the code after compiling it.
-  static void PrintCode(Handle<Code> code, CompilationInfo* info);
-
 #ifdef ENABLE_LOGGING_AND_PROFILING
   static bool ShouldGenerateLog(Expression* type);
 #endif
@@ -304,7 +301,7 @@ class CodeGenerator: public AstVisitor {
     // This is in correlation with the padding in MacroAssembler::Abort.
     return FLAG_debug_code ? 45 : 20;
   }
-  static const int kInlinedKeyedStoreInstructionsAfterPatch = 13;
+  static const int kInlinedKeyedStoreInstructionsAfterPatch = 9;
   static int GetInlinedNamedStoreInstructionsAfterPatch() {
     ASSERT(inlined_write_barrier_size_ != -1);
     // Magic number 5: instruction count after patched map load:
@@ -326,7 +323,6 @@ class CodeGenerator: public AstVisitor {
   // Accessors.
   inline bool is_eval();
   inline Scope* scope();
-  inline StrictModeFlag strict_mode_flag();
 
   // Generating deferred code.
   void ProcessDeferred();
@@ -348,9 +344,8 @@ class CodeGenerator: public AstVisitor {
   // Node visitors.
   void VisitStatements(ZoneList<Statement*>* statements);
 
-  virtual void VisitSlot(Slot* node);
 #define DEF_VISIT(type) \
-  virtual void Visit##type(type* node);
+  void Visit##type(type* node);
   AST_NODE_LIST(DEF_VISIT)
 #undef DEF_VISIT
 
@@ -622,7 +617,6 @@ class CodeGenerator: public AstVisitor {
   friend class FastCodeGenerator;
   friend class FullCodeGenerator;
   friend class FullCodeGenSyntaxChecker;
-  friend class LCodeGen;
 
   DISALLOW_COPY_AND_ASSIGN(CodeGenerator);
 };

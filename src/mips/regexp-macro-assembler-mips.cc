@@ -878,13 +878,14 @@ void RegExpMacroAssemblerMIPS::PopRegister(int register_index) {
 }
 
 
+
 void RegExpMacroAssemblerMIPS::PushBacktrack(Label* label) {
   if (label->is_bound()) {
     int target = label->pos();
     __ li(a0, Operand(target + Code::kHeaderSize - kHeapObjectTag));
   } else {
     Label after_constant;
-    __ Branch(&after_constant);
+    __ Branch(&after_constant, al);
     int offset = masm_->pc_offset();
     int cp_offset = offset + Code::kHeaderSize - kHeapObjectTag;
     __ emit(0);
@@ -1225,7 +1226,6 @@ void RegExpCEntryStub::Generate(MacroAssembler* masm_) {
   __ Addu(sp, sp, Operand(stack_alignment));
   __ Jump(Operand(ra));
 }
-
 
 #undef __
 

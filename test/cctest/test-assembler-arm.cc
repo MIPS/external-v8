@@ -45,7 +45,11 @@ typedef Object* (*F3)(void* p, int p1, int p2, int p3, int p4);
 static v8::Persistent<v8::Context> env;
 
 
+// The test framework does not accept flags on the command line, so we set them
 static void InitializeVM() {
+  // enable generation of comments
+  FLAG_debug_code = true;
+
   if (env.IsEmpty()) {
     env = v8::Context::New();
   }
@@ -65,10 +69,9 @@ TEST(0) {
 
   CodeDesc desc;
   assm.GetCode(&desc);
-  Object* code = Heap::CreateCode(
-      desc,
-      Code::ComputeFlags(Code::STUB),
-      Handle<Object>(Heap::undefined_value()))->ToObjectChecked();
+  Object* code = Heap::CreateCode(desc,
+                                  Code::ComputeFlags(Code::STUB),
+                                  Handle<Object>(Heap::undefined_value()));
   CHECK(code->IsCode());
 #ifdef DEBUG
   Code::cast(code)->Print();
@@ -88,7 +91,7 @@ TEST(1) {
   Label L, C;
 
   __ mov(r1, Operand(r0));
-  __ mov(r0, Operand(0, RelocInfo::NONE));
+  __ mov(r0, Operand(0));
   __ b(&C);
 
   __ bind(&L);
@@ -96,16 +99,15 @@ TEST(1) {
   __ sub(r1, r1, Operand(1));
 
   __ bind(&C);
-  __ teq(r1, Operand(0, RelocInfo::NONE));
+  __ teq(r1, Operand(0));
   __ b(ne, &L);
   __ mov(pc, Operand(lr));
 
   CodeDesc desc;
   assm.GetCode(&desc);
-  Object* code = Heap::CreateCode(
-      desc,
-      Code::ComputeFlags(Code::STUB),
-      Handle<Object>(Heap::undefined_value()))->ToObjectChecked();
+  Object* code = Heap::CreateCode(desc,
+                                  Code::ComputeFlags(Code::STUB),
+                                  Handle<Object>(Heap::undefined_value()));
   CHECK(code->IsCode());
 #ifdef DEBUG
   Code::cast(code)->Print();
@@ -133,7 +135,7 @@ TEST(2) {
   __ sub(r1, r1, Operand(1));
 
   __ bind(&C);
-  __ teq(r1, Operand(0, RelocInfo::NONE));
+  __ teq(r1, Operand(0));
   __ b(ne, &L);
   __ mov(pc, Operand(lr));
 
@@ -148,10 +150,9 @@ TEST(2) {
 
   CodeDesc desc;
   assm.GetCode(&desc);
-  Object* code = Heap::CreateCode(
-      desc,
-      Code::ComputeFlags(Code::STUB),
-      Handle<Object>(Heap::undefined_value()))->ToObjectChecked();
+  Object* code = Heap::CreateCode(desc,
+                                  Code::ComputeFlags(Code::STUB),
+                                  Handle<Object>(Heap::undefined_value()));
   CHECK(code->IsCode());
 #ifdef DEBUG
   Code::cast(code)->Print();
@@ -196,10 +197,9 @@ TEST(3) {
 
   CodeDesc desc;
   assm.GetCode(&desc);
-  Object* code = Heap::CreateCode(
-      desc,
-      Code::ComputeFlags(Code::STUB),
-      Handle<Object>(Heap::undefined_value()))->ToObjectChecked();
+  Object* code = Heap::CreateCode(desc,
+                                  Code::ComputeFlags(Code::STUB),
+                                  Handle<Object>(Heap::undefined_value()));
   CHECK(code->IsCode());
 #ifdef DEBUG
   Code::cast(code)->Print();
@@ -226,21 +226,13 @@ TEST(4) {
     double a;
     double b;
     double c;
-    double d;
-    double e;
-    double f;
-    double g;
-    double h;
-    int i;
-    double m;
-    double n;
-    float x;
-    float y;
+    float d;
+    float e;
   } T;
   T t;
 
   // Create a function that accepts &t, and loads, manipulates, and stores
-  // the doubles and floats.
+  // the doubles t.a, t.b, and t.c, and floats t.d, t.e.
   Assembler assm(NULL, 0);
   Label L, C;
 
@@ -262,59 +254,22 @@ TEST(4) {
     __ vmov(d4, r2, r3);
     __ vstr(d4, r4, OFFSET_OF(T, b));
 
-    // Load t.x and t.y, switch values, and store back to the struct.
-    __ vldr(s0, r4, OFFSET_OF(T, x));
-    __ vldr(s31, r4, OFFSET_OF(T, y));
-    __ vmov(s16, s0);
-    __ vmov(s0, s31);
-    __ vmov(s31, s16);
-    __ vstr(s0, r4, OFFSET_OF(T, x));
-    __ vstr(s31, r4, OFFSET_OF(T, y));
-
-    // Move a literal into a register that can be encoded in the instruction.
-    __ vmov(d4, 1.0);
-    __ vstr(d4, r4, OFFSET_OF(T, e));
-
-    // Move a literal into a register that requires 64 bits to encode.
-    // 0x3ff0000010000000 = 1.000000059604644775390625
-    __ vmov(d4, 1.000000059604644775390625);
-    __ vstr(d4, r4, OFFSET_OF(T, d));
-
-    // Convert from floating point to integer.
-    __ vmov(d4, 2.0);
-    __ vcvt_s32_f64(s31, d4);
-    __ vstr(s31, r4, OFFSET_OF(T, i));
-
-    // Convert from integer to floating point.
-    __ mov(lr, Operand(42));
-    __ vmov(s31, lr);
-    __ vcvt_f64_s32(d4, s31);
-    __ vstr(d4, r4, OFFSET_OF(T, f));
-
-    // Test vabs.
-    __ vldr(d1, r4, OFFSET_OF(T, g));
-    __ vabs(d0, d1);
-    __ vstr(d0, r4, OFFSET_OF(T, g));
-    __ vldr(d2, r4, OFFSET_OF(T, h));
-    __ vabs(d0, d2);
-    __ vstr(d0, r4, OFFSET_OF(T, h));
-
-    // Test vneg.
-    __ vldr(d1, r4, OFFSET_OF(T, m));
-    __ vneg(d0, d1);
-    __ vstr(d0, r4, OFFSET_OF(T, m));
-    __ vldr(d1, r4, OFFSET_OF(T, n));
-    __ vneg(d0, d1);
-    __ vstr(d0, r4, OFFSET_OF(T, n));
+    // Load t.d and t.e, switch values, and store back to the struct.
+    __ vldr(s0, r4, OFFSET_OF(T, d));
+    __ vldr(s1, r4, OFFSET_OF(T, e));
+    __ vmov(s2, s0);
+    __ vmov(s0, s1);
+    __ vmov(s1, s2);
+    __ vstr(s0, r4, OFFSET_OF(T, d));
+    __ vstr(s1, r4, OFFSET_OF(T, e));
 
     __ ldm(ia_w, sp, r4.bit() | fp.bit() | pc.bit());
 
     CodeDesc desc;
     assm.GetCode(&desc);
-    Object* code = Heap::CreateCode(
-        desc,
-        Code::ComputeFlags(Code::STUB),
-        Handle<Object>(Heap::undefined_value()))->ToObjectChecked();
+    Object* code = Heap::CreateCode(desc,
+                                    Code::ComputeFlags(Code::STUB),
+                                    Handle<Object>(Heap::undefined_value()));
     CHECK(code->IsCode());
 #ifdef DEBUG
     Code::cast(code)->Print();
@@ -323,28 +278,12 @@ TEST(4) {
     t.a = 1.5;
     t.b = 2.75;
     t.c = 17.17;
-    t.d = 0.0;
-    t.e = 0.0;
-    t.f = 0.0;
-    t.g = -2718.2818;
-    t.h = 31415926.5;
-    t.i = 0;
-    t.m = -2718.2818;
-    t.n = 123.456;
-    t.x = 4.5;
-    t.y = 9.0;
+    t.d = 4.5;
+    t.e = 9.0;
     Object* dummy = CALL_GENERATED_CODE(f, &t, 0, 0, 0, 0);
     USE(dummy);
-    CHECK_EQ(4.5, t.y);
-    CHECK_EQ(9.0, t.x);
-    CHECK_EQ(-123.456, t.n);
-    CHECK_EQ(2718.2818, t.m);
-    CHECK_EQ(2, t.i);
-    CHECK_EQ(2718.2818, t.g);
-    CHECK_EQ(31415926.5, t.h);
-    CHECK_EQ(42.0, t.f);
-    CHECK_EQ(1.0, t.e);
-    CHECK_EQ(1.000000059604644775390625, t.d);
+    CHECK_EQ(4.5, t.e);
+    CHECK_EQ(9.0, t.d);
     CHECK_EQ(4.25, t.c);
     CHECK_EQ(4.25, t.b);
     CHECK_EQ(1.5, t.a);
@@ -371,10 +310,9 @@ TEST(5) {
 
     CodeDesc desc;
     assm.GetCode(&desc);
-    Object* code = Heap::CreateCode(
-        desc,
-        Code::ComputeFlags(Code::STUB),
-        Handle<Object>(Heap::undefined_value()))->ToObjectChecked();
+    Object* code = Heap::CreateCode(desc,
+                                    Code::ComputeFlags(Code::STUB),
+                                    Handle<Object>(Heap::undefined_value()));
     CHECK(code->IsCode());
 #ifdef DEBUG
     Code::cast(code)->Print();
@@ -406,10 +344,9 @@ TEST(6) {
 
     CodeDesc desc;
     assm.GetCode(&desc);
-    Object* code = Heap::CreateCode(
-        desc,
-        Code::ComputeFlags(Code::STUB),
-        Handle<Object>(Heap::undefined_value()))->ToObjectChecked();
+    Object* code = Heap::CreateCode(desc,
+                                    Code::ComputeFlags(Code::STUB),
+                                    Handle<Object>(Heap::undefined_value()));
     CHECK(code->IsCode());
 #ifdef DEBUG
     Code::cast(code)->Print();
@@ -420,192 +357,6 @@ TEST(6) {
     ::printf("f() = %d\n", res);
     CHECK_EQ(382, res);
   }
-}
-
-
-enum VCVTTypes {
-  s32_f64,
-  u32_f64
-};
-
-static void TestRoundingMode(VCVTTypes types,
-                             VFPRoundingMode mode,
-                             double value,
-                             int expected,
-                             bool expected_exception = false) {
-  InitializeVM();
-  v8::HandleScope scope;
-
-  Assembler assm(NULL, 0);
-
-  if (CpuFeatures::IsSupported(VFP3)) {
-    CpuFeatures::Scope scope(VFP3);
-
-    Label wrong_exception;
-
-    __ vmrs(r1);
-    // Set custom FPSCR.
-    __ bic(r2, r1, Operand(kVFPRoundingModeMask | kVFPExceptionMask));
-    __ orr(r2, r2, Operand(mode));
-    __ vmsr(r2);
-
-    // Load value, convert, and move back result to r0 if everything went well.
-    __ vmov(d1, value);
-    switch (types) {
-      case s32_f64:
-        __ vcvt_s32_f64(s0, d1, kFPSCRRounding);
-        break;
-
-      case u32_f64:
-        __ vcvt_u32_f64(s0, d1, kFPSCRRounding);
-        break;
-
-      default:
-        UNREACHABLE();
-        break;
-    }
-    // Check for vfp exceptions
-    __ vmrs(r2);
-    __ tst(r2, Operand(kVFPExceptionMask));
-    // Check that we behaved as expected.
-    __ b(&wrong_exception,
-         expected_exception ? eq : ne);
-    // There was no exception. Retrieve the result and return.
-    __ vmov(r0, s0);
-    __ mov(pc, Operand(lr));
-
-    // The exception behaviour is not what we expected.
-    // Load a special value and return.
-    __ bind(&wrong_exception);
-    __ mov(r0, Operand(11223344));
-    __ mov(pc, Operand(lr));
-
-    CodeDesc desc;
-    assm.GetCode(&desc);
-    Object* code = Heap::CreateCode(
-        desc,
-        Code::ComputeFlags(Code::STUB),
-        Handle<Object>(Heap::undefined_value()))->ToObjectChecked();
-    CHECK(code->IsCode());
-#ifdef DEBUG
-    Code::cast(code)->Print();
-#endif
-    F1 f = FUNCTION_CAST<F1>(Code::cast(code)->entry());
-    int res = reinterpret_cast<int>(
-                CALL_GENERATED_CODE(f, 0, 0, 0, 0, 0));
-    ::printf("res = %d\n", res);
-    CHECK_EQ(expected, res);
-  }
-}
-
-
-TEST(7) {
-  // Test vfp rounding modes.
-
-  // s32_f64 (double to integer).
-
-  TestRoundingMode(s32_f64, RN,  0, 0);
-  TestRoundingMode(s32_f64, RN,  0.5, 0);
-  TestRoundingMode(s32_f64, RN, -0.5, 0);
-  TestRoundingMode(s32_f64, RN,  1.5, 2);
-  TestRoundingMode(s32_f64, RN, -1.5, -2);
-  TestRoundingMode(s32_f64, RN,  123.7, 124);
-  TestRoundingMode(s32_f64, RN, -123.7, -124);
-  TestRoundingMode(s32_f64, RN,  123456.2,  123456);
-  TestRoundingMode(s32_f64, RN, -123456.2, -123456);
-  TestRoundingMode(s32_f64, RN, static_cast<double>(kMaxInt), kMaxInt);
-  TestRoundingMode(s32_f64, RN, (kMaxInt + 0.49), kMaxInt);
-  TestRoundingMode(s32_f64, RN, (kMaxInt + 1.0), kMaxInt, true);
-  TestRoundingMode(s32_f64, RN, (kMaxInt + 0.5), kMaxInt, true);
-  TestRoundingMode(s32_f64, RN, static_cast<double>(kMinInt), kMinInt);
-  TestRoundingMode(s32_f64, RN, (kMinInt - 0.5), kMinInt);
-  TestRoundingMode(s32_f64, RN, (kMinInt - 1.0), kMinInt, true);
-  TestRoundingMode(s32_f64, RN, (kMinInt - 0.51), kMinInt, true);
-
-  TestRoundingMode(s32_f64, RM,  0, 0);
-  TestRoundingMode(s32_f64, RM,  0.5, 0);
-  TestRoundingMode(s32_f64, RM, -0.5, -1);
-  TestRoundingMode(s32_f64, RM,  123.7, 123);
-  TestRoundingMode(s32_f64, RM, -123.7, -124);
-  TestRoundingMode(s32_f64, RM,  123456.2,  123456);
-  TestRoundingMode(s32_f64, RM, -123456.2, -123457);
-  TestRoundingMode(s32_f64, RM, static_cast<double>(kMaxInt), kMaxInt);
-  TestRoundingMode(s32_f64, RM, (kMaxInt + 0.5), kMaxInt);
-  TestRoundingMode(s32_f64, RM, (kMaxInt + 1.0), kMaxInt, true);
-  TestRoundingMode(s32_f64, RM, static_cast<double>(kMinInt), kMinInt);
-  TestRoundingMode(s32_f64, RM, (kMinInt - 0.5), kMinInt, true);
-  TestRoundingMode(s32_f64, RM, (kMinInt + 0.5), kMinInt);
-
-  TestRoundingMode(s32_f64, RZ,  0, 0);
-  TestRoundingMode(s32_f64, RZ,  0.5, 0);
-  TestRoundingMode(s32_f64, RZ, -0.5, 0);
-  TestRoundingMode(s32_f64, RZ,  123.7,  123);
-  TestRoundingMode(s32_f64, RZ, -123.7, -123);
-  TestRoundingMode(s32_f64, RZ,  123456.2,  123456);
-  TestRoundingMode(s32_f64, RZ, -123456.2, -123456);
-  TestRoundingMode(s32_f64, RZ, static_cast<double>(kMaxInt), kMaxInt);
-  TestRoundingMode(s32_f64, RZ, (kMaxInt + 0.5), kMaxInt);
-  TestRoundingMode(s32_f64, RZ, (kMaxInt + 1.0), kMaxInt, true);
-  TestRoundingMode(s32_f64, RZ, static_cast<double>(kMinInt), kMinInt);
-  TestRoundingMode(s32_f64, RZ, (kMinInt - 0.5), kMinInt);
-  TestRoundingMode(s32_f64, RZ, (kMinInt - 1.0), kMinInt, true);
-
-
-  // u32_f64 (double to integer).
-
-  // Negative values.
-  TestRoundingMode(u32_f64, RN, -0.5, 0);
-  TestRoundingMode(u32_f64, RN, -123456.7, 0, true);
-  TestRoundingMode(u32_f64, RN, static_cast<double>(kMinInt), 0, true);
-  TestRoundingMode(u32_f64, RN, kMinInt - 1.0, 0, true);
-
-  TestRoundingMode(u32_f64, RM, -0.5, 0, true);
-  TestRoundingMode(u32_f64, RM, -123456.7, 0, true);
-  TestRoundingMode(u32_f64, RM, static_cast<double>(kMinInt), 0, true);
-  TestRoundingMode(u32_f64, RM, kMinInt - 1.0, 0, true);
-
-  TestRoundingMode(u32_f64, RZ, -0.5, 0);
-  TestRoundingMode(u32_f64, RZ, -123456.7, 0, true);
-  TestRoundingMode(u32_f64, RZ, static_cast<double>(kMinInt), 0, true);
-  TestRoundingMode(u32_f64, RZ, kMinInt - 1.0, 0, true);
-
-  // Positive values.
-  // kMaxInt is the maximum *signed* integer: 0x7fffffff.
-  static const uint32_t kMaxUInt = 0xffffffffu;
-  TestRoundingMode(u32_f64, RZ,  0, 0);
-  TestRoundingMode(u32_f64, RZ,  0.5, 0);
-  TestRoundingMode(u32_f64, RZ,  123.7,  123);
-  TestRoundingMode(u32_f64, RZ,  123456.2,  123456);
-  TestRoundingMode(u32_f64, RZ, static_cast<double>(kMaxInt), kMaxInt);
-  TestRoundingMode(u32_f64, RZ, (kMaxInt + 0.5), kMaxInt);
-  TestRoundingMode(u32_f64, RZ, (kMaxInt + 1.0),
-                                static_cast<uint32_t>(kMaxInt) + 1);
-  TestRoundingMode(u32_f64, RZ, (kMaxUInt + 0.5), kMaxUInt);
-  TestRoundingMode(u32_f64, RZ, (kMaxUInt + 1.0), kMaxUInt, true);
-
-  TestRoundingMode(u32_f64, RM,  0, 0);
-  TestRoundingMode(u32_f64, RM,  0.5, 0);
-  TestRoundingMode(u32_f64, RM,  123.7, 123);
-  TestRoundingMode(u32_f64, RM,  123456.2,  123456);
-  TestRoundingMode(u32_f64, RM, static_cast<double>(kMaxInt), kMaxInt);
-  TestRoundingMode(u32_f64, RM, (kMaxInt + 0.5), kMaxInt);
-  TestRoundingMode(u32_f64, RM, (kMaxInt + 1.0),
-                                static_cast<uint32_t>(kMaxInt) + 1);
-  TestRoundingMode(u32_f64, RM, (kMaxUInt + 0.5), kMaxUInt);
-  TestRoundingMode(u32_f64, RM, (kMaxUInt + 1.0), kMaxUInt, true);
-
-  TestRoundingMode(u32_f64, RN,  0, 0);
-  TestRoundingMode(u32_f64, RN,  0.5, 0);
-  TestRoundingMode(u32_f64, RN,  1.5, 2);
-  TestRoundingMode(u32_f64, RN,  123.7, 124);
-  TestRoundingMode(u32_f64, RN,  123456.2,  123456);
-  TestRoundingMode(u32_f64, RN, static_cast<double>(kMaxInt), kMaxInt);
-  TestRoundingMode(u32_f64, RN, (kMaxInt + 0.49), kMaxInt);
-  TestRoundingMode(u32_f64, RN, (kMaxInt + 0.5),
-                                static_cast<uint32_t>(kMaxInt) + 1);
-  TestRoundingMode(u32_f64, RN, (kMaxUInt + 0.49), kMaxUInt);
-  TestRoundingMode(u32_f64, RN, (kMaxUInt + 0.5), kMaxUInt, true);
-  TestRoundingMode(u32_f64, RN, (kMaxUInt + 1.0), kMaxUInt, true);
 }
 
 #undef __

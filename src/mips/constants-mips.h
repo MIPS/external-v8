@@ -28,6 +28,8 @@
 #ifndef  V8_MIPS_CONSTANTS_H_
 #define  V8_MIPS_CONSTANTS_H_
 
+#include "checks.h"
+
 // UNIMPLEMENTED_ macro for MIPS.
 #ifdef DEBUG
 #define UNIMPLEMENTED_MIPS()                                                  \
@@ -40,13 +42,6 @@
 #define UNSUPPORTED_MIPS() v8::internal::PrintF("Unsupported instruction.\n")
 
 
-#ifdef _MIPS_ARCH_MIPS32R2
-  #define mips32r2 1
-#else
-  #define mips32r2 0
-#endif
-
-
 // Defines constants and accessor classes to assemble, disassemble and
 // simulate MIPS32 instructions.
 //
@@ -54,8 +49,8 @@
 //      Volume II: The MIPS32 Instruction Set
 // Try www.cs.cornell.edu/courses/cs3410/2008fa/MIPS_Vol2.pdf.
 
-namespace v8 {
-namespace internal {
+namespace assembler {
+namespace mips {
 
 // -----------------------------------------------------------------------------
 // Registers and FPURegister.
@@ -77,11 +72,7 @@ static const int kInvalidFPURegister = -1;
 // FPU (coprocessor 1) control registers. Currently only FCSR is implemented.
 static const int kFCSRRegister = 31;
 static const int kInvalidFPUControlRegister = -1;
-static const uint32_t kFPUInvalidResult = (uint32_t) (1 << 31) - 1;
-
-// FCSR constants.
-static const uint32_t kFCSRFlagMask = (1 << 6) - 1;
-static const uint32_t kFCSRFlagShift = 2;
+static const uint32_t kFPUInvalidResult = (uint32_t)(1 << 31) - 1;
 
 // Helper functions for converting between register numbers and names.
 class Registers {
@@ -155,16 +146,11 @@ static const int kSaShift       = 6;
 static const int kSaBits        = 5;
 static const int kFunctionShift = 0;
 static const int kFunctionBits  = 6;
-static const int kLuiShift      = 16;
 
 static const int kImm16Shift = 0;
 static const int kImm16Bits  = 16;
 static const int kImm26Shift = 0;
 static const int kImm26Bits  = 26;
-
-// In branches and jumps immediate fields point to words, not bytes,
-// and are therefore shifted by 2.
-static const int kImmFieldShift = 2;
 
 static const int kFsShift       = 11;
 static const int kFsBits        = 5;
@@ -191,10 +177,10 @@ static const int  kSaFieldMask  = ((1 << kSaBits) - 1) << kSaShift;
 static const int  kFunctionFieldMask =
     ((1 << kFunctionBits) - 1) << kFunctionShift;
 // Misc masks.
-static const int  kHiMask       =   0xffff << 16;
-static const int  kLoMask       =   0xffff;
-static const int  kSignMask     =   0x80000000;
-static const int  kJumpAddrMask = (1 << (kImm26Bits + kImmFieldShift)) - 1;
+static const int  HIMask        =   0xffff << 16;
+static const int  LOMask        =   0xffff;
+static const int  signMask      =   0x80000000;
+
 
 // ----- MIPS Opcodes and Function Fields.
 // We use this presentation to stay close to the table representation in
@@ -376,7 +362,7 @@ enum SecondaryField {
 // the 'U' prefix is used to specify unsigned comparisons.
 enum Condition {
   // Any value < 0 is considered no_condition.
-  kNoCondition  = -1,
+  no_condition  = -1,
 
   overflow      =  0,
   no_overflow   =  1,
@@ -419,43 +405,8 @@ enum Condition {
   lo            = Uless,
   al            = cc_always,
 
-  cc_default    = kNoCondition
+  cc_default    = no_condition
 };
-
-
-// Returns the equivalent of !cc.
-// Negation of the default kNoCondition (-1) results in a non-default
-// no_condition value (-2). As long as tests for no_condition check
-// for condition < 0, this will work as expected.
-inline Condition NegateCondition(Condition cc) {
-  ASSERT(cc != cc_always);
-  return static_cast<Condition>(cc ^ 1);
-}
-
-
-inline Condition ReverseCondition(Condition cc) {
-  switch (cc) {
-    case Uless:
-      return Ugreater;
-    case Ugreater:
-      return Uless;
-    case Ugreater_equal:
-      return Uless_equal;
-    case Uless_equal:
-      return Ugreater_equal;
-    case less:
-      return greater;
-    case greater:
-      return less;
-    case greater_equal:
-      return less_equal;
-    case less_equal:
-      return greater_equal;
-    default:
-      return cc;
-  };
-}
-
 
 // ----- Coprocessor conditions.
 enum FPUCondition {
@@ -470,46 +421,6 @@ enum FPUCondition {
 };
 
 
-// -----------------------------------------------------------------------------
-// Hints.
-
-// Branch hints are not used on the MIPS.  They are defined so that they can
-// appear in shared function signatures, but will be ignored in MIPS
-// implementations.
-enum Hint {
-  no_hint = 0
-};
-
-
-inline Hint NegateHint(Hint hint) {
-  return no_hint;
-}
-
-
-// -----------------------------------------------------------------------------
-// Specific instructions, constants, and masks.
-// These constants are declared in assembler-mips.cc, as they use named
-// registers and other constants.
-
-// addiu(sp, sp, 4) aka Pop() operation or part of Pop(r)
-// operations as post-increment of sp.
-extern const Instr kPopInstruction;
-// addiu(sp, sp, -4) part of Push(r) operation as pre-decrement of sp.
-extern const Instr kPushInstruction;
-// sw(r, MemOperand(sp, 0))
-extern const Instr kPushRegPattern;
-//  lw(r, MemOperand(sp, 0))
-extern const Instr kPopRegPattern;
-extern const Instr kLwRegFpOffsetPattern;
-extern const Instr kSwRegFpOffsetPattern;
-extern const Instr kLwRegFpNegOffsetPattern;
-extern const Instr kSwRegFpNegOffsetPattern;
-// A mask for the Rt register for push, pop, lw, sw instructions.
-extern const Instr kRtMask;
-extern const Instr kLwSwInstrTypeMask;
-extern const Instr kLwSwInstrArgumentMask;
-extern const Instr kLwSwOffsetMask;
-
 // Break 0xfffff, reserved for redirected real time call.
 const Instr rtCallRedirInstr = SPECIAL | BREAK | call_rt_redirected << 6;
 // A nop instruction. (Encoding of sll 0 0 0).
@@ -518,10 +429,10 @@ const Instr nopInstr = 0;
 class Instruction {
  public:
   enum {
-    kInstrSize = 4,
-    kInstrSizeLog2 = 2,
+    kInstructionSize = 4,
+    kInstructionSizeLog2 = 2,
     // On MIPS PC cannot actually be directly accessed. We behave as if PC was
-    // always the value of the current instruction being executed.
+    // always the value of the current instruction being exectued.
     kPCReadOffset = 0
   };
 
@@ -558,63 +469,63 @@ class Instruction {
 
 
   // Accessors for the different named fields used in the MIPS encoding.
-  inline Opcode OpcodeValue() const {
+  inline Opcode OpcodeField() const {
     return static_cast<Opcode>(
         Bits(kOpcodeShift + kOpcodeBits - 1, kOpcodeShift));
   }
 
-  inline int RsValue() const {
+  inline int RsField() const {
     ASSERT(InstructionType() == kRegisterType ||
            InstructionType() == kImmediateType);
     return Bits(kRsShift + kRsBits - 1, kRsShift);
   }
 
-  inline int RtValue() const {
+  inline int RtField() const {
     ASSERT(InstructionType() == kRegisterType ||
            InstructionType() == kImmediateType);
     return Bits(kRtShift + kRtBits - 1, kRtShift);
   }
 
-  inline int RdValue() const {
+  inline int RdField() const {
     ASSERT(InstructionType() == kRegisterType);
     return Bits(kRdShift + kRdBits - 1, kRdShift);
   }
 
-  inline int SaValue() const {
+  inline int SaField() const {
     ASSERT(InstructionType() == kRegisterType);
     return Bits(kSaShift + kSaBits - 1, kSaShift);
   }
 
-  inline int FunctionValue() const {
+  inline int FunctionField() const {
     ASSERT(InstructionType() == kRegisterType ||
            InstructionType() == kImmediateType);
     return Bits(kFunctionShift + kFunctionBits - 1, kFunctionShift);
   }
 
-  inline int FdValue() const {
+  inline int FdField() const {
     return Bits(kFdShift + kFdBits - 1, kFdShift);
   }
 
-  inline int FsValue() const {
+  inline int FsField() const {
     return Bits(kFsShift + kFsBits - 1, kFsShift);
   }
 
-  inline int FtValue() const {
+  inline int FtField() const {
     return Bits(kFtShift + kFtBits - 1, kFtShift);
   }
 
   // Float Compare condition code instruction bits.
-  inline int FCccValue() const {
+  inline int FCccField() const {
     return Bits(kFCccShift + kFCccBits - 1, kFCccShift);
   }
 
   // Float Branch condition code instruction bits.
-  inline int FBccValue() const {
+  inline int FBccField() const {
     return Bits(kFBccShift + kFBccBits - 1, kFBccShift);
   }
 
   // Float Branch true/false instruction bit.
-  inline int FBtrueValue() const {
+  inline int FBtrueField() const {
     return Bits(kFBtrueShift + kFBtrueBits - 1, kFBtrueShift);
   }
 
@@ -655,37 +566,37 @@ class Instruction {
   }
 
   // Get the secondary field according to the opcode.
-  inline int SecondaryValue() const {
+  inline int SecondaryField() const {
     Opcode op = OpcodeFieldRaw();
     switch (op) {
       case SPECIAL:
       case SPECIAL2:
-        return FunctionValue();
+        return FunctionField();
       case COP1:
-        return RsValue();
+        return RsField();
       case REGIMM:
-        return RtValue();
+        return RtField();
       default:
         return NULLSF;
     }
   }
 
-  inline int32_t Imm16Value() const {
+  inline int32_t Imm16Field() const {
     ASSERT(InstructionType() == kImmediateType);
     return Bits(kImm16Shift + kImm16Bits - 1, kImm16Shift);
   }
 
-  inline int32_t Imm26Value() const {
+  inline int32_t Imm26Field() const {
     ASSERT(InstructionType() == kJumpType);
-    return Bits(kImm26Shift + kImm26Bits - 1, kImm26Shift);
+    return Bits(kImm16Shift + kImm26Bits - 1, kImm26Shift);
   }
 
   // Say if the instruction should not be used in a branch delay slot.
-  bool IsForbiddenInBranchDelay() const;
+  bool IsForbiddenInBranchDelay();
   // Say if the instruction 'links'. eg: jal, bal.
-  bool IsLinkingInstruction() const;
+  bool IsLinkingInstruction();
   // Say if the instruction is a break or a trap.
-  bool IsTrap() const;
+  bool IsTrap();
 
   // Instructions are read of out a code stream. The only way to get a
   // reference to an instruction is to convert a pointer. There is no way
@@ -705,23 +616,23 @@ class Instruction {
 // MIPS assembly various constants.
 
 
-static const int kArgsSlotsSize  = 4 * Instruction::kInstrSize;
+static const int kArgsSlotsSize  = 4 * Instruction::kInstructionSize;
 static const int kArgsSlotsNum   = 4;
 // C/C++ argument slots size.
-static const int kCArgsSlotsSize = 4 * Instruction::kInstrSize;
+static const int kCArgsSlotsSize = 4 * Instruction::kInstructionSize;
 // JS argument slots size.
-static const int kJSArgsSlotsSize = 0 * Instruction::kInstrSize;
+static const int kJSArgsSlotsSize = 0 * Instruction::kInstructionSize;
 // Assembly builtins argument slots size.
-static const int kBArgsSlotsSize = 0 * Instruction::kInstrSize;
+static const int kBArgsSlotsSize = 0 * Instruction::kInstructionSize;
 
-static const int kBranchReturnOffset = 2 * Instruction::kInstrSize;
+static const int kBranchReturnOffset = 2 * Instruction::kInstructionSize;
 
 static const int kDoubleAlignmentBits = 3;
 static const int kDoubleAlignment = (1 << kDoubleAlignmentBits);
 static const int kDoubleAlignmentMask = kDoubleAlignment - 1;
 
 
-} }   // namespace v8::internal
+} }   // namespace assembler::mips
 
 #endif    // #ifndef V8_MIPS_CONSTANTS_H_
 

@@ -36,13 +36,12 @@ namespace internal {
 
 // Forward declaration.
 class JumpTarget;
-class PostCallGenerator;
 
 // Reserved Register Usage Summary.
 //
 // Registers t8, t9, and at are reserved for use by the MacroAssembler.
 //
-// The programmer should know that the MacroAssembler may clobber these three,
+// The programmer should know that the MacroAssembler may clobber these two,
 // but won't touch other registers except in special cases.
 //
 // Per the MIPS ABI, register t9 must be used for indirect function call
@@ -89,12 +88,6 @@ enum ObjectToDoubleFlags {
   AVOID_NANS_AND_INFINITIES = 1 << 1
 };
 
-// Allow programmer to use Branch Delay Slot of Branches, Jumps, Calls.
-enum BranchDelaySlot {
-  USE_DELAY_SLOT,
-  PROTECT
-};
-
 // MacroAssembler implements a collection of frequently used macros.
 class MacroAssembler: public Assembler {
  public:
@@ -108,10 +101,10 @@ class MacroAssembler: public Assembler {
 
 // * Prototypes for functions with no target (eg Ret()).
 #define DECLARE_NOTARGET_PROTOTYPE(Name) \
-  void Name(BranchDelaySlot bd = PROTECT); \
-  void Name(COND_TYPED_ARGS, BranchDelaySlot bd = PROTECT); \
-  inline void Name(BranchDelaySlot bd, COND_TYPED_ARGS) { \
-    Name(COND_ARGS, bd); \
+  void Name(bool ProtectBranchDelaySlot = true); \
+  void Name(COND_TYPED_ARGS, bool ProtectBranchDelaySlot = true); \
+  inline void Name(bool ProtectBranchDelaySlot, COND_TYPED_ARGS) { \
+    Name(COND_ARGS, ProtectBranchDelaySlot); \
   }
 
 // * Prototypes for functions with a target.
@@ -120,36 +113,36 @@ class MacroAssembler: public Assembler {
 #define DECLARE_RELOC_PROTOTYPE(Name, target_type) \
   void Name(target_type target, \
             RelocInfo::Mode rmode, \
-            BranchDelaySlot bd = PROTECT); \
-  inline void Name(BranchDelaySlot bd, \
+            bool ProtectBranchDelaySlot = true); \
+  inline void Name(bool ProtectBranchDelaySlot, \
                    target_type target, \
                    RelocInfo::Mode rmode) { \
-    Name(target, rmode, bd); \
+    Name(target, rmode, ProtectBranchDelaySlot); \
   } \
   void Name(target_type target, \
             RelocInfo::Mode rmode, \
             COND_TYPED_ARGS, \
-            BranchDelaySlot bd = PROTECT); \
-  inline void Name(BranchDelaySlot bd, \
+            bool ProtectBranchDelaySlot = true); \
+  inline void Name(bool ProtectBranchDelaySlot, \
                    target_type target, \
                    RelocInfo::Mode rmode, \
                    COND_TYPED_ARGS) { \
-    Name(target, rmode, COND_ARGS, bd); \
+    Name(target, rmode, COND_ARGS, ProtectBranchDelaySlot); \
   }
 
 // Cases when relocation is not needed.
 #define DECLARE_NORELOC_PROTOTYPE(Name, target_type) \
-  void Name(target_type target, BranchDelaySlot bd = PROTECT); \
-  inline void Name(BranchDelaySlot bd, target_type target) { \
-    Name(target, bd); \
+  void Name(target_type target, bool ProtectBranchDelaySlot = true); \
+  inline void Name(bool ProtectBranchDelaySlot, target_type target) { \
+    Name(target, ProtectBranchDelaySlot); \
   } \
   void Name(target_type target, \
             COND_TYPED_ARGS, \
-            BranchDelaySlot bd = PROTECT); \
-  inline void Name(BranchDelaySlot bd, \
+            bool ProtectBranchDelaySlot = true); \
+  inline void Name(bool ProtectBranchDelaySlot, \
                    target_type target, \
                    COND_TYPED_ARGS) { \
-    Name(target, COND_ARGS, bd); \
+    Name(target, COND_ARGS, ProtectBranchDelaySlot); \
   }
 
 // ** Target prototypes.
@@ -187,11 +180,6 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
             Condition cond = cc_always,
             Register reg = no_reg,
             const Operand& op = Operand(no_reg));
-
-  void DropAndRet(int drop = 0,
-                  Condition cond = cc_always,
-                  Register reg = no_reg,
-                  const Operand& op = Operand(no_reg));
 
   // Swap two registers.  If the scratch register is omitted then a slightly
   // less efficient form using xor instead of mov is emitted.
@@ -231,11 +219,12 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   }
 
 
+
   // Check if object is in new space.
   // scratch can be object itself, but it will be clobbered.
   void InNewSpace(Register object,
                   Register scratch,
-                  Condition cc,  // eq for new space, ne otherwise.
+                  Condition cc,  // eq for new space, ne otherwise
                   Label* branch);
 
 
@@ -281,12 +270,12 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   }
 
   // Check if the given instruction is a 'type' marker.
-  // ie. check if it is a sll zero_reg, zero_reg, <type> (referenced as
+  // ie. check if is is a sll zero_reg, zero_reg, <type> (referenced as
   // nop(type)). These instructions are generated to mark special location in
   // the code, like some special IC code.
   static inline bool IsMarkedCode(Instr instr, int type) {
     ASSERT((FIRST_IC_MARKER <= type) && (type < LAST_CODE_MARKER));
-    return IsNop(instr, type);
+    return is_nop(instr, type);
   }
 
 
@@ -301,8 +290,11 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
     bool sllzz = (opcode == SLL &&
                   rt == static_cast<uint32_t>(ToNumber(zero_reg)) &&
                   rs == static_cast<uint32_t>(ToNumber(zero_reg)));
-    int type =
-        (sllzz && FIRST_IC_MARKER <= sa && sa < LAST_CODE_MARKER) ? sa : -1;
+    int type = (sllzz &&
+                FIRST_IC_MARKER <= sa &&
+                sa < LAST_CODE_MARKER)
+                  ? sa
+                  : -1;
     ASSERT((type == -1) ||
            ((FIRST_IC_MARKER <= type) && (type < LAST_CODE_MARKER)));
     return type;
@@ -313,13 +305,12 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   // ---------------------------------------------------------------------------
   // Allocation support
 
-  // Allocate an object in new space. The object_size is specified
-  // either in bytes or in words if the allocation flag SIZE_IN_WORDS
-  // is passed. If the new space is exhausted control continues at the
-  // gc_required label. The allocated object is returned in result. If
-  // the flag tag_allocated_object is true the result is tagged as as
-  // a heap object. All registers are clobbered also when control
-  // continues at the gc_required label.
+  // Allocate an object in new space. The object_size is specified in words (not
+  // bytes). If the new space is exhausted control continues at the gc_required
+  // label. The allocated object is returned in result. If the flag
+  // tag_allocated_object is true the result is tagged as as a heap object. All
+  // registers are clobbered also when control continues at the gc_required
+  // label.
   void AllocateInNewSpace(int object_size,
                           Register result,
                           Register scratch1,
@@ -453,7 +444,7 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   // Push two registers.  Pushes leftmost register first (to highest address).
   void Push(Register src1, Register src2, Condition cond = al) {
     ASSERT(cond == al);  // Do not support conditional versions yet.
-    Subu(sp, sp, Operand(2 * kPointerSize));
+    Addu(sp, sp, Operand(2 * -kPointerSize));
     sw(src1, MemOperand(sp, 1 * kPointerSize));
     sw(src2, MemOperand(sp, 0 * kPointerSize));
   }
@@ -501,35 +492,6 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
     Addu(sp, sp, Operand(count * kPointerSize));
   }
 
-  // ---------------------------------------------------------------------------
-  // These functions are only used by crankshaft, so they are currently
-  // unimplemented.
-
-  // Push and pop the registers that can hold pointers, as defined by the
-  // RegList constant kSafepointSavedRegisters.
-  void PushSafepointRegisters() {
-    UNIMPLEMENTED_MIPS();
-  }
-
-  void PopSafepointRegisters() {
-    UNIMPLEMENTED_MIPS();
-  }
-
-  void PushSafepointRegistersAndDoubles() {
-    UNIMPLEMENTED_MIPS();
-  }
-
-  void PopSafepointRegistersAndDoubles() {
-    UNIMPLEMENTED_MIPS();
-  }
-
-  static int SafepointRegisterStackIndex(int reg_code) {
-    UNIMPLEMENTED_MIPS();
-    return 0;
-  }
-
-  // ---------------------------------------------------------------------------
-
   // MIPS32 R2 instruction macro.
   void Ins(Register rt, Register rs, uint16_t pos, uint16_t size);
   void Ext(Register rt, Register rs, uint16_t pos, uint16_t size);
@@ -544,13 +506,11 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
 
   // Convert the HeapNumber pointed to by source to a 32bits signed integer
   // dest. If the HeapNumber does not fit into a 32bits signed integer branch
-  // to not_int32 label. If FPU is available double_scratch is used but not
-  // scratch2.
+  // to not_int32 label.
   void ConvertToInt32(Register source,
                       Register dest,
                       Register scratch,
                       Register scratch2,
-                      FPURegister double_scratch,
                       Label *not_int32);
 
   // -------------------------------------------------------------------------
@@ -562,19 +522,19 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   void EnterConstructFrame() { EnterFrame(StackFrame::CONSTRUCT); }
   void LeaveConstructFrame() { LeaveFrame(StackFrame::CONSTRUCT); }
 
- // Enter exit frame.
-  // argc - argument count to be dropped by LeaveExitFrame.
-  // save_doubles - saves FPU registers on stack, currently disabled.
-  // stack_space - extra stack space.
-  void EnterExitFrame(const Operand& argc,
-                      bool save_doubles,
-                      int stack_space = 0);
+  // Enter exit frame.
+  // Expects the number of arguments in register a0 and
+  // the builtin function to call in register a1.
+  // On output hold_argc, hold_function, and hold_argv are setup.
+  void EnterExitFrame(Register hold_argc,
+                      Register hold_argv,
+                      Register hold_function);
 
   // Leave the current exit frame. Expects the return value in v0.
-  void LeaveExitFrame(bool save_doubles);
+  void LeaveExitFrame();
 
   // Align the stack by optionally pushing a Smi zero.
-  void AlignStack(int offset);    // TODO(mips) : remove this function.
+  void AlignStack(int offset);    // TODO(REBASE) : remove this function.
 
   // Get the actual activation frame alignment for target environment.
   static int ActivationFrameAlignment();
@@ -596,8 +556,7 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   void InvokeCode(Register code,
                   const ParameterCount& expected,
                   const ParameterCount& actual,
-                  InvokeFlag flag,
-                  PostCallGenerator* post_call_generator = NULL);
+                  InvokeFlag flag);
 
   void InvokeCode(Handle<Code> code,
                   const ParameterCount& expected,
@@ -609,26 +568,12 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   // current context to the context in the function before invoking.
   void InvokeFunction(Register function,
                       const ParameterCount& actual,
-                      InvokeFlag flag,
-                      PostCallGenerator* post_call_generator = NULL);
+                      InvokeFlag flag);
 
   void InvokeFunction(JSFunction* function,
                       const ParameterCount& actual,
                       InvokeFlag flag);
 
-
-  void IsObjectJSObjectType(Register heap_object,
-                            Register map,
-                            Register scratch,
-                            Label* fail);
-
-  void IsInstanceJSObjectType(Register map,
-                              Register scratch,
-                              Label* fail);
-
-  void IsObjectJSStringType(Register object,
-                            Register scratch,
-                            Label* fail);
 
 #ifdef ENABLE_DEBUGGER_SUPPORT
   // -------------------------------------------------------------------------
@@ -686,6 +631,28 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
                 Label* fail,
                 bool is_heap_object);
 
+  inline void BranchOnSmi(Register value, Label* smi_label,
+                          Register scratch = at) {
+    ASSERT_EQ(0, kSmiTag);
+    andi(scratch, value, kSmiTagMask);
+    Branch(smi_label, eq, scratch, Operand(zero_reg));
+  }
+
+
+  inline void BranchOnNotSmi(Register value, Label* not_smi_label,
+                             Register scratch = at) {
+    ASSERT_EQ(0, kSmiTag);
+    andi(scratch, value, kSmiTagMask);
+    Branch(not_smi_label, ne, scratch, Operand(zero_reg));
+  }
+
+  void CallBuiltin(ExternalReference builtin_entry);
+  void CallBuiltin(Register target);
+  void CallBuiltin(Handle<Code> code, RelocInfo::Mode rmode);
+  void JumpToBuiltin(ExternalReference builtin_entry);
+  void JumpToBuiltin(Register target);
+  void JumpToBuiltin(Handle<Code> code, RelocInfo::Mode rmode);
+
   // Generates code for reporting that an illegal operation has
   // occurred.
   void IllegalOperation(int num_arguments);
@@ -695,10 +662,6 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   //   hash - holds the index's hash. Clobbered.
   //   index - holds the overwritten index on exit.
   void IndexFromHash(Register hash, Register index);
-
-  // Get the number of least significant bits from a register
-  void GetLeastBitsFromSmi(Register dst, Register src, int num_least_bits);
-  void GetLeastBitsFromInt32(Register dst, Register src, int mun_least_bits);
 
   // Load the value of a number object into a FPU double register. If the
   // object is not a number a jump to the label not_number is performed
@@ -733,7 +696,6 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
 
   // Call a runtime routine.
   void CallRuntime(Runtime::Function* f, int num_arguments);
-  void CallRuntimeSaveDoubles(Runtime::FunctionId id);
 
   // Convenience function: Same as above, but takes the fid instead.
   void CallRuntime(Runtime::FunctionId fid, int num_arguments);
@@ -756,8 +718,8 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
 
   // Before calling a C-function from generated code, align arguments on stack
   // and add space for the four mips argument slots.
-  // After aligning the frame, non-register arguments must be stored on the
-  // stack, after the argument-slots using helper: CFunctionArgumentOperand().
+  // After aligning the frame, non-register arguments must be stored in
+  // sp[kCFuncArg_5], sp[kCFuncArg_6], etc., not pushed.
   // The argument count assumes all arguments are word sized.
   // Some compilers/platforms require the stack to be aligned when calling
   // C++ code.
@@ -766,8 +728,16 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   void PrepareCallCFunction(int num_arguments, Register scratch);
 
   // Arguments 1-4 are placed in registers a0 thru a3 respectively.
-  // Arguments 5..n are stored to stack using following:
-  //  sw(t0, CFunctionArgumentOperand(5));
+  // Arguments 5..n are stored to stack using following constants:
+  //  sw(t0, MemOperand(sp, MacroAssembler::kCFuncArg_5));
+  static const int kCFuncArg_5 =
+      (0 * kPointerSize + StandardFrameConstants::kCArgsSlotsSize);
+  static const int kCFuncArg_6 =
+      (1 * kPointerSize + StandardFrameConstants::kCArgsSlotsSize);
+  static const int kCFuncArg_7 =
+      (2 * kPointerSize + StandardFrameConstants::kCArgsSlotsSize);
+  static const int kCFuncArg_8 =
+      (3 * kPointerSize + StandardFrameConstants::kCArgsSlotsSize);
 
   // Calls a C function and cleans up the space for arguments allocated
   // by PrepareCallCFunction. The called function is not allowed to trigger a
@@ -777,16 +747,12 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   void CallCFunction(ExternalReference function, int num_arguments);
   void CallCFunction(Register function, int num_arguments);
 
-  void GetCFunctionDoubleResult(const DoubleRegister dst);
-
   // Jump to the builtin routine.
   void JumpToExternalReference(const ExternalReference& builtin);
 
   // Invoke specified builtin JavaScript function. Adds an entry to
   // the unresolved list if the name does not resolve.
-  void InvokeBuiltin(Builtins::JavaScript id,
-                     InvokeJSFlags flags,
-                     PostCallGenerator* post_call_generator = NULL);
+  void InvokeBuiltin(Builtins::JavaScript id, InvokeJSFlags flags);
 
   // Store the code object for the given builtin in the target register and
   // setup the function in a1.
@@ -802,6 +768,13 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   };
 
   Handle<Object> CodeObject() { return code_object_; }
+
+
+  // -------------------------------------------------------------------------
+  // Stack limit support
+
+  void StackLimitCheck(Label* on_stack_limit_hit);
+
 
   // -------------------------------------------------------------------------
   // StatsCounter support
@@ -835,59 +808,8 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   void set_allow_stub_calls(bool value) { allow_stub_calls_ = value; }
   bool allow_stub_calls() { return allow_stub_calls_; }
 
-  // ---------------------------------------------------------------------------
-  // Number utilities
-
-  // Check whether the value of reg is a power of two and not zero. If not
-  // control continues at the label not_power_of_two. If reg is a power of two
-  // the register scratch contains the value of (reg - 1) when control falls
-  // through.
-  void JumpIfNotPowerOfTwoOrZero(Register reg,
-                                 Register scratch,
-                                 Label* not_power_of_two_or_zero);
-
   // -------------------------------------------------------------------------
   // Smi utilities
-
-  // Try to convert int32 to smi. If the value is to large, preserve
-  // the original value and jump to not_a_smi. Destroys scratch and
-  // sets flags.
-  // This is only used by crankshaft atm so it is unimplemented on MIPS.
-  void TrySmiTag(Register reg, Label* not_a_smi, Register scratch) {
-    UNIMPLEMENTED_MIPS();
-  }
-
-  void SmiTag(Register reg) {
-    Addu(reg, reg, reg);
-  }
-
-  void SmiTag(Register dst, Register src) {
-    Addu(dst, src, src);
-  }
-
-  void SmiUntag(Register reg) {
-    sra(reg, reg, kSmiTagSize);
-  }
-
-  void SmiUntag(Register dst, Register src) {
-    sra(dst, src, kSmiTagSize);
-  }
-
-  // Jump the register contains a smi.
-  inline void JumpIfSmi(Register value, Label* smi_label,
-                        Register scratch = at) {
-    ASSERT_EQ(0, kSmiTag);
-    andi(scratch, value, kSmiTagMask);
-    Branch(smi_label, eq, scratch, Operand(zero_reg));
-  }
-
-  // Jump if the register contains a non-smi.
-  inline void JumpIfNotSmi(Register value, Label* not_smi_label,
-                           Register scratch = at) {
-    ASSERT_EQ(0, kSmiTag);
-    andi(scratch, value, kSmiTagMask);
-    Branch(not_smi_label, ne, scratch, Operand(zero_reg));
-  }
 
   // Jump if either of the registers contain a non-smi.
   void JumpIfNotBothSmi(Register reg1, Register reg2, Label* on_not_both_smi);
@@ -896,23 +818,6 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
 
   // Abort execution if argument is a smi. Used in debug code.
   void AbortIfSmi(Register object);
-  void AbortIfNotSmi(Register object);
-
-  // Abort execution if argument is a string. Used in debug code.
-  void AbortIfNotString(Register object);
-
-  // Abort execution if argument is not the root value with the given index.
-  void AbortIfNotRootValue(Register src,
-                           Heap::RootListIndex root_value_index,
-                           const char* message);
-
-  // ---------------------------------------------------------------------------
-  // HeapNumber utilities
-
-  void JumpIfNotHeapNumber(Register object,
-                           Register heap_number_map,
-                           Register scratch,
-                           Label* on_not_heap_number);
 
   // -------------------------------------------------------------------------
   // String utilities
@@ -950,15 +855,15 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
 
  private:
   void Jump(intptr_t target, RelocInfo::Mode rmode,
-            BranchDelaySlot bd = PROTECT);
+            bool ProtectBranchDelaySlot = true);
   void Jump(intptr_t target, RelocInfo::Mode rmode, Condition cond = cc_always,
             Register r1 = zero_reg, const Operand& r2 = Operand(zero_reg),
-            BranchDelaySlot bd = PROTECT);
+            bool ProtectBranchDelaySlot = true);
   void Call(intptr_t target, RelocInfo::Mode rmode,
-            BranchDelaySlot bd = PROTECT);
+            bool ProtectBranchDelaySlot = true);
   void Call(intptr_t target, RelocInfo::Mode rmode, Condition cond = cc_always,
             Register r1 = zero_reg, const Operand& r2 = Operand(zero_reg),
-            BranchDelaySlot bd = PROTECT);
+            bool ProtectBranchDelaySlot = true);
 
   // Helper functions for generating invokes.
   void InvokePrologue(const ParameterCount& expected,
@@ -966,8 +871,7 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
                       Handle<Code> code_constant,
                       Register code_reg,
                       Label* done,
-                      InvokeFlag flag,
-                      PostCallGenerator* post_call_generator = NULL);
+                      InvokeFlag flag);
 
   // Get the code for the given builtin. Returns if able to resolve
   // the function in the 'resolved' flag.
@@ -1020,16 +924,6 @@ class CodePatcher {
 #endif  // ENABLE_DEBUGGER_SUPPORT
 
 
-// Helper class for generating code or data associated with the code
-// right after a call instruction. As an example this can be used to
-// generate safepoint data after calls for crankshaft.
-class PostCallGenerator {
- public:
-  PostCallGenerator() { }
-  virtual ~PostCallGenerator() { }
-  virtual void Generate() = 0;
-};
-
 
 // -----------------------------------------------------------------------------
 // Static helper functions.
@@ -1049,16 +943,6 @@ static inline MemOperand FieldMemOperand(Register object, int offset) {
   return MemOperand(object, offset - kHeapObjectTag);
 }
 
-
-// Generate a MemOperand for storing arguments 5..N on the stack
-// when calling CallCFunction().
-static inline MemOperand CFunctionArgumentOperand(int index) {
-  ASSERT(index > StandardFrameConstants::kCArgSlotCount);
-  // Argument 5 takes the slot just past the four Arg-slots.
-  int offset =
-      (index - 5) * kPointerSize + StandardFrameConstants::kCArgsSlotsSize;
-  return MemOperand(sp, offset);
-}
 
 
 #ifdef GENERATED_CODE_COVERAGE

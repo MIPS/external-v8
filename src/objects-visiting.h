@@ -146,7 +146,7 @@ class VisitorDispatchTable {
   }
 
   void Register(StaticVisitorBase::VisitorId id, Callback callback) {
-    ASSERT(id < StaticVisitorBase::kVisitorIdCount);  // id is unsigned.
+    ASSERT((0 <= id) && (id < StaticVisitorBase::kVisitorIdCount));
     callbacks_[id] = callback;
   }
 
@@ -186,9 +186,9 @@ class VisitorDispatchTable {
 template<typename StaticVisitor>
 class BodyVisitorBase : public AllStatic {
  public:
-  INLINE(static void IteratePointers(HeapObject* object,
+  static inline void IteratePointers(HeapObject* object,
                                      int start_offset,
-                                     int end_offset)) {
+                                     int end_offset) {
     Object** start_slot = reinterpret_cast<Object**>(object->address() +
                                                      start_offset);
     Object** end_slot = reinterpret_cast<Object**>(object->address() +
@@ -352,7 +352,6 @@ VisitorDispatchTable<typename StaticNewSpaceVisitor<StaticVisitor>::Callback>
 void Code::CodeIterateBody(ObjectVisitor* v) {
   int mode_mask = RelocInfo::kCodeTargetMask |
                   RelocInfo::ModeMask(RelocInfo::EMBEDDED_OBJECT) |
-                  RelocInfo::ModeMask(RelocInfo::GLOBAL_PROPERTY_CELL) |
                   RelocInfo::ModeMask(RelocInfo::EXTERNAL_REFERENCE) |
                   RelocInfo::ModeMask(RelocInfo::JS_RETURN) |
                   RelocInfo::ModeMask(RelocInfo::DEBUG_BREAK_SLOT) |
@@ -362,8 +361,9 @@ void Code::CodeIterateBody(ObjectVisitor* v) {
   // the heap compaction in the next statement.
   RelocIterator it(this, mode_mask);
 
-  IteratePointer(v, kRelocationInfoOffset);
-  IteratePointer(v, kDeoptimizationDataOffset);
+  IteratePointers(v,
+                  kRelocationInfoOffset,
+                  kRelocationInfoOffset + kPointerSize);
 
   for (; !it.done(); it.next()) {
     it.rinfo()->Visit(v);
@@ -375,7 +375,6 @@ template<typename StaticVisitor>
 void Code::CodeIterateBody() {
   int mode_mask = RelocInfo::kCodeTargetMask |
                   RelocInfo::ModeMask(RelocInfo::EMBEDDED_OBJECT) |
-                  RelocInfo::ModeMask(RelocInfo::GLOBAL_PROPERTY_CELL) |
                   RelocInfo::ModeMask(RelocInfo::EXTERNAL_REFERENCE) |
                   RelocInfo::ModeMask(RelocInfo::JS_RETURN) |
                   RelocInfo::ModeMask(RelocInfo::DEBUG_BREAK_SLOT) |
@@ -387,8 +386,6 @@ void Code::CodeIterateBody() {
 
   StaticVisitor::VisitPointer(
       reinterpret_cast<Object**>(this->address() + kRelocationInfoOffset));
-  StaticVisitor::VisitPointer(
-      reinterpret_cast<Object**>(this->address() + kDeoptimizationDataOffset));
 
   for (; !it.done(); it.next()) {
     it.rinfo()->template Visit<StaticVisitor>();

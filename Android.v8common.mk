@@ -6,7 +6,6 @@ V8_LOCAL_SRC_FILES := \
 	src/api.cc \
 	src/assembler.cc \
 	src/ast.cc \
-	src/atomicops_internals_x86_gcc.cc \
 	src/bignum.cc \
 	src/bignum-dtoa.cc \
 	src/bootstrapper.cc \
@@ -26,7 +25,6 @@ V8_LOCAL_SRC_FILES := \
 	src/dateparser.cc \
 	src/debug-agent.cc \
 	src/debug.cc \
-	src/deoptimizer.cc \
 	src/disassembler.cc \
 	src/diy-fp.cc \
 	src/dtoa.cc \
@@ -37,7 +35,6 @@ V8_LOCAL_SRC_FILES := \
 	src/frames.cc \
 	src/full-codegen.cc \
 	src/func-name-inferrer.cc \
-	src/gdb-jit.cc \
 	src/global-handles.cc \
 	src/fast-dtoa.cc \
 	src/fixed-dtoa.cc \
@@ -45,24 +42,18 @@ V8_LOCAL_SRC_FILES := \
 	src/hashmap.cc \
 	src/heap-profiler.cc \
 	src/heap.cc \
-	src/hydrogen.cc \
-	src/hydrogen-instructions.cc \
 	src/ic.cc \
-	src/inspector.cc \
 	src/interpreter-irregexp.cc \
 	src/jsregexp.cc \
 	src/jump-target.cc \
-	src/lithium-allocator.cc \
-	src/lithium.cc \
 	src/liveedit.cc \
-	src/liveobjectlist.cc \
 	src/log-utils.cc \
 	src/log.cc \
 	src/mark-compact.cc \
 	src/messages.cc \
 	src/objects.cc \
-	src/objects-printer.cc \
 	src/objects-visiting.cc \
+	src/oprofile-agent.cc \
 	src/parser.cc \
 	src/preparser.cc \
 	src/preparse-data.cc \
@@ -74,8 +65,6 @@ V8_LOCAL_SRC_FILES := \
 	src/register-allocator.cc \
 	src/rewriter.cc \
 	src/runtime.cc \
-	src/runtime-profiler.cc \
-	src/safepoint-table.cc \
 	src/scanner-base.cc \
 	src/scanner.cc \
 	src/scopeinfo.cc \
@@ -112,15 +101,11 @@ ifeq ($(TARGET_ARCH),arm)
 	src/arm/constants-arm.cc \
 	src/arm/cpu-arm.cc \
 	src/arm/debug-arm.cc \
-	src/arm/deoptimizer-arm.cc \
 	src/arm/disasm-arm.cc \
 	src/arm/frames-arm.cc \
 	src/arm/full-codegen-arm.cc \
 	src/arm/ic-arm.cc \
 	src/arm/jump-target-arm.cc \
-	src/arm/lithium-arm.cc \
-	src/arm/lithium-codegen-arm.cc \
-	src/arm/lithium-gap-resolver-arm.cc \
 	src/arm/macro-assembler-arm.cc \
 	src/arm/regexp-macro-assembler-arm.cc \
 	src/arm/register-allocator-arm.cc \
@@ -140,7 +125,6 @@ ifeq ($(TARGET_ARCH),mips)
 	src/mips/constants-mips.cc \
 	src/mips/cpu-mips.cc \
 	src/mips/debug-mips.cc \
-	src/mips/deoptimizer-mips.cc \
 	src/mips/disasm-mips.cc \
 	src/mips/full-codegen-mips.cc \
 	src/mips/frames-mips.cc \
@@ -163,15 +147,11 @@ ifeq ($(TARGET_ARCH),x86)
 	src/ia32/codegen-ia32.cc \
 	src/ia32/cpu-ia32.cc \
 	src/ia32/debug-ia32.cc \
-	src/ia32/deoptimizer-ia32.cc \
 	src/ia32/disasm-ia32.cc \
 	src/ia32/frames-ia32.cc \
 	src/ia32/full-codegen-ia32.cc \
 	src/ia32/ic-ia32.cc \
 	src/ia32/jump-target-ia32.cc \
-	src/ia32/lithium-codegen-ia32.cc \
-	src/ia32/lithium-gap-resolver-ia32.cc \
-	src/ia32/lithium-ia32.cc \
 	src/ia32/macro-assembler-ia32.cc \
 	src/ia32/regexp-macro-assembler-ia32.cc \
 	src/ia32/register-allocator-ia32.cc \
@@ -186,6 +166,9 @@ ifeq ($(DEBUG_V8),true)
 		src/prettyprinter.cc \
 		src/regexp-macro-assembler-tracer.cc
 endif
+
+# V8_LOCAL_SRC_FILES += \
+# 	src/dtoa-config.c
 
 V8_LOCAL_JS_LIBRARY_FILES := \
 	src/runtime.js \
