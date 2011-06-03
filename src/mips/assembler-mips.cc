@@ -2216,7 +2216,68 @@ void Assembler::set_target_address_at(Address pc, Address target) {
   *p = LUI | rt_code | ((itarget & kHiMask) >> kLuiShift);
   *(p+1) = ORI | rt_code | (rt_code << 5) | (itarget & kImm16Mask);
 
-  CPU::FlushICache(pc, 2 * sizeof(int32_t));
+  // The following code is an optimization for the common case of Call()
+  // or Jump() which is load to register, and jump through register:
+  //     li(t9, address); jalr(t9)    (or jr(t9)).
+  // If the destination address is in the same 256 MB page as the call, it
+  // is faster to do a direct jal, or j, rather than jump thru register, since
+  // that lets the cpu pipeline prefetch the target address. However each
+  // time the address above is patched, we have to patch the direct jal/j
+  // instruction, as well as possibly revert to jalr/jr if we now cross a
+  // 256 MB page. Note that with the jal/j instructions, we do not need to
+  // load the register, but that code is left, since it makes it easy to
+  // revert this process. A further optimization could try replacing the
+  // li sequence with nops.
+  // There is an assumption that the rt-code from instr2 is the register
+  // used for the jalr/jr. Finally, we have to skip 'jr ra', which is
+  // mips return. Occasionally this lands after an li().
+
+  Instr instr3 = instr_at(pc + 2 * kInstrSize);
+  uint32_t ipc = reinterpret_cast<uint32_t>(pc + 3 * kInstrSize);
+  bool in_range =
+             ((uint32_t)(ipc ^ itarget) >> (kImm26Bits + kImmFieldShift)) == 0;
+  uint32_t target_field = (uint32_t)(itarget & kJumpAddrMask) >> kImmFieldShift;
+  bool patched_jump = false;
+
+  if (IsJalr(instr3)) {
+    // Try to convert JALR to JAL.
+    if (in_range) {
+      *(p+2) = JAL | target_field;
+      patched_jump = true;
+    }
+  } else if (IsJr(instr3)) {
+    // Try to convert JR to J, skip returns (jr ra).
+    bool is_ret = static_cast<int>(GetRs(instr3)) == ra.code();
+    if (in_range && !is_ret) {
+      *(p+2) = J | target_field;
+      patched_jump = true;
+    }
+  } else if (IsJal(instr3)) {
+    if (in_range) {
+      // We are patching an already converted JAL.
+      *(p+2) = JAL | target_field;
+    } else {
+      // Patch JAL, but out of range, revert to JALR.
+      // JALR rs reg is the rt reg specified in the ORI instruction.
+      uint32_t rs_field = GetRt(instr2) << kRsShift;
+      uint32_t rd_field = ra.code() << kRdShift;  // Return-address (ra) reg.
+      *(p+2) = SPECIAL | rs_field | rd_field | JALR;
+    }
+    patched_jump = true;
+  } else if (IsJ(instr3)) {
+    if (in_range) {
+      // We are patching an already converted J (jump).
+      *(p+2) = J | target_field;
+    } else {
+      // Trying patch J, but out of range, just go back to JR.
+      // JR 'rs' reg is the 'rt' reg specified in the ORI instruction (instr2).
+      uint32_t rs_field = GetRt(instr2) << kRsShift;
+      *(p+2) = SPECIAL | rs_field | JR;
+    }
+    patched_jump = true;
+  }
+
+  CPU::FlushICache(pc, (patched_jump ? 3 : 2) * sizeof(int32_t));
 }
 
 
