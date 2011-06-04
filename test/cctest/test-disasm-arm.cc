@@ -87,9 +87,9 @@ bool DisassembleAndCompare(byte* pc, const char* compare_string) {
 #define COMPARE(asm_, compare_string) \
   { \
     int pc_offset = assm.pc_offset(); \
-    byte *pc = &buffer[pc_offset]; \
+    byte *progcounter = &buffer[pc_offset]; \
     assm.asm_; \
-    if (!DisassembleAndCompare(pc, compare_string)) failure = true; \
+    if (!DisassembleAndCompare(progcounter, compare_string)) failure = true; \
   }
 
 
@@ -422,6 +422,29 @@ TEST(Vfp) {
     COMPARE(vmov(d3, d3, eq),
             "0eb03b43       vmov.f64eq d3, d3");
 
+    COMPARE(vmov(s0, s31),
+            "eeb00a6f       vmov.f32 s0, s31");
+    COMPARE(vmov(s31, s0),
+            "eef0fa40       vmov.f32 s31, s0");
+    COMPARE(vmov(r0, s0),
+            "ee100a10       vmov r0, s0");
+    COMPARE(vmov(r10, s31),
+            "ee1faa90       vmov r10, s31");
+    COMPARE(vmov(s0, r0),
+            "ee000a10       vmov s0, r0");
+    COMPARE(vmov(s31, r10),
+            "ee0faa90       vmov s31, r10");
+
+    COMPARE(vabs(d0, d1),
+            "eeb00bc1       vabs d0, d1");
+    COMPARE(vabs(d3, d4, mi),
+            "4eb03bc4       vabsmi d3, d4");
+
+    COMPARE(vneg(d0, d1),
+            "eeb10b41       vneg d0, d1");
+    COMPARE(vneg(d3, d4, mi),
+            "4eb13b44       vnegmi d3, d4");
+
     COMPARE(vadd(d0, d1, d2),
             "ee310b02       vadd.f64 d0, d1, d2");
     COMPARE(vadd(d3, d4, d5, mi),
@@ -451,6 +474,54 @@ TEST(Vfp) {
             "eeb70b00       vmov.f64 d0, #1");
     COMPARE(vmov(d2, -13.0),
             "eeba2b0a       vmov.f64 d2, #-13");
+
+    COMPARE(vldr(s0, r0, 0),
+            "ed900a00       vldr s0, [r0 + 4*0]");
+    COMPARE(vldr(s1, r1, 4),
+            "edd10a01       vldr s1, [r1 + 4*1]");
+    COMPARE(vldr(s15, r4, 16),
+            "edd47a04       vldr s15, [r4 + 4*4]");
+    COMPARE(vldr(s16, r5, 20),
+            "ed958a05       vldr s16, [r5 + 4*5]");
+    COMPARE(vldr(s31, r10, 1020),
+            "eddafaff       vldr s31, [r10 + 4*255]");
+
+    COMPARE(vstr(s0, r0, 0),
+            "ed800a00       vstr s0, [r0 + 4*0]");
+    COMPARE(vstr(s1, r1, 4),
+            "edc10a01       vstr s1, [r1 + 4*1]");
+    COMPARE(vstr(s15, r8, 8),
+            "edc87a02       vstr s15, [r8 + 4*2]");
+    COMPARE(vstr(s16, r9, 12),
+            "ed898a03       vstr s16, [r9 + 4*3]");
+    COMPARE(vstr(s31, r10, 1020),
+            "edcafaff       vstr s31, [r10 + 4*255]");
+
+    COMPARE(vldr(d0, r0, 0),
+            "ed900b00       vldr d0, [r0 + 4*0]");
+    COMPARE(vldr(d1, r1, 4),
+            "ed911b01       vldr d1, [r1 + 4*1]");
+    COMPARE(vldr(d15, r10, 1020),
+            "ed9afbff       vldr d15, [r10 + 4*255]");
+    COMPARE(vstr(d0, r0, 0),
+            "ed800b00       vstr d0, [r0 + 4*0]");
+    COMPARE(vstr(d1, r1, 4),
+            "ed811b01       vstr d1, [r1 + 4*1]");
+    COMPARE(vstr(d15, r10, 1020),
+            "ed8afbff       vstr d15, [r10 + 4*255]");
+
+    COMPARE(vmsr(r5),
+            "eee15a10       vmsr FPSCR, r5");
+    COMPARE(vmsr(r10, pl),
+            "5ee1aa10       vmsrpl FPSCR, r10");
+    COMPARE(vmsr(pc),
+            "eee1fa10       vmsr FPSCR, APSR");
+    COMPARE(vmrs(r5),
+            "eef15a10       vmrs r5, FPSCR");
+    COMPARE(vmrs(r10, ge),
+            "aef1aa10       vmrsge r10, FPSCR");
+    COMPARE(vmrs(pc),
+            "eef1fa10       vmrs APSR, FPSCR");
   }
 
   VERIFY_RUN();

@@ -43,8 +43,11 @@ import threading
 import utils
 from Queue import Queue, Empty
 
+from unittest_output import UnitTestOutput
 
 VERBOSE = False
+XMLOUT = None
+XMLTESTSUITE = None
 
 
 # ---------------------------------------------
@@ -66,6 +69,8 @@ class ProgressIndicator(object):
     self.crashed = 0
     self.terminate = False
     self.lock = threading.Lock()
+    if XMLOUT:
+      self.xmlOutputter = UnitTestProgressIndicator()
 
   def PrintFailureHeader(self, test):
     if test.IsNegative():
@@ -80,6 +85,8 @@ class ProgressIndicator(object):
 
   def Run(self, tasks):
     self.Starting()
+    if XMLOUT:
+      self.xmlOutputter.Starting()
     threads = []
     # Spawn N-1 threads and then use this thread as the last one.
     # That way -j1 avoids threading altogether which is a nice fallback
@@ -101,6 +108,8 @@ class ProgressIndicator(object):
       # ...and then reraise the exception to bail out
       raise
     self.Done()
+    if XMLOUT:
+      self.xmlOutputter.Done()
     return not self.failed
 
   def RunSingle(self):
@@ -112,6 +121,8 @@ class ProgressIndicator(object):
       case = test.case
       self.lock.acquire()
       self.AboutToRun(case)
+      if XMLOUT:
+        self.xmlOutputter.AboutToRun(case)
       self.lock.release()
       try:
         start = time.time()
@@ -131,6 +142,8 @@ class ProgressIndicator(object):
         self.succeeded += 1
       self.remaining -= 1
       self.HasRun(output)
+      if XMLOUT:
+        self.xmlOutputter.HasRun(output)
       self.lock.release()
 
 
@@ -305,6 +318,47 @@ class MonochromeProgressIndicator(CompactProgressIndicator):
   def ClearLine(self, last_line_length):
     print ("\r" + (" " * last_line_length) + "\r"),
 
+class UnitTestProgressIndicator(ProgressIndicator):
+
+  def __init__(self):
+    self.outputter = UnitTestOutput(XMLTESTSUITE)
+    if XMLOUT:
+      self.outfile = open(XMLOUT, "w")
+    else:
+      self.outfile = sys.stdout
+
+  def Starting(self):
+    pass
+
+  def AboutToRun(self, case):
+    self.outputter.startNewTest(case.GetName())
+
+  def Done(self):
+    self.outputter.finishAndWrite(self.outfile)
+    if self.outfile != sys.stdout:
+      self.outfile.close()
+
+  def HasRun(self, output):
+    if output.UnexpectedOutput():
+      failtext=""
+      stdout = output.output.stdout.strip()
+      if len(stdout):
+        failtext+="stdout:\n"
+        failtext+=stdout
+        failtext+="\n"
+      stderr = output.output.stderr.strip()
+      if len(stderr):
+        failtext+="stderr:\n"
+        failtext+=stderr
+        failtext+="\n"
+      if output.HasCrashed():
+        failtext+= "--- CRASHED ---"
+      if output.HasTimedOut():
+        failtext+= "--- TIMEOUT ---"
+      self.outputter.finishCurrentTest(True, failtext)
+    else:
+      self.outputter.finishCurrentTest(False)
+
 
 PROGRESS_INDICATORS = {
   'verbose': VerboseProgressIndicator,
@@ -358,7 +412,7 @@ class TestCase(object):
     full_command = self.context.processor(command)
     output = Execute(full_command,
                      self.context,
-                     self.context.GetTimeout(self.mode))
+                     self.context.GetTimeout(self, self.mode))
     self.Cleanup()
     return TestOutput(self,
                       full_command,
@@ -569,7 +623,7 @@ class TestSuite(object):
 
 # Use this to run several variants of the tests, e.g.:
 # VARIANT_FLAGS = [[], ['--always_compact', '--noflush_code']]
-VARIANT_FLAGS = [[]]
+VARIANT_FLAGS = [[], ['--stress-opt', '--always-opt'], ['--nocrankshaft']]
 
 
 class TestRepository(TestSuite):
@@ -673,8 +727,12 @@ class Context(object):
   def GetVmFlags(self, testcase, mode):
     return testcase.variant_flags + FLAGS[mode]
 
-  def GetTimeout(self, mode):
-    return self.timeout * TIMEOUT_SCALEFACTOR[mode]
+  def GetTimeout(self, testcase, mode):
+    result = self.timeout * TIMEOUT_SCALEFACTOR[mode]
+    if '--stress-opt' in self.GetVmFlags(testcase, mode):
+      return result * 2
+    else:
+      return result
 
 def RunTestCases(cases_to_run, progress, tasks):
   progress = PROGRESS_INDICATORS[progress](cases_to_run)
@@ -724,6 +782,9 @@ class Variable(Expression):
   def GetOutcomes(self, env, defs):
     if self.name in env: return ListSet([env[self.name]])
     else: return Nothing()
+
+  def Evaluate(self, env, defs):
+    return env[self.name]
 
 
 class Outcome(Expression):
@@ -1160,12 +1221,34 @@ def BuildOptions():
         dest="suppress_dialogs", action="store_false")
   result.add_option("--mips-arch-variant", help="mips architecture variant: mips32r1/mips32r2", default="mips32r2");
   result.add_option("--shell", help="Path to V8 shell", default="shell")
-  result.add_option("--store-unexpected-output", 
+  result.add_option("--store-unexpected-output",
       help="Store the temporary JS files from tests that fails",
       dest="store_unexpected_output", default=True, action="store_true")
-  result.add_option("--no-store-unexpected-output", 
+  result.add_option("--no-store-unexpected-output",
       help="Deletes the temporary JS files from tests that fails",
       dest="store_unexpected_output", action="store_false")
+  result.add_option("--xmlout", help="File name of the UnitTest output")
+  result.add_option("--xmltestsuite", help="Name of the testsuite in the UnitTest XML output", default="v8tests")
+  result.add_option("--nocrankshaft-only",
+                    help="Only run tests with nocrankshaft version",
+                    default=False, action="store_true")
+  result.add_option("--stress-only",
+                    help="Only run tests with --always-opt --stress-opt",
+                    default=False, action="store_true")
+  result.add_option("--nostress",
+                    help="Don't run crankshaft --always-opt --stress-op test",
+                    default=False, action="store_true")
+  result.add_option("--crankshaft",
+                    help="Run with the --crankshaft flag",
+                    default=False, action="store_true")
+  result.add_option("--shard-count",
+                    help="Split testsuites into this number of shards",
+                    default=1, type="int")
+  result.add_option("--shard-run",
+                    help="Run this shard from the split up tests.",
+                    default=1, type="int")
+  result.add_option("--noprof", help="Disable profiling support",
+                    default=False)
   return result
 
 
@@ -1197,6 +1280,27 @@ def ProcessOptions(options):
     options.scons_flags.append("snapshot=on")
   if options.mips_arch_variant:
     options.scons_flags.append("mips_arch_variant=" + options.mips_arch_variant)
+
+  global XMLOUT
+  XMLOUT = options.xmlout
+  global VARIANT_FLAGS
+  if options.nocrankshaft_only:
+    VARIANT_FLAGS = [['--nocrankshaft']]
+  if options.stress_only:
+    VARIANT_FLAGS = [['--stress-opt', '--always-opt']]
+  if options.nostress:
+    VARIANT_FLAGS = [[],['--nocrankshaft']]
+  global XMLTESTSUITE
+  XMLTESTSUITE = options.xmltestsuite
+
+  if options.crankshaft:
+    if options.special_command:
+      options.special_command += " --crankshaft"
+    else:
+      options.special_command = "@--crankshaft"
+  if options.noprof:
+    options.scons_flags.append("prof=off")
+    options.scons_flags.append("profilingsupport=off")
   return True
 
 
@@ -1274,6 +1378,20 @@ def FormatTime(d):
   millis = round(d * 1000) % 1000
   return time.strftime("%M:%S.", time.gmtime(d)) + ("%03i" % millis)
 
+def ShardTests(tests, options):
+  if options.shard_count < 2:
+    return tests
+  if options.shard_run < 1 or options.shard_run > options.shard_count:
+    print "shard-run not a valid number, should be in [1:shard-count]"
+    print "defaulting back to running all tests"
+    return tests
+  count = 0;
+  shard = []
+  for test in tests:
+    if count % options.shard_count == options.shard_run - 1:
+      shard.append(test);
+    count += 1
+  return shard
 
 def Main():
   parser = BuildOptions()
@@ -1347,7 +1465,8 @@ def Main():
         'mode': mode,
         'system': utils.GuessOS(),
         'arch': options.arch,
-        'simulator': options.simulator
+        'simulator': options.simulator,
+        'crankshaft': options.crankshaft
       }
       test_list = root.ListTests([], path, context, mode)
       unclassified_tests += test_list
@@ -1356,7 +1475,7 @@ def Main():
         globally_unused_rules = set(unused_rules)
       else:
         globally_unused_rules = globally_unused_rules.intersection(unused_rules)
-      all_cases += cases
+      all_cases += ShardTests(cases, options)
       all_unused.append(unused_rules)
 
   if options.cat:
@@ -1415,4 +1534,5 @@ def Main():
 
 
 if __name__ == '__main__':
-  sys.exit(Main())
+  Main()
+  sys.exit(0)
