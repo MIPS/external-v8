@@ -366,7 +366,7 @@ void OS::DebugBreak() {
   asm("bkpt 0");
 # endif
 #elif defined(__mips__)
-  asm("break");
+  asm("break 13");
 #else
   asm("int $3");
 #endif

@@ -90,7 +90,7 @@ void CPU::FlushICache(void* start, size_t size) {
 
 void CPU::DebugBreak() {
 #ifdef __mips
-  asm volatile("break");
+  asm volatile("break 13");
 #endif  // #ifdef __mips
 }
 
