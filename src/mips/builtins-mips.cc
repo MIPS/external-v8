@@ -344,7 +344,7 @@ static void ArrayNativeCode(MacroAssembler* masm,
   // Handle construction of an empty array of a certain size. Bail out if size
   // is too large to actually allocate an elements array.
   ASSERT(kSmiTag == 0);
-  __ Branch(call_generic_code, ge, a2,
+  __ Branch(call_generic_code, Ugreater_equal, a2,
             Operand(JSObject::kInitialMaxFastElementArray << kSmiTagSize));
 
   // a0: argc
@@ -1047,8 +1047,7 @@ static void Generate_JSEntryTrampolineHelper(MacroAssembler* masm,
   Label loop, entry;
   __ sll(t0, a3, kPointerSizeLog2);
   __ addu(t2, s0, t0);
-  __ b(&entry);
-  __ nop();   // Branch delay slot nop.
+  __ Branch(&entry);
   // t2 points past last arg.
   __ bind(&loop);
   __ lw(t0, MemOperand(s0));  // Read next parameter.
