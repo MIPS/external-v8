@@ -169,6 +169,7 @@ DECLARE_JUMP_CALL_PROTOTYPES(Jump)
 DECLARE_JUMP_CALL_PROTOTYPES(Call)
 
 DECLARE_BRANCH_PROTOTYPES(Branch)
+DECLARE_BRANCH_PROTOTYPES(BranchShort)
 DECLARE_BRANCH_PROTOTYPES(BranchAndLink)
 
 DECLARE_NOTARGET_PROTOTYPE(Ret)
@@ -949,6 +950,18 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
                                            Label* failure);
 
  private:
+  void BranchAndLinkShort(int16_t offset, BranchDelaySlot bdslot = PROTECT);
+  void BranchAndLinkShort(int16_t offset, Condition cond, Register rs,
+                          const Operand& rt,
+                          BranchDelaySlot bdslot = PROTECT);
+  void BranchAndLinkShort(Label* L, BranchDelaySlot bdslot = PROTECT);
+  void BranchAndLinkShort(Label* L, Condition cond, Register rs,
+                          const Operand& rt,
+                          BranchDelaySlot bdslot = PROTECT);
+  void J(Label* L, BranchDelaySlot bdslot);
+  void Jr(Label* L, BranchDelaySlot bdslot);
+  void Jalr(Label* L, BranchDelaySlot bdslot);
+
   void Jump(intptr_t target, RelocInfo::Mode rmode,
             BranchDelaySlot bd = PROTECT);
   void Jump(intptr_t target, RelocInfo::Mode rmode, Condition cond = cc_always,

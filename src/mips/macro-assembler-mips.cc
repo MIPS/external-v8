@@ -908,7 +908,44 @@ void MacroAssembler::GetLeastBitsFromInt32(Register dst,
     (cond != cc_always && (!rs.is(zero_reg) || !rt.rm().is(zero_reg))))
 
 
+
 void MacroAssembler::Branch(int16_t offset, BranchDelaySlot bdslot) {
+  BranchShort(offset, bdslot);
+}
+
+
+void MacroAssembler::Branch(int16_t offset, Condition cond, Register rs,
+                            const Operand& rt,
+                            BranchDelaySlot bdslot) {
+  BranchShort(offset, cond, rs, rt, bdslot);
+}
+
+
+void MacroAssembler::Branch(Label* L, BranchDelaySlot bdslot) {
+  if (!is_trampoline_emitted() || is_near(L)) {
+    BranchShort(L, bdslot);
+  } else {
+    Jr(L, bdslot);
+  }
+}
+
+
+void MacroAssembler::Branch(Label* L, Condition cond, Register rs,
+                            const Operand& rt,
+                            BranchDelaySlot bdslot) {
+  if (!is_trampoline_emitted() || is_near(L)) {
+    BranchShort(L, cond, rs, rt, bdslot);
+  } else {
+    Label skip;
+    Condition neg_cond = NegateCondition(cond);
+    BranchShort(&skip, neg_cond, rs, rt);
+    Jr(L, bdslot);
+    bind(&skip);
+  }
+}
+
+
+void MacroAssembler::BranchShort(int16_t offset, BranchDelaySlot bdslot) {
   b(offset);
 
   // Emit a nop in the branch delay slot if required.
@@ -917,9 +954,9 @@ void MacroAssembler::Branch(int16_t offset, BranchDelaySlot bdslot) {
 }
 
 
-void MacroAssembler::Branch(int16_t offset, Condition cond, Register rs,
-                            const Operand& rt,
-                            BranchDelaySlot bdslot) {
+void MacroAssembler::BranchShort(int16_t offset, Condition cond, Register rs,
+                                 const Operand& rt,
+                                 BranchDelaySlot bdslot) {
   BRANCH_ARGS_CHECK(cond, rs, rt);
   ASSERT(!rs.is(zero_reg));
   Register r2 = no_reg;
@@ -939,7 +976,7 @@ void MacroAssembler::Branch(int16_t offset, Condition cond, Register rs,
       case ne:
         bne(rs, r2, offset);
         break;
-      // Signed comparison
+      // Signed comparison.
       case greater:
         if (r2.is(zero_reg)) {
           bgtz(rs, offset);
@@ -991,7 +1028,8 @@ void MacroAssembler::Branch(int16_t offset, Condition cond, Register rs,
         break;
       case Uless:
         if (r2.is(zero_reg)) {
-          b(offset);
+          // No code needs to be emitted.
+          return;
         } else {
           sltu(scratch, rs, r2);
           bne(scratch, zero_reg, offset);
@@ -1030,7 +1068,7 @@ void MacroAssembler::Branch(int16_t offset, Condition cond, Register rs,
         li(r2, rt);
         bne(rs, r2, offset);
         break;
-      // Signed comparison
+      // Signed comparison.
       case greater:
         if (rt.imm32_ == 0) {
           bgtz(rs, offset);
@@ -1050,7 +1088,7 @@ void MacroAssembler::Branch(int16_t offset, Condition cond, Register rs,
         } else {
           r2 = scratch;
           li(r2, rt);
-          sltu(scratch, rs, r2);
+          slt(scratch, rs, r2);
           beq(scratch, zero_reg, offset);
         }
         break;
@@ -1103,7 +1141,8 @@ void MacroAssembler::Branch(int16_t offset, Condition cond, Register rs,
         break;
       case Uless:
         if (rt.imm32_ == 0) {
-          b(offset);
+          // No code needs to be emitted.
+          return;
         } else if (is_int16(rt.imm32_)) {
           sltiu(scratch, rs, rt.imm32_);
           bne(scratch, zero_reg, offset);
@@ -1134,7 +1173,7 @@ void MacroAssembler::Branch(int16_t offset, Condition cond, Register rs,
 }
 
 
-void MacroAssembler::Branch(Label* L, BranchDelaySlot bdslot) {
+void MacroAssembler::BranchShort(Label* L, BranchDelaySlot bdslot) {
   // We use branch_offset as an argument for the branch instructions to be sure
   // it is called just before generating the branch instruction, as needed.
 
@@ -1146,9 +1185,9 @@ void MacroAssembler::Branch(Label* L, BranchDelaySlot bdslot) {
 }
 
 
-void MacroAssembler::Branch(Label* L, Condition cond, Register rs,
-                            const Operand& rt,
-                            BranchDelaySlot bdslot) {
+void MacroAssembler::BranchShort(Label* L, Condition cond, Register rs,
+                                 const Operand& rt,
+                                 BranchDelaySlot bdslot) {
   BRANCH_ARGS_CHECK(cond, rs, rt);
 
   int32_t offset;
@@ -1172,7 +1211,7 @@ void MacroAssembler::Branch(Label* L, Condition cond, Register rs,
         offset = shifted_branch_offset(L, false);
         bne(rs, r2, offset);
         break;
-      // Signed comparison
+      // Signed comparison.
       case greater:
         if (r2.is(zero_reg)) {
           offset = shifted_branch_offset(L, false);
@@ -1236,8 +1275,8 @@ void MacroAssembler::Branch(Label* L, Condition cond, Register rs,
         break;
       case Uless:
         if (r2.is(zero_reg)) {
-          offset = shifted_branch_offset(L, false);
-          b(offset);
+          // No code needs to be emitted.
+          return;
         } else {
           sltu(scratch, rs, r2);
           offset = shifted_branch_offset(L, false);
@@ -1278,7 +1317,7 @@ void MacroAssembler::Branch(Label* L, Condition cond, Register rs,
         offset = shifted_branch_offset(L, false);
         bne(rs, r2, offset);
         break;
-      // Signed comparison
+      // Signed comparison.
       case greater:
         if (rt.imm32_ == 0) {
           offset = shifted_branch_offset(L, false);
@@ -1302,7 +1341,7 @@ void MacroAssembler::Branch(Label* L, Condition cond, Register rs,
         } else {
           r2 = scratch;
           li(r2, rt);
-          sltu(scratch, rs, r2);
+          slt(scratch, rs, r2);
           offset = shifted_branch_offset(L, false);
           beq(scratch, zero_reg, offset);
         }
@@ -1366,8 +1405,8 @@ void MacroAssembler::Branch(Label* L, Condition cond, Register rs,
         break;
      case Uless:
         if (rt.imm32_ == 0) {
-          offset = shifted_branch_offset(L, false);
-          b(offset);
+          // No code needs to be emitted.
+          return;
         } else if (is_int16(rt.imm32_)) {
           sltiu(scratch, rs, rt.imm32_);
           offset = shifted_branch_offset(L, false);
@@ -1404,11 +1443,47 @@ void MacroAssembler::Branch(Label* L, Condition cond, Register rs,
 }
 
 
+void MacroAssembler::BranchAndLink(int16_t offset, BranchDelaySlot bdslot) {
+  BranchAndLinkShort(offset, bdslot);
+}
+
+
+void MacroAssembler::BranchAndLink(int16_t offset, Condition cond, Register rs,
+                                   const Operand& rt,
+                                   BranchDelaySlot bdslot) {
+  BranchAndLinkShort(offset, cond, rs, rt, bdslot);
+}
+
+
+void MacroAssembler::BranchAndLink(Label* L, BranchDelaySlot bdslot) {
+  if (!is_trampoline_emitted() || is_near(L)) {
+    BranchAndLinkShort(L, bdslot);
+  } else {
+    Jalr(L, bdslot);
+  }
+}
+
+
+void MacroAssembler::BranchAndLink(Label* L, Condition cond, Register rs,
+                                   const Operand& rt,
+                                   BranchDelaySlot bdslot) {
+  if (!is_trampoline_emitted() || is_near(L)) {
+    BranchAndLinkShort(L, cond, rs, rt, bdslot);
+  } else {
+    Label skip;
+    Condition neg_cond = NegateCondition(cond);
+    BranchShort(&skip, neg_cond, rs, rt);
+    Jalr(L, bdslot);
+    bind(&skip);
+  }
+}
+
+
 // We need to use a bgezal or bltzal, but they can't be used directly with the
 // slt instructions. We could use sub or add instead but we would miss overflow
 // cases, so we keep slt and add an intermediate third instruction.
-void MacroAssembler::BranchAndLink(int16_t offset,
-                                   BranchDelaySlot bdslot) {
+void MacroAssembler::BranchAndLinkShort(int16_t offset,
+                                        BranchDelaySlot bdslot) {
   bal(offset);
 
   // Emit a nop in the branch delay slot if required.
@@ -1417,9 +1492,9 @@ void MacroAssembler::BranchAndLink(int16_t offset,
 }
 
 
-void MacroAssembler::BranchAndLink(int16_t offset, Condition cond, Register rs,
-                                   const Operand& rt,
-                                   BranchDelaySlot bdslot) {
+void MacroAssembler::BranchAndLinkShort(int16_t offset, Condition cond,
+                                        Register rs, const Operand& rt,
+                                        BranchDelaySlot bdslot) {
   BRANCH_ARGS_CHECK(cond, rs, rt);
   Register r2 = no_reg;
   Register scratch = at;
@@ -1446,7 +1521,7 @@ void MacroAssembler::BranchAndLink(int16_t offset, Condition cond, Register rs,
       bal(offset);
       break;
 
-    // Signed comparison
+    // Signed comparison.
     case greater:
       slt(scratch, r2, rs);
       addiu(scratch, scratch, -1);
@@ -1499,7 +1574,7 @@ void MacroAssembler::BranchAndLink(int16_t offset, Condition cond, Register rs,
 }
 
 
-void MacroAssembler::BranchAndLink(Label* L, BranchDelaySlot bdslot) {
+void MacroAssembler::BranchAndLinkShort(Label* L, BranchDelaySlot bdslot) {
   bal(shifted_branch_offset(L, false));
 
   // Emit a nop in the branch delay slot if required.
@@ -1508,9 +1583,9 @@ void MacroAssembler::BranchAndLink(Label* L, BranchDelaySlot bdslot) {
 }
 
 
-void MacroAssembler::BranchAndLink(Label* L, Condition cond, Register rs,
-                                   const Operand& rt,
-                                   BranchDelaySlot bdslot) {
+void MacroAssembler::BranchAndLinkShort(Label* L, Condition cond, Register rs,
+                                        const Operand& rt,
+                                        BranchDelaySlot bdslot) {
   BRANCH_ARGS_CHECK(cond, rs, rt);
 
   int32_t offset;
@@ -1541,7 +1616,7 @@ void MacroAssembler::BranchAndLink(Label* L, Condition cond, Register rs,
       bal(offset);
       break;
 
-    // Signed comparison
+    // Signed comparison.
     case greater:
       slt(scratch, r2, rs);
       addiu(scratch, scratch, -1);
@@ -1599,6 +1674,64 @@ void MacroAssembler::BranchAndLink(Label* L, Condition cond, Register rs,
 
   // Check that offset could actually hold on an int16_t.
   ASSERT(is_int16(offset));
+
+  // Emit a nop in the branch delay slot if required.
+  if (bdslot == PROTECT)
+    nop();
+}
+
+
+void MacroAssembler::J(Label* L, BranchDelaySlot bdslot) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
+
+  uint32_t imm28;
+  imm28 = jump_address(L);
+  imm28 &= kImm28Mask;
+  { BlockGrowBufferScope block_buf_growth(this);
+    // Buffer growth (and relocation) must be blocked for internal references
+    // until associated instructions are emitted and available to be patched.
+    RecordRelocInfo(RelocInfo::INTERNAL_REFERENCE);
+    j(imm28);
+  }
+  // Emit a nop in the branch delay slot if required.
+  if (bdslot == PROTECT)
+    nop();
+}
+
+
+void MacroAssembler::Jr(Label* L, BranchDelaySlot bdslot) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
+
+  uint32_t imm32;
+  imm32 = jump_address(L);
+  { BlockGrowBufferScope block_buf_growth(this);
+    // Buffer growth (and relocation) must be blocked for internal references
+    // until associated instructions are emitted and available to be patched.
+    RecordRelocInfo(RelocInfo::INTERNAL_REFERENCE);
+    lui(at, (imm32 & kHiMask) >> kLuiShift);
+    ori(at, at, (imm32 & kImm16Mask));
+  }
+  jr(at);
+
+  // Emit a nop in the branch delay slot if required.
+  if (bdslot == PROTECT)
+    nop();
+}
+
+
+void MacroAssembler::Jalr(Label* L, BranchDelaySlot bdslot) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
+
+  uint32_t imm32;
+  imm32 = jump_address(L);
+  { BlockGrowBufferScope block_buf_growth(this);
+    // Buffer growth (and relocation) must be blocked for internal references
+    // until associated instructions are emitted and available to be patched.
+    RecordRelocInfo(RelocInfo::INTERNAL_REFERENCE);
+    lui(at, (imm32 & kHiMask) >> kLuiShift);
+    ori(at, at, (imm32 & kImm16Mask));
+  }
+  jalr(at);
 
   // Emit a nop in the branch delay slot if required.
   if (bdslot == PROTECT)
@@ -2723,9 +2856,9 @@ void MacroAssembler::AssertFastElements(Register elements) {
     Push(elements);
     lw(elements, FieldMemOperand(elements, HeapObject::kMapOffset));
     LoadRoot(at, Heap::kFixedArrayMapRootIndex);
-    Branch(&ok, eq, elements, Operand(at));
+    BranchShort(&ok, eq, elements, Operand(at));
     LoadRoot(at, Heap::kFixedCOWArrayMapRootIndex);
-    Branch(&ok, eq, elements, Operand(at));
+    BranchShort(&ok, eq, elements, Operand(at));
     Abort("JSObject with fast elements map has slow elements");
     bind(&ok);
     Pop(elements);
@@ -2736,7 +2869,7 @@ void MacroAssembler::AssertFastElements(Register elements) {
 void MacroAssembler::Check(Condition cc, const char* msg,
                            Register rs, Operand rt) {
   Label L;
-  Branch(&L, cc, rs, rt);
+  BranchShort(&L, cc, rs, rt);
   Abort(msg);
   // will not return here
   bind(&L);
