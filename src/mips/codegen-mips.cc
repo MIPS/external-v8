@@ -1551,7 +1551,13 @@ void CodeGenerator::SmiOperation(Token::Value op,
         case Token::SAR: {
           if (shift_value != 0) {
             // Do the shift and the tag removal in one operation.
-            __ sra(tos, tos, (kSmiTagSize + shift_value));
+            if(kSmiTagSize + shift_value >= 31) {
+              // Cap the total shift value to 31.
+              // Any thing greater will have no effect.
+              __ sra(tos, tos, 31);
+            } else {
+              __ sra(tos, tos, (kSmiTagSize + shift_value));
+            }
             __ sll(tos, tos, kSmiTagSize);
            }
           break;
