@@ -4,6 +4,8 @@ LOCAL_PATH := $(call my-dir)
 # ===================================================
 include $(CLEAR_VARS)
 
+LOCAL_MIPS_MODE=mips
+
 # Set up the target identity
 LOCAL_MODULE := libv8
 LOCAL_MODULE_CLASS := STATIC_LIBRARIES
@@ -56,6 +58,7 @@ LOCAL_SRC_FILES += \
 endif
 
 LOCAL_CFLAGS += \
+	-O2 \
 	-Wno-endif-labels \
 	-Wno-import \
 	-Wno-format \
