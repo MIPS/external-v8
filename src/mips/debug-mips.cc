@@ -1,4 +1,4 @@
-// Copyright 2010 the V8 project authors. All rights reserved.
+// Copyright 2011 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -31,7 +31,7 @@
 
 #if defined(V8_TARGET_ARCH_MIPS)
 
-#include "codegen-inl.h"
+#include "codegen.h"
 #include "debug.h"
 
 namespace v8 {
@@ -59,7 +59,8 @@ void BreakLocationIterator::SetDebugBreakAtReturn() {
   CodePatcher patcher(rinfo()->pc(), Assembler::kJSReturnSequenceInstructions);
   // li and Call pseudo-instructions emit two instructions each.
   patcher.masm()->li(v8::internal::t9,
-      Operand(reinterpret_cast<int32_t>(Debug::debug_break_return()->entry())));
+      Operand(reinterpret_cast<int32_t>(
+          Isolate::Current()->debug()->debug_break_return()->entry())));
   patcher.masm()->Call(v8::internal::t9);
   patcher.masm()->nop();
   patcher.masm()->nop();
@@ -78,7 +79,7 @@ void BreakLocationIterator::ClearDebugBreakAtReturn() {
 
 
 // A debug break in the exit code is identified by the JS frame exit code
-// having been patched with li/call psuedo-instrunction (liu/ori/jalr)
+// having been patched with li/call psuedo-instrunction (liu/ori/jalr).
 bool Debug::IsDebugBreakAtReturn(RelocInfo* rinfo) {
   ASSERT(RelocInfo::IsJSReturn(rinfo->rmode()));
   return rinfo->IsPatchedReturnSequence();
@@ -94,7 +95,7 @@ bool BreakLocationIterator::IsDebugBreakAtSlot() {
 
 void BreakLocationIterator::SetDebugBreakAtSlot() {
   ASSERT(IsDebugBreakSlot());
-  // Patch the code changing the debug break slot code from
+  // Patch the code changing the debug break slot code from:
   //   nop(DEBUG_BREAK_NOP) - nop(1) is sll(zero_reg, zero_reg, 1)
   //   nop(DEBUG_BREAK_NOP)
   //   nop(DEBUG_BREAK_NOP)
@@ -103,8 +104,8 @@ void BreakLocationIterator::SetDebugBreakAtSlot() {
   //   li t9, address   (lui t9 / ori t9 instruction pair)
   //   call t9          (jalr t9 / nop instruction pair)
   CodePatcher patcher(rinfo()->pc(), Assembler::kDebugBreakSlotInstructions);
-  patcher.masm()->li(v8::internal::t9,
-      Operand(reinterpret_cast<int32_t>(Debug::debug_break_return()->entry())));
+  patcher.masm()->li(v8::internal::t9, Operand(reinterpret_cast<int32_t>(
+      Isolate::Current()->debug()->debug_break_slot()->entry())));
   patcher.masm()->Call(v8::internal::t9);
 }
 
@@ -149,8 +150,8 @@ static void Generate_DebugBreakCallHelper(MacroAssembler* masm,
 #ifdef DEBUG
   __ RecordComment("// Calling from debug break to runtime - come in - over");
 #endif
-  __ mov(a0, zero_reg);  // no arguments
-  __ li(a1, Operand(ExternalReference::debug_break()));
+  __ mov(a0, zero_reg);  // No arguments.
+  __ li(a1, Operand(ExternalReference::debug_break(masm->isolate())));
 
   CEntryStub ceb(1);
   __ CallStub(&ceb);
@@ -176,7 +177,8 @@ static void Generate_DebugBreakCallHelper(MacroAssembler* masm,
   // Now that the break point has been handled, resume normal execution by
   // jumping to the target address intended by the caller and that was
   // overwritten by the address of DebugBreakXXX.
-  __ li(t9, Operand(ExternalReference(Debug_Address::AfterBreakTarget())));
+  __ li(t9, Operand(
+      ExternalReference(Debug_Address::AfterBreakTarget(), masm->isolate())));
   __ lw(t9, MemOperand(t9));
   __ Jump(t9);
 }
@@ -230,7 +232,7 @@ void Debug::GenerateKeyedStoreICDebugBreak(MacroAssembler* masm) {
 
 
 void Debug::GenerateCallICDebugBreak(MacroAssembler* masm) {
-  // Calling convention for IC call (from ic-mips.cc)
+  // Calling convention for IC call (from ic-mips.cc).
   // ----------- S t a t e -------------
   //  -- a2: name
   // -----------------------------------
@@ -239,7 +241,7 @@ void Debug::GenerateCallICDebugBreak(MacroAssembler* masm) {
 
 
 void Debug::GenerateConstructCallDebugBreak(MacroAssembler* masm) {
-  // Calling convention for construct call (from builtins-mips.cc)
+  // Calling convention for construct call (from builtins-mips.cc).
   //  -- a0     : number of arguments (not smi)
   //  -- a1     : constructor function
   Generate_DebugBreakCallHelper(masm, a1.bit(), a0.bit());

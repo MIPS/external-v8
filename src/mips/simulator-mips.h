@@ -1,4 +1,4 @@
-// Copyright 2010 the V8 project authors. All rights reserved.
+// Copyright 2011 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -50,27 +50,27 @@ namespace internal {
   entry(p0, p1, p2, p3, p4)
 
 typedef int (*mips_regexp_matcher)(String*, int, const byte*, const byte*,
-                                   int*, Address, int);
+                                   void*, int*, Address, int, Isolate*);
 
 
 // Call the generated regexp code directly. The code at the entry address
-// should act as a function matching the type mips_regexp_matcher.
-
-// On ARM the fifth argument is a dummy that reserves the space used for
-// the return address added by the ExitFrame in native calls. It seems that
-// MIPS never included this argument.
-#define CALL_GENERATED_REGEXP_CODE(entry, p0, p1, p2, p3, p4, p5, p6) \
-  (FUNCTION_CAST<mips_regexp_matcher>(entry)(p0, p1, p2, p3, p4, p5, p6))
+// should act as a function matching the type arm_regexp_matcher.
+// The fifth argument is a dummy that reserves the space used for
+// the return address added by the ExitFrame in native calls.
+#define CALL_GENERATED_REGEXP_CODE(entry, p0, p1, p2, p3, p4, p5, p6, p7) \
+  (FUNCTION_CAST<mips_regexp_matcher>(entry)( \
+      p0, p1, p2, p3, NULL, p4, p5, p6, p7))
 
 #define TRY_CATCH_FROM_ADDRESS(try_catch_address) \
-  (reinterpret_cast<TryCatch*>(try_catch_address))
+  reinterpret_cast<TryCatch*>(try_catch_address)
 
 // The stack limit beyond which we will throw stack overflow errors in
 // generated code. Because generated code on mips uses the C stack, we
 // just use the C stack limit.
 class SimulatorStack : public v8::internal::AllStatic {
  public:
-  static inline uintptr_t JsLimitFromCLimit(uintptr_t c_limit) {
+  static inline uintptr_t JsLimitFromCLimit(Isolate* isolate,
+                                            uintptr_t c_limit) {
     return c_limit;
   }
 
@@ -137,7 +137,7 @@ class CachePage {
 
 class Simulator {
  public:
-  friend class Debugger;
+  friend class MipsDebugger;
 
   // Registers are declared in order. See SMRL chapter 2.
   enum Register {
@@ -154,7 +154,7 @@ class Simulator {
     sp,
     s8,
     ra,
-    // LO, HI, and pc
+    // LO, HI, and pc.
     LO,
     HI,
     pc,   // pc must be the last register.
@@ -167,25 +167,25 @@ class Simulator {
   // Generated code will always use doubles. So we will only use even registers.
   enum FPURegister {
     f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11,
-    f12, f13, f14, f15,   // f12 and f14 are arguments FPURegisters
+    f12, f13, f14, f15,   // f12 and f14 are arguments FPURegisters.
     f16, f17, f18, f19, f20, f21, f22, f23, f24, f25,
     f26, f27, f28, f29, f30, f31,
     kNumFPURegisters
   };
 
-  Simulator();
+  explicit Simulator(Isolate* isolate);
   ~Simulator();
 
   // The currently executing Simulator instance. Potentially there can be one
   // for each native thread.
-  static Simulator* current();
+  static Simulator* current(v8::internal::Isolate* isolate);
 
   // Accessors for register state. Reading the pc value adheres to the MIPS
   // architecture specification and is off by a 8 from the currently executing
   // instruction.
   void set_register(int reg, int32_t value);
   int32_t get_register(int reg) const;
-  // Same for FPURegisters
+  // Same for FPURegisters.
   void set_fpu_register(int fpureg, int32_t value);
   void set_fpu_register_float(int fpureg, float value);
   void set_fpu_register_double(int fpureg, double value);
@@ -208,12 +208,12 @@ class Simulator {
   void Execute();
 
   // Call on program start.
-  static void Initialize();
+  static void Initialize(Isolate* isolate);
 
   // V8 generally calls into generated JS code with 5 parameters and into
   // generated RegExp code with 7 parameters. This is a convenience function,
   // which sets up the simulator state and grabs the result on return.
-  int32_t Call(byte_* entry, int argument_count, ...);
+  int32_t Call(byte* entry, int argument_count, ...);
 
   // Push an address onto the JS stack.
   uintptr_t PushAddress(uintptr_t address);
@@ -222,7 +222,8 @@ class Simulator {
   uintptr_t PopAddress();
 
   // ICache checking.
-  static void FlushICache(void* start, size_t size);
+  static void FlushICache(v8::internal::HashMap* i_cache, void* start,
+                          size_t size);
 
   // Returns true if pc register contains one of the 'special_values' defined
   // below (bad_ra, end_sim_pc).
@@ -271,7 +272,6 @@ class Simulator {
   inline int32_t SetDoubleHIW(double* addr);
   inline int32_t SetDoubleLOW(double* addr);
 
-
   // Executing is handled based on the instruction type.
   void DecodeTypeRegister(Instruction* instr);
 
@@ -289,6 +289,18 @@ class Simulator {
   // Used for breakpoints and traps.
   void SoftwareInterrupt(Instruction* instr);
 
+  // Stop helper functions.
+  bool IsWatchpoint(uint32_t code);
+  void PrintWatchpoint(uint32_t code);
+  void HandleStop(uint32_t code, Instruction* instr);
+  bool IsStopInstruction(Instruction* instr);
+  bool IsEnabledStop(uint32_t code);
+  void EnableStop(uint32_t code);
+  void DisableStop(uint32_t code);
+  void IncreaseStopCounter(uint32_t code);
+  void PrintStopInfo(uint32_t code);
+
+
   // Executes one instruction.
   void InstructionDecode(Instruction* instr);
   // Execute one instruction placed in a branch delay slot.
@@ -302,10 +314,10 @@ class Simulator {
   }
 
   // ICache.
-  static void CheckICache(Instruction* instr);
-  static void FlushOnePage(intptr_t start, int size);
-  static CachePage* GetCachePage(void* page);
-
+  static void CheckICache(v8::internal::HashMap* i_cache, Instruction* instr);
+  static void FlushOnePage(v8::internal::HashMap* i_cache, intptr_t start,
+                           int size);
+  static CachePage* GetCachePage(v8::internal::HashMap* i_cache, void* page);
 
   enum Exception {
     none,
@@ -320,13 +332,15 @@ class Simulator {
   void SignalExceptions();
 
   // Runtime call support.
-  static void* RedirectExternalReference(
-      void* external_function,
-      v8::internal::ExternalReference::Type type);
+  static void* RedirectExternalReference(void* external_function,
+                                         ExternalReference::Type type);
 
-  // Used for real time calls that takes two double values as arguments and
-  // returns a double.
-  void SetFpResult(double result);
+  // For use in calls that take double value arguments.
+  void GetFpArgs(double* x, double* y);
+  void GetFpArgs(double* x);
+  void GetFpArgs(double* x, int32_t* y);
+  void SetFpResult(const double& result);
+
 
   // Architecture state.
   // Registers.
@@ -342,30 +356,45 @@ class Simulator {
   char* stack_;
   bool pc_modified_;
   int icount_;
-  static bool initialized_;
   int break_count_;
 
-  // Icache simulation
-  static v8::internal::HashMap* i_cache_;
+  // Icache simulation.
+  v8::internal::HashMap* i_cache_;
+
+  v8::internal::Isolate* isolate_;
 
   // Registered breakpoints.
   Instruction* break_pc_;
   Instr break_instr_;
+
+  // Stop is disabled if bit 31 is set.
+  static const uint32_t kStopDisabledBit = 1 << 31;
+
+  // A stop is enabled, meaning the simulator will stop when meeting the
+  // instruction, if bit 31 of watched_stops[code].count is unset.
+  // The value watched_stops[code].count & ~(1 << 31) indicates how many times
+  // the breakpoint was hit or gone through.
+  struct StopCountAndDesc {
+    uint32_t count;
+    char* desc;
+  };
+  StopCountAndDesc watched_stops[kMaxStopCode + 1];
 };
 
 
 // When running with the simulator transition into simulated execution at this
 // point.
 #define CALL_GENERATED_CODE(entry, p0, p1, p2, p3, p4) \
-  reinterpret_cast<Object*>(Simulator::current()->Call( \
+    reinterpret_cast<Object*>(Simulator::current(Isolate::Current())->Call( \
       FUNCTION_ADDR(entry), 5, p0, p1, p2, p3, p4))
 
-#define CALL_GENERATED_REGEXP_CODE(entry, p0, p1, p2, p3, p4, p5, p6) \
-    Simulator::current()->Call(entry, 7, p0, p1, p2, p3, p4, p5, p6)
+#define CALL_GENERATED_REGEXP_CODE(entry, p0, p1, p2, p3, p4, p5, p6, p7) \
+    Simulator::current(Isolate::Current())->Call( \
+        entry, 9, p0, p1, p2, p3, NULL, p4, p5, p6, p7)
 
-#define TRY_CATCH_FROM_ADDRESS(try_catch_address) \
-  try_catch_address == \
-      NULL ? NULL : *(reinterpret_cast<TryCatch**>(try_catch_address))
+#define TRY_CATCH_FROM_ADDRESS(try_catch_address)                              \
+  try_catch_address == NULL ?                                                  \
+      NULL : *(reinterpret_cast<TryCatch**>(try_catch_address))
 
 
 // The simulator has its own stack. Thus it has a different stack limit from
@@ -375,17 +404,18 @@ class Simulator {
 // trouble down the line.
 class SimulatorStack : public v8::internal::AllStatic {
  public:
-  static inline uintptr_t JsLimitFromCLimit(uintptr_t c_limit) {
-    return Simulator::current()->StackLimit();
+  static inline uintptr_t JsLimitFromCLimit(Isolate* isolate,
+                                            uintptr_t c_limit) {
+    return Simulator::current(isolate)->StackLimit();
   }
 
   static inline uintptr_t RegisterCTryCatch(uintptr_t try_catch_address) {
-    Simulator* sim = Simulator::current();
+    Simulator* sim = Simulator::current(Isolate::Current());
     return sim->PushAddress(try_catch_address);
   }
 
   static inline void UnregisterCTryCatch() {
-    Simulator::current()->PopAddress();
+    Simulator::current(Isolate::Current())->PopAddress();
   }
 };
 
@@ -393,4 +423,3 @@ class SimulatorStack : public v8::internal::AllStatic {
 
 #endif  // !defined(USE_SIMULATOR)
 #endif  // V8_MIPS_SIMULATOR_MIPS_H_
-

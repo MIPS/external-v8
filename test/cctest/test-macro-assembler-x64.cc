@@ -35,48 +35,49 @@
 #include "serialize.h"
 #include "cctest.h"
 
-using v8::internal::byte;
-using v8::internal::OS;
 using v8::internal::Assembler;
+using v8::internal::CodeDesc;
 using v8::internal::Condition;
-using v8::internal::MacroAssembler;
+using v8::internal::FUNCTION_CAST;
 using v8::internal::HandleScope;
-using v8::internal::Operand;
 using v8::internal::Immediate;
-using v8::internal::SmiIndex;
+using v8::internal::Isolate;
 using v8::internal::Label;
+using v8::internal::MacroAssembler;
+using v8::internal::OS;
+using v8::internal::Operand;
 using v8::internal::RelocInfo;
-using v8::internal::rax;
-using v8::internal::rbx;
-using v8::internal::rsi;
-using v8::internal::rdi;
-using v8::internal::rcx;
-using v8::internal::rdx;
-using v8::internal::rbp;
-using v8::internal::rsp;
-using v8::internal::r8;
-using v8::internal::r9;
+using v8::internal::Smi;
+using v8::internal::SmiIndex;
+using v8::internal::byte;
+using v8::internal::carry;
+using v8::internal::greater;
+using v8::internal::greater_equal;
+using v8::internal::kIntSize;
+using v8::internal::kPointerSize;
+using v8::internal::kSmiTagMask;
+using v8::internal::kSmiValueSize;
+using v8::internal::less_equal;
+using v8::internal::negative;
+using v8::internal::not_carry;
+using v8::internal::not_equal;
+using v8::internal::not_zero;
+using v8::internal::positive;
 using v8::internal::r11;
 using v8::internal::r13;
 using v8::internal::r14;
 using v8::internal::r15;
+using v8::internal::r8;
+using v8::internal::r9;
+using v8::internal::rax;
+using v8::internal::rbp;
+using v8::internal::rbx;
+using v8::internal::rcx;
+using v8::internal::rdi;
+using v8::internal::rdx;
+using v8::internal::rsi;
+using v8::internal::rsp;
 using v8::internal::times_pointer_size;
-using v8::internal::FUNCTION_CAST;
-using v8::internal::CodeDesc;
-using v8::internal::less_equal;
-using v8::internal::not_equal;
-using v8::internal::not_zero;
-using v8::internal::greater;
-using v8::internal::greater_equal;
-using v8::internal::carry;
-using v8::internal::not_carry;
-using v8::internal::negative;
-using v8::internal::positive;
-using v8::internal::Smi;
-using v8::internal::kSmiTagMask;
-using v8::internal::kSmiValueSize;
-using v8::internal::kPointerSize;
-using v8::internal::kIntSize;
 
 // Test the x64 assembler by compiling some simple functions into
 // a buffer and executing them.  These tests do not initialize the
@@ -95,7 +96,9 @@ typedef int (*F0)();
 static void EntryCode(MacroAssembler* masm) {
   // Smi constant register is callee save.
   __ push(v8::internal::kSmiConstantRegister);
+  __ push(v8::internal::kRootRegister);
   __ InitializeSmiConstantRegister();
+  __ InitializeRootRegister();
 }
 
 
@@ -105,6 +108,7 @@ static void ExitCode(MacroAssembler* masm) {
   __ cmpq(rdx, v8::internal::kSmiConstantRegister);
   __ movq(rdx, Immediate(-1));
   __ cmovq(not_equal, rax, rdx);
+  __ pop(v8::internal::kRootRegister);
   __ pop(v8::internal::kSmiConstantRegister);
 }
 
@@ -146,6 +150,7 @@ static void TestMoveSmi(MacroAssembler* masm, Label* exit, int id, Smi* value) {
 
 // Test that we can move a Smi value literally into a register.
 TEST(SmiMove) {
+  v8::internal::V8::Initialize(NULL);
   // Allocate an executable page of memory.
   size_t actual_size;
   byte* buffer = static_cast<byte*>(OS::Allocate(Assembler::kMinimalBufferSize,
@@ -153,7 +158,9 @@ TEST(SmiMove) {
                                                    true));
   CHECK(buffer);
   HandleScope handles;
-  MacroAssembler assembler(buffer, static_cast<int>(actual_size));
+  MacroAssembler assembler(Isolate::Current(),
+                           buffer,
+                           static_cast<int>(actual_size));
   MacroAssembler* masm = &assembler;  // Create a pointer for the __ macro.
   masm->set_allow_stub_calls(false);
   EntryCode(masm);
@@ -232,7 +239,7 @@ void TestSmiCompare(MacroAssembler* masm, Label* exit, int id, int x, int y) {
 
 // Test that we can compare smis for equality (and more).
 TEST(SmiCompare) {
-  v8::V8::Initialize();
+  v8::internal::V8::Initialize(NULL);
   // Allocate an executable page of memory.
   size_t actual_size;
   byte* buffer =
@@ -241,7 +248,9 @@ TEST(SmiCompare) {
                                       true));
   CHECK(buffer);
   HandleScope handles;
-  MacroAssembler assembler(buffer, static_cast<int>(actual_size));
+  MacroAssembler assembler(Isolate::Current(),
+                           buffer,
+                           static_cast<int>(actual_size));
 
   MacroAssembler* masm = &assembler;
   masm->set_allow_stub_calls(false);
@@ -283,6 +292,7 @@ TEST(SmiCompare) {
 
 
 TEST(Integer32ToSmi) {
+  v8::internal::V8::Initialize(NULL);
   // Allocate an executable page of memory.
   size_t actual_size;
   byte* buffer = static_cast<byte*>(OS::Allocate(Assembler::kMinimalBufferSize,
@@ -290,7 +300,9 @@ TEST(Integer32ToSmi) {
                                                  true));
   CHECK(buffer);
   HandleScope handles;
-  MacroAssembler assembler(buffer, static_cast<int>(actual_size));
+  MacroAssembler assembler(Isolate::Current(),
+                           buffer,
+                           static_cast<int>(actual_size));
 
   MacroAssembler* masm = &assembler;
   masm->set_allow_stub_calls(false);
@@ -410,6 +422,7 @@ void TestI64PlusConstantToSmi(MacroAssembler* masm,
 
 
 TEST(Integer64PlusConstantToSmi) {
+  v8::internal::V8::Initialize(NULL);
   // Allocate an executable page of memory.
   size_t actual_size;
   byte* buffer = static_cast<byte*>(OS::Allocate(Assembler::kMinimalBufferSize,
@@ -417,7 +430,9 @@ TEST(Integer64PlusConstantToSmi) {
                                                  true));
   CHECK(buffer);
   HandleScope handles;
-  MacroAssembler assembler(buffer, static_cast<int>(actual_size));
+  MacroAssembler assembler(Isolate::Current(),
+                           buffer,
+                           static_cast<int>(actual_size));
 
   MacroAssembler* masm = &assembler;
   masm->set_allow_stub_calls(false);
@@ -453,6 +468,7 @@ TEST(Integer64PlusConstantToSmi) {
 
 
 TEST(SmiCheck) {
+  v8::internal::V8::Initialize(NULL);
   // Allocate an executable page of memory.
   size_t actual_size;
   byte* buffer = static_cast<byte*>(OS::Allocate(Assembler::kMinimalBufferSize,
@@ -460,7 +476,9 @@ TEST(SmiCheck) {
                                                    true));
   CHECK(buffer);
   HandleScope handles;
-  MacroAssembler assembler(buffer, static_cast<int>(actual_size));
+  MacroAssembler assembler(Isolate::Current(),
+                           buffer,
+                           static_cast<int>(actual_size));
 
   MacroAssembler* masm = &assembler;
   masm->set_allow_stub_calls(false);
@@ -699,6 +717,7 @@ void TestSmiNeg(MacroAssembler* masm, Label* exit, int id, int x) {
 
 
 TEST(SmiNeg) {
+  v8::internal::V8::Initialize(NULL);
   // Allocate an executable page of memory.
   size_t actual_size;
   byte* buffer =
@@ -707,7 +726,9 @@ TEST(SmiNeg) {
                                       true));
   CHECK(buffer);
   HandleScope handles;
-  MacroAssembler assembler(buffer, static_cast<int>(actual_size));
+  MacroAssembler assembler(Isolate::Current(),
+                           buffer,
+                           static_cast<int>(actual_size));
 
   MacroAssembler* masm = &assembler;
   masm->set_allow_stub_calls(false);
@@ -787,6 +808,7 @@ static void SmiAddTest(MacroAssembler* masm,
 }
 
 TEST(SmiAdd) {
+  v8::internal::V8::Initialize(NULL);
   // Allocate an executable page of memory.
   size_t actual_size;
   byte* buffer = static_cast<byte*>(OS::Allocate(Assembler::kMinimalBufferSize,
@@ -794,7 +816,9 @@ TEST(SmiAdd) {
                                                  true));
   CHECK(buffer);
   HandleScope handles;
-  MacroAssembler assembler(buffer, static_cast<int>(actual_size));
+  MacroAssembler assembler(Isolate::Current(),
+                           buffer,
+                           static_cast<int>(actual_size));
 
   MacroAssembler* masm = &assembler;
   masm->set_allow_stub_calls(false);
@@ -975,6 +999,7 @@ static void SmiSubOverflowTest(MacroAssembler* masm,
 
 
 TEST(SmiSub) {
+  v8::internal::V8::Initialize(NULL);
   // Allocate an executable page of memory.
   size_t actual_size;
   byte* buffer =
@@ -983,7 +1008,9 @@ TEST(SmiSub) {
                                       true));
   CHECK(buffer);
   HandleScope handles;
-  MacroAssembler assembler(buffer, static_cast<int>(actual_size));
+  MacroAssembler assembler(Isolate::Current(),
+                           buffer,
+                           static_cast<int>(actual_size));
 
   MacroAssembler* masm = &assembler;
   masm->set_allow_stub_calls(false);
@@ -1065,6 +1092,7 @@ void TestSmiMul(MacroAssembler* masm, Label* exit, int id, int x, int y) {
 
 
 TEST(SmiMul) {
+  v8::internal::V8::Initialize(NULL);
   // Allocate an executable page of memory.
   size_t actual_size;
   byte* buffer = static_cast<byte*>(OS::Allocate(Assembler::kMinimalBufferSize,
@@ -1072,7 +1100,9 @@ TEST(SmiMul) {
                                                  true));
   CHECK(buffer);
   HandleScope handles;
-  MacroAssembler assembler(buffer, static_cast<int>(actual_size));
+  MacroAssembler assembler(Isolate::Current(),
+                           buffer,
+                           static_cast<int>(actual_size));
 
   MacroAssembler* masm = &assembler;
   masm->set_allow_stub_calls(false);
@@ -1169,6 +1199,7 @@ void TestSmiDiv(MacroAssembler* masm, Label* exit, int id, int x, int y) {
 
 
 TEST(SmiDiv) {
+  v8::internal::V8::Initialize(NULL);
   // Allocate an executable page of memory.
   size_t actual_size;
   byte* buffer =
@@ -1177,7 +1208,9 @@ TEST(SmiDiv) {
                                       true));
   CHECK(buffer);
   HandleScope handles;
-  MacroAssembler assembler(buffer, static_cast<int>(actual_size));
+  MacroAssembler assembler(Isolate::Current(),
+                           buffer,
+                           static_cast<int>(actual_size));
 
   MacroAssembler* masm = &assembler;
   masm->set_allow_stub_calls(false);
@@ -1278,6 +1311,7 @@ void TestSmiMod(MacroAssembler* masm, Label* exit, int id, int x, int y) {
 
 
 TEST(SmiMod) {
+  v8::internal::V8::Initialize(NULL);
   // Allocate an executable page of memory.
   size_t actual_size;
   byte* buffer =
@@ -1286,7 +1320,9 @@ TEST(SmiMod) {
                                       true));
   CHECK(buffer);
   HandleScope handles;
-  MacroAssembler assembler(buffer, static_cast<int>(actual_size));
+  MacroAssembler assembler(Isolate::Current(),
+                           buffer,
+                           static_cast<int>(actual_size));
 
   MacroAssembler* masm = &assembler;
   masm->set_allow_stub_calls(false);
@@ -1373,6 +1409,7 @@ void TestSmiIndex(MacroAssembler* masm, Label* exit, int id, int x) {
 }
 
 TEST(SmiIndex) {
+  v8::internal::V8::Initialize(NULL);
   // Allocate an executable page of memory.
   size_t actual_size;
   byte* buffer =
@@ -1381,7 +1418,9 @@ TEST(SmiIndex) {
                                       true));
   CHECK(buffer);
   HandleScope handles;
-  MacroAssembler assembler(buffer, static_cast<int>(actual_size));
+  MacroAssembler assembler(Isolate::Current(),
+                           buffer,
+                           static_cast<int>(actual_size));
 
   MacroAssembler* masm = &assembler;
   masm->set_allow_stub_calls(false);
@@ -1441,6 +1480,7 @@ void TestSelectNonSmi(MacroAssembler* masm, Label* exit, int id, int x, int y) {
 
 
 TEST(SmiSelectNonSmi) {
+  v8::internal::V8::Initialize(NULL);
   // Allocate an executable page of memory.
   size_t actual_size;
   byte* buffer =
@@ -1449,7 +1489,9 @@ TEST(SmiSelectNonSmi) {
                                       true));
   CHECK(buffer);
   HandleScope handles;
-  MacroAssembler assembler(buffer, static_cast<int>(actual_size));
+  MacroAssembler assembler(Isolate::Current(),
+                           buffer,
+                           static_cast<int>(actual_size));
 
   MacroAssembler* masm = &assembler;
   masm->set_allow_stub_calls(false);  // Avoid inline checks.
@@ -1519,6 +1561,7 @@ void TestSmiAnd(MacroAssembler* masm, Label* exit, int id, int x, int y) {
 
 
 TEST(SmiAnd) {
+  v8::internal::V8::Initialize(NULL);
   // Allocate an executable page of memory.
   size_t actual_size;
   byte* buffer =
@@ -1527,7 +1570,9 @@ TEST(SmiAnd) {
                                       true));
   CHECK(buffer);
   HandleScope handles;
-  MacroAssembler assembler(buffer, static_cast<int>(actual_size));
+  MacroAssembler assembler(Isolate::Current(),
+                           buffer,
+                           static_cast<int>(actual_size));
 
   MacroAssembler* masm = &assembler;
   masm->set_allow_stub_calls(false);
@@ -1599,6 +1644,7 @@ void TestSmiOr(MacroAssembler* masm, Label* exit, int id, int x, int y) {
 
 
 TEST(SmiOr) {
+  v8::internal::V8::Initialize(NULL);
   // Allocate an executable page of memory.
   size_t actual_size;
   byte* buffer =
@@ -1607,7 +1653,9 @@ TEST(SmiOr) {
                                       true));
   CHECK(buffer);
   HandleScope handles;
-  MacroAssembler assembler(buffer, static_cast<int>(actual_size));
+  MacroAssembler assembler(Isolate::Current(),
+                           buffer,
+                           static_cast<int>(actual_size));
 
   MacroAssembler* masm = &assembler;
   masm->set_allow_stub_calls(false);
@@ -1681,6 +1729,7 @@ void TestSmiXor(MacroAssembler* masm, Label* exit, int id, int x, int y) {
 
 
 TEST(SmiXor) {
+  v8::internal::V8::Initialize(NULL);
   // Allocate an executable page of memory.
   size_t actual_size;
   byte* buffer =
@@ -1689,7 +1738,9 @@ TEST(SmiXor) {
                                       true));
   CHECK(buffer);
   HandleScope handles;
-  MacroAssembler assembler(buffer, static_cast<int>(actual_size));
+  MacroAssembler assembler(Isolate::Current(),
+                           buffer,
+                           static_cast<int>(actual_size));
 
   MacroAssembler* masm = &assembler;
   masm->set_allow_stub_calls(false);
@@ -1747,6 +1798,7 @@ void TestSmiNot(MacroAssembler* masm, Label* exit, int id, int x) {
 
 
 TEST(SmiNot) {
+  v8::internal::V8::Initialize(NULL);
   // Allocate an executable page of memory.
   size_t actual_size;
   byte* buffer =
@@ -1755,7 +1807,9 @@ TEST(SmiNot) {
                                       true));
   CHECK(buffer);
   HandleScope handles;
-  MacroAssembler assembler(buffer, static_cast<int>(actual_size));
+  MacroAssembler assembler(Isolate::Current(),
+                           buffer,
+                           static_cast<int>(actual_size));
 
   MacroAssembler* masm = &assembler;
   masm->set_allow_stub_calls(false);
@@ -1842,6 +1896,7 @@ void TestSmiShiftLeft(MacroAssembler* masm, Label* exit, int id, int x) {
 
 
 TEST(SmiShiftLeft) {
+  v8::internal::V8::Initialize(NULL);
   // Allocate an executable page of memory.
   size_t actual_size;
   byte* buffer =
@@ -1850,7 +1905,9 @@ TEST(SmiShiftLeft) {
                                       true));
   CHECK(buffer);
   HandleScope handles;
-  MacroAssembler assembler(buffer, static_cast<int>(actual_size));
+  MacroAssembler assembler(Isolate::Current(),
+                           buffer,
+                           static_cast<int>(actual_size));
 
   MacroAssembler* masm = &assembler;
   masm->set_allow_stub_calls(false);
@@ -1947,6 +2004,7 @@ void TestSmiShiftLogicalRight(MacroAssembler* masm,
 
 
 TEST(SmiShiftLogicalRight) {
+  v8::internal::V8::Initialize(NULL);
   // Allocate an executable page of memory.
   size_t actual_size;
   byte* buffer =
@@ -1955,7 +2013,9 @@ TEST(SmiShiftLogicalRight) {
                                       true));
   CHECK(buffer);
   HandleScope handles;
-  MacroAssembler assembler(buffer, static_cast<int>(actual_size));
+  MacroAssembler assembler(Isolate::Current(),
+                           buffer,
+                           static_cast<int>(actual_size));
 
   MacroAssembler* masm = &assembler;
   masm->set_allow_stub_calls(false);
@@ -2015,6 +2075,7 @@ void TestSmiShiftArithmeticRight(MacroAssembler* masm,
 
 
 TEST(SmiShiftArithmeticRight) {
+  v8::internal::V8::Initialize(NULL);
   // Allocate an executable page of memory.
   size_t actual_size;
   byte* buffer =
@@ -2023,7 +2084,9 @@ TEST(SmiShiftArithmeticRight) {
                                       true));
   CHECK(buffer);
   HandleScope handles;
-  MacroAssembler assembler(buffer, static_cast<int>(actual_size));
+  MacroAssembler assembler(Isolate::Current(),
+                           buffer,
+                           static_cast<int>(actual_size));
 
   MacroAssembler* masm = &assembler;
   masm->set_allow_stub_calls(false);
@@ -2078,7 +2141,7 @@ void TestPositiveSmiPowerUp(MacroAssembler* masm, Label* exit, int id, int x) {
 
 
 TEST(PositiveSmiTimesPowerOfTwoToInteger64) {
-  v8::V8::Initialize();
+  v8::internal::V8::Initialize(NULL);
   // Allocate an executable page of memory.
   size_t actual_size;
   byte* buffer =
@@ -2087,7 +2150,9 @@ TEST(PositiveSmiTimesPowerOfTwoToInteger64) {
                                       true));
   CHECK(buffer);
   HandleScope handles;
-  MacroAssembler assembler(buffer, static_cast<int>(actual_size));
+  MacroAssembler assembler(Isolate::Current(),
+                           buffer,
+                           static_cast<int>(actual_size));
 
   MacroAssembler* masm = &assembler;
   masm->set_allow_stub_calls(false);
@@ -2118,6 +2183,7 @@ TEST(PositiveSmiTimesPowerOfTwoToInteger64) {
 
 
 TEST(OperandOffset) {
+  v8::internal::V8::Initialize(NULL);
   int data[256];
   for (int i = 0; i < 256; i++) { data[i] = i * 0x01010101; }
 
@@ -2129,7 +2195,9 @@ TEST(OperandOffset) {
                                       true));
   CHECK(buffer);
   HandleScope handles;
-  MacroAssembler assembler(buffer, static_cast<int>(actual_size));
+  MacroAssembler assembler(Isolate::Current(),
+                           buffer,
+                           static_cast<int>(actual_size));
 
   MacroAssembler* masm = &assembler;
   masm->set_allow_stub_calls(false);

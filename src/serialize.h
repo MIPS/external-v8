@@ -60,6 +60,52 @@ const int kDebugRegisterBits = 4;
 const int kDebugIdShift = kDebugRegisterBits;
 
 
+// ExternalReferenceTable is a helper class that defines the relationship
+// between external references and their encodings. It is used to build
+// hashmaps in ExternalReferenceEncoder and ExternalReferenceDecoder.
+class ExternalReferenceTable {
+ public:
+  static ExternalReferenceTable* instance(Isolate* isolate);
+
+  ~ExternalReferenceTable() { }
+
+  int size() const { return refs_.length(); }
+
+  Address address(int i) { return refs_[i].address; }
+
+  uint32_t code(int i) { return refs_[i].code; }
+
+  const char* name(int i) { return refs_[i].name; }
+
+  int max_id(int code) { return max_id_[code]; }
+
+ private:
+  explicit ExternalReferenceTable(Isolate* isolate) : refs_(64) {
+      PopulateTable(isolate);
+  }
+
+  struct ExternalReferenceEntry {
+    Address address;
+    uint32_t code;
+    const char* name;
+  };
+
+  void PopulateTable(Isolate* isolate);
+
+  // For a few types of references, we can get their address from their id.
+  void AddFromId(TypeCode type,
+                 uint16_t id,
+                 const char* name,
+                 Isolate* isolate);
+
+  // For other types of references, the caller will figure out the address.
+  void Add(Address address, TypeCode type, uint16_t id, const char* name);
+
+  List<ExternalReferenceEntry> refs_;
+  int max_id_[kTypeCodeCount];
+};
+
+
 class ExternalReferenceEncoder {
  public:
   ExternalReferenceEncoder();
@@ -79,6 +125,8 @@ class ExternalReferenceEncoder {
   static bool Match(void* key1, void* key2) { return key1 == key2; }
 
   void Put(Address key, int index);
+
+  Isolate* isolate_;
 };
 
 
@@ -105,6 +153,8 @@ class ExternalReferenceDecoder {
   void Put(uint32_t key, Address value) {
     *Lookup(key) = value;
   }
+
+  Isolate* isolate_;
 };
 
 
@@ -246,10 +296,6 @@ class SerializerDeserializer: public ObjectVisitor {
   static inline bool SpaceIsPaged(int space) {
     return space >= FIRST_PAGED_SPACE && space <= LAST_PAGED_SPACE;
   }
-
-  static int partial_snapshot_cache_length_;
-  static const int kPartialSnapshotCacheCapacity = 1400;
-  static Object* partial_snapshot_cache_[];
 };
 
 
@@ -297,11 +343,9 @@ class Deserializer: public SerializerDeserializer {
 #endif
 
  private:
-  virtual void VisitPointers(Object** start, Object** end,
-                             RelocInfo* rinfo = 0);
+  virtual void VisitPointers(Object** start, Object** end);
 
-  virtual void VisitExternalReferences(Address* start, Address* end,
-                                       RelocInfo* rinfo = 0) {
+  virtual void VisitExternalReferences(Address* start, Address* end) {
     UNREACHABLE();
   }
 
@@ -315,6 +359,9 @@ class Deserializer: public SerializerDeserializer {
   Address Allocate(int space_number, Space* space, int size);
   void ReadObject(int space_number, Space* space, Object** write_back);
 
+  // Cached current isolate.
+  Isolate* isolate_;
+
   // Keep track of the pages in the paged spaces.
   // (In large object space we are keeping track of individual objects
   // rather than pages.)  In new space we just need the address of the
@@ -322,7 +369,6 @@ class Deserializer: public SerializerDeserializer {
   List<Address> pages_[SerializerDeserializer::kNumberOfSpaces];
 
   SnapshotByteSource* source_;
-  static ExternalReferenceDecoder* external_reference_decoder_;
   // This is the address of the next object that will be allocated in each
   // space.  It is used to calculate the addresses of back-references.
   Address high_water_[LAST_SPACE + 1];
@@ -330,6 +376,8 @@ class Deserializer: public SerializerDeserializer {
   // is used to set the location of the new page when we encounter a
   // START_NEW_PAGE_SERIALIZATION tag.
   Address last_object_address_;
+
+  ExternalReferenceDecoder* external_reference_decoder_;
 
   DISALLOW_COPY_AND_ASSIGN(Deserializer);
 };
@@ -400,11 +448,12 @@ class SerializationAddressMapper {
 };
 
 
+// There can be only one serializer per V8 process.
 class Serializer : public SerializerDeserializer {
  public:
   explicit Serializer(SnapshotByteSink* sink);
   ~Serializer();
-  void VisitPointers(Object** start, Object** end, RelocInfo* rinfo = 0);
+  void VisitPointers(Object** start, Object** end);
   // You can call this after serialization to find out how much space was used
   // in each space.
   int CurrentAllocationAddress(int space) {
@@ -447,9 +496,18 @@ class Serializer : public SerializerDeserializer {
         reference_representation_(how_to_code + where_to_point),
         bytes_processed_so_far_(0) { }
     void Serialize();
-    void VisitPointers(Object** start, Object** end, RelocInfo* rinfo = 0);
-    void VisitExternalReferences(Address* start, Address* end,
-                                 RelocInfo* rinfo = 0);
+    void VisitPointers(Object** start, Object** end);
+    // Variant of VisitPointer(). Reloc info is needed to obtain address of
+    // the object pointer in the code (if pointer is mixed into instruction
+    // bits of several instructions).
+    void VisitPointer(Object** obj, RelocInfo* rinfo);
+    void VisitPointers(Object** start, Object** end, RelocInfo* rinfo);
+    void VisitExternalReferences(Address* start, Address* end);
+    // Variant of VisitExternalReference(). Reloc info is needed to obtain
+    // address of the ExternalReference pointer in the code (if pointer is
+    // mixed into instruction bits of several instructions).
+    void VisitExternalReference(Address* adr, RelocInfo* r);
+    void VisitExternalReferences(Address* start, Address* end, RelocInfo* r);
     void VisitCodeTarget(RelocInfo* target);
     void VisitCodeEntry(Address entry_address);
     void VisitGlobalPropertyCell(RelocInfo* rinfo);
@@ -542,7 +600,8 @@ class PartialSerializer : public Serializer {
     ASSERT(!o->IsScript());
     return o->IsString() || o->IsSharedFunctionInfo() ||
            o->IsHeapNumber() || o->IsCode() ||
-           o->map() == Heap::fixed_cow_array_map();
+           o->IsSerializedScopeInfo() ||
+           o->map() == HEAP->fixed_cow_array_map();
   }
 
  private:
@@ -558,7 +617,7 @@ class StartupSerializer : public Serializer {
     // strong roots have been serialized we can create a partial snapshot
     // which will repopulate the cache with objects neede by that partial
     // snapshot.
-    partial_snapshot_cache_length_ = 0;
+    Isolate::Current()->set_serialize_partial_snapshot_cache_length(0);
   }
   // Serialize the current state of the heap.  The order is:
   // 1) Strong references.

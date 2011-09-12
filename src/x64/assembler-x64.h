@@ -125,7 +125,7 @@ struct Register {
     return names[index];
   }
 
-  static Register toRegister(int code) {
+  static Register from_code(int code) {
     Register r = { code };
     return r;
   }
@@ -327,22 +327,6 @@ inline Condition ReverseCondition(Condition cc) {
 }
 
 
-enum Hint {
-  no_hint = 0,
-  not_taken = 0x2e,
-  taken = 0x3e
-};
-
-// The result of negating a hint is as if the corresponding condition
-// were negated by NegateCondition.  That is, no_hint is mapped to
-// itself and not_taken and taken are mapped to each other.
-inline Hint NegateHint(Hint hint) {
-  return (hint == no_hint)
-      ? no_hint
-      : ((hint == not_taken) ? taken : not_taken);
-}
-
-
 // -----------------------------------------------------------------------------
 // Machine instruction Immediates
 
@@ -438,9 +422,11 @@ class CpuFeatures : public AllStatic {
  public:
   // Detect features of the target CPU. Set safe defaults if the serializer
   // is enabled (snapshots must be portable).
-  static void Probe(bool portable);
+  static void Probe();
+
   // Check whether a feature is supported by the target CPU.
   static bool IsSupported(CpuFeature f) {
+    ASSERT(initialized_);
     if (f == SSE2 && !FLAG_enable_sse2) return false;
     if (f == SSE3 && !FLAG_enable_sse3) return false;
     if (f == CMOV && !FLAG_enable_cmov) return false;
@@ -448,40 +434,74 @@ class CpuFeatures : public AllStatic {
     if (f == SAHF && !FLAG_enable_sahf) return false;
     return (supported_ & (V8_UINT64_C(1) << f)) != 0;
   }
+
+#ifdef DEBUG
   // Check whether a feature is currently enabled.
   static bool IsEnabled(CpuFeature f) {
-    return (enabled_ & (V8_UINT64_C(1) << f)) != 0;
+    ASSERT(initialized_);
+    Isolate* isolate = Isolate::UncheckedCurrent();
+    if (isolate == NULL) {
+      // When no isolate is available, work as if we're running in
+      // release mode.
+      return IsSupported(f);
+    }
+    uint64_t enabled = isolate->enabled_cpu_features();
+    return (enabled & (V8_UINT64_C(1) << f)) != 0;
   }
+#endif
+
   // Enable a specified feature within a scope.
   class Scope BASE_EMBEDDED {
 #ifdef DEBUG
+
    public:
     explicit Scope(CpuFeature f) {
-      uint64_t mask = (V8_UINT64_C(1) << f);
+      uint64_t mask = V8_UINT64_C(1) << f;
       ASSERT(CpuFeatures::IsSupported(f));
-      ASSERT(!Serializer::enabled() || (found_by_runtime_probing_ & mask) == 0);
-      old_enabled_ = CpuFeatures::enabled_;
-      CpuFeatures::enabled_ |= mask;
+      ASSERT(!Serializer::enabled() ||
+             (CpuFeatures::found_by_runtime_probing_ & mask) == 0);
+      isolate_ = Isolate::UncheckedCurrent();
+      old_enabled_ = 0;
+      if (isolate_ != NULL) {
+        old_enabled_ = isolate_->enabled_cpu_features();
+        isolate_->set_enabled_cpu_features(old_enabled_ | mask);
+      }
     }
-    ~Scope() { CpuFeatures::enabled_ = old_enabled_; }
+    ~Scope() {
+      ASSERT_EQ(Isolate::UncheckedCurrent(), isolate_);
+      if (isolate_ != NULL) {
+        isolate_->set_enabled_cpu_features(old_enabled_);
+      }
+    }
+
    private:
+    Isolate* isolate_;
     uint64_t old_enabled_;
 #else
+
    public:
     explicit Scope(CpuFeature f) {}
 #endif
   };
+
  private:
   // Safe defaults include SSE2 and CMOV for X64. It is always available, if
   // anyone checks, but they shouldn't need to check.
+  // The required user mode extensions in X64 are (from AMD64 ABI Table A.1):
+  //   fpu, tsc, cx8, cmov, mmx, sse, sse2, fxsr, syscall
   static const uint64_t kDefaultCpuFeatures = (1 << SSE2 | 1 << CMOV);
+
+#ifdef DEBUG
+  static bool initialized_;
+#endif
   static uint64_t supported_;
-  static uint64_t enabled_;
   static uint64_t found_by_runtime_probing_;
+
+  DISALLOW_COPY_AND_ASSIGN(CpuFeatures);
 };
 
 
-class Assembler : public Malloced {
+class Assembler : public AssemblerBase {
  private:
   // We check before assembling an instruction that there is sufficient
   // space to write an instruction and its relocation information.
@@ -508,7 +528,7 @@ class Assembler : public Malloced {
   // for code generation and assumes its size to be buffer_size. If the buffer
   // is too small, a fatal error occurs. No deallocation of the buffer is done
   // upon destruction of the assembler.
-  Assembler(void* buffer, int buffer_size);
+  Assembler(Isolate* isolate, void* buffer, int buffer_size);
   ~Assembler();
 
   // Overrides the default provided by FLAG_debug_code.
@@ -623,6 +643,7 @@ class Assembler : public Malloced {
   void push_imm32(int32_t imm32);
   void push(Register src);
   void push(const Operand& src);
+  void push(Handle<Object> handle);
 
   void pop(Register dst);
   void pop(const Operand& dst);
@@ -1119,6 +1140,7 @@ class Assembler : public Malloced {
 
   // Miscellaneous
   void clc();
+  void cld();
   void cpuid();
   void hlt();
   void int3();
@@ -1144,12 +1166,13 @@ class Assembler : public Malloced {
   // but it may be bound only once.
 
   void bind(Label* L);  // binds an unbound label L to the current code position
-  void bind(NearLabel* L);
 
   // Calls
   // Call near relative 32-bit displacement, relative to next instruction.
   void call(Label* L);
-  void call(Handle<Code> target, RelocInfo::Mode rmode);
+  void call(Handle<Code> target,
+            RelocInfo::Mode rmode = RelocInfo::CODE_TARGET,
+            unsigned ast_id = kNoASTId);
 
   // Calls directly to the given address using a relative offset.
   // Should only ever be used in Code objects for calls within the
@@ -1166,7 +1189,8 @@ class Assembler : public Malloced {
   // Jumps
   // Jump short or near relative.
   // Use a 32-bit signed displacement.
-  void jmp(Label* L);  // unconditional jump to L
+  // Unconditional jump to L
+  void jmp(Label* L, Label::Distance distance = Label::kFar);
   void jmp(Handle<Code> target, RelocInfo::Mode rmode);
 
   // Jump near absolute indirect (r64)
@@ -1175,15 +1199,11 @@ class Assembler : public Malloced {
   // Jump near absolute indirect (m64)
   void jmp(const Operand& src);
 
-  // Short jump
-  void jmp(NearLabel* L);
-
   // Conditional jumps
-  void j(Condition cc, Label* L);
+  void j(Condition cc,
+         Label* L,
+         Label::Distance distance = Label::kFar);
   void j(Condition cc, Handle<Code> target, RelocInfo::Mode rmode);
-
-  // Conditional short jump
-  void j(Condition cc, NearLabel* L, Hint hint = no_hint);
 
   // Floating-point operations
   void fld(int i);
@@ -1257,14 +1277,23 @@ class Assembler : public Malloced {
   void movd(Register dst, XMMRegister src);
   void movq(XMMRegister dst, Register src);
   void movq(Register dst, XMMRegister src);
+  void movq(XMMRegister dst, XMMRegister src);
   void extractps(Register dst, XMMRegister src, byte imm8);
 
-  void movsd(const Operand& dst, XMMRegister src);
+  // Don't use this unless it's important to keep the
+  // top half of the destination register unchanged.
+  // Used movaps when moving double values and movq for integer
+  // values in xmm registers.
   void movsd(XMMRegister dst, XMMRegister src);
+
+  void movsd(const Operand& dst, XMMRegister src);
   void movsd(XMMRegister dst, const Operand& src);
 
   void movdqa(const Operand& dst, XMMRegister src);
   void movdqa(XMMRegister dst, const Operand& src);
+
+  void movapd(XMMRegister dst, XMMRegister src);
+  void movaps(XMMRegister dst, XMMRegister src);
 
   void movss(XMMRegister dst, const Operand& src);
   void movss(const Operand& dst, XMMRegister src);
@@ -1297,10 +1326,20 @@ class Assembler : public Malloced {
   void andpd(XMMRegister dst, XMMRegister src);
   void orpd(XMMRegister dst, XMMRegister src);
   void xorpd(XMMRegister dst, XMMRegister src);
+  void xorps(XMMRegister dst, XMMRegister src);
   void sqrtsd(XMMRegister dst, XMMRegister src);
 
   void ucomisd(XMMRegister dst, XMMRegister src);
   void ucomisd(XMMRegister dst, const Operand& src);
+
+  enum RoundingMode {
+    kRoundToNearest = 0x0,
+    kRoundDown      = 0x1,
+    kRoundUp        = 0x2,
+    kRoundToZero    = 0x3
+  };
+
+  void roundsd(XMMRegister dst, XMMRegister src, RoundingMode mode);
 
   void movmskpd(Register dst, XMMRegister src);
 
@@ -1314,7 +1353,9 @@ class Assembler : public Malloced {
   void Print();
 
   // Check the code size generated from label to here.
-  int SizeOfCodeGeneratedSince(Label* l) { return pc_offset() - l->pos(); }
+  int SizeOfCodeGeneratedSince(Label* label) {
+    return pc_offset() - label->pos();
+  }
 
   // Mark address of the ExitJSFrame code.
   void RecordJSReturn();
@@ -1374,7 +1415,9 @@ class Assembler : public Malloced {
   inline void emitl(uint32_t x);
   inline void emitq(uint64_t x, RelocInfo::Mode rmode);
   inline void emitw(uint16_t x);
-  inline void emit_code_target(Handle<Code> target, RelocInfo::Mode rmode);
+  inline void emit_code_target(Handle<Code> target,
+                               RelocInfo::Mode rmode,
+                               unsigned ast_id = kNoASTId);
   void emit(Immediate x) { emitl(x.value_); }
 
   // Emits a REX prefix that encodes a 64-bit operand size and
@@ -1549,16 +1592,12 @@ class Assembler : public Malloced {
   int buffer_size_;
   // True if the assembler owns the buffer, false if buffer is external.
   bool own_buffer_;
-  // A previously allocated buffer of kMinimalBufferSize bytes, or NULL.
-  static byte* spare_buffer_;
 
   // code generation
   byte* pc_;  // the program counter; moves forward
   RelocInfoWriter reloc_info_writer;
 
   List< Handle<Code> > code_targets_;
-  // push-pop elimination
-  byte* last_pc_;
 
   PositionsRecorder positions_recorder_;
 
