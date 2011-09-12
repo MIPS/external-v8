@@ -28,7 +28,7 @@
 #ifndef V8_EXTENSIONS_EXPERIMENTAL_BREAK_ITERATOR_H_
 #define V8_EXTENSIONS_EXPERIMENTAL_BREAK_ITERATOR_H_
 
-#include <v8.h>
+#include "include/v8.h"
 
 #include "unicode/uversion.h"
 
@@ -51,8 +51,8 @@ class BreakIterator {
 
   // Deletes the old value and sets the adopted text in
   // corresponding JavaScript object.
-  static UnicodeString* ResetAdoptedText(v8::Handle<v8::Object> obj,
-                                         v8::Handle<v8::Value> text_value);
+  static icu::UnicodeString* ResetAdoptedText(v8::Handle<v8::Object> obj,
+                                              v8::Handle<v8::Value> text_value);
 
   // Release memory we allocated for the BreakIterator once the JS object that
   // holds the pointer gets garbage collected.

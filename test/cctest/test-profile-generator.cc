@@ -2,14 +2,10 @@
 //
 // Tests of profiles generator and utilities.
 
-#ifdef ENABLE_LOGGING_AND_PROFILING
-
 #include "v8.h"
 #include "profile-generator-inl.h"
 #include "cctest.h"
 #include "../include/v8-profiler.h"
-
-namespace i = v8::internal;
 
 using i::CodeEntry;
 using i::CodeMap;
@@ -41,22 +37,22 @@ TEST(TokenEnumerator) {
   TokenEnumerator te;
   CHECK_EQ(TokenEnumerator::kNoSecurityToken, te.GetTokenId(NULL));
   v8::HandleScope hs;
-  v8::Local<v8::String> token1(v8::String::New("1"));
+  v8::Local<v8::String> token1(v8::String::New("1x"));
   CHECK_EQ(0, te.GetTokenId(*v8::Utils::OpenHandle(*token1)));
   CHECK_EQ(0, te.GetTokenId(*v8::Utils::OpenHandle(*token1)));
-  v8::Local<v8::String> token2(v8::String::New("2"));
+  v8::Local<v8::String> token2(v8::String::New("2x"));
   CHECK_EQ(1, te.GetTokenId(*v8::Utils::OpenHandle(*token2)));
   CHECK_EQ(1, te.GetTokenId(*v8::Utils::OpenHandle(*token2)));
   CHECK_EQ(0, te.GetTokenId(*v8::Utils::OpenHandle(*token1)));
   {
     v8::HandleScope hs;
-    v8::Local<v8::String> token3(v8::String::New("3"));
+    v8::Local<v8::String> token3(v8::String::New("3x"));
     CHECK_EQ(2, te.GetTokenId(*v8::Utils::OpenHandle(*token3)));
     CHECK_EQ(1, te.GetTokenId(*v8::Utils::OpenHandle(*token2)));
     CHECK_EQ(0, te.GetTokenId(*v8::Utils::OpenHandle(*token1)));
   }
   CHECK(!i::TokenEnumeratorTester::token_removed(&te)->at(2));
-  i::Heap::CollectAllGarbage(false);
+  HEAP->CollectAllGarbage(false);
   CHECK(i::TokenEnumeratorTester::token_removed(&te)->at(2));
   CHECK_EQ(1, te.GetTokenId(*v8::Utils::OpenHandle(*token2)));
   CHECK_EQ(0, te.GetTokenId(*v8::Utils::OpenHandle(*token1)));
@@ -824,5 +820,3 @@ TEST(Issue51919) {
   for (int i = 0; i < CpuProfilesCollection::kMaxSimultaneousProfiles; ++i)
     i::DeleteArray(titles[i]);
 }
-
-#endif  // ENABLE_LOGGING_AND_PROFILING

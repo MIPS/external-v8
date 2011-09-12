@@ -30,7 +30,7 @@
 
 // The original source code covered by the above license above has been
 // modified significantly by Google Inc.
-// Copyright 2010 the V8 project authors. All rights reserved.
+// Copyright 2011 the V8 project authors. All rights reserved.
 
 
 #ifndef V8_MIPS_ASSEMBLER_MIPS_INL_H_
@@ -45,7 +45,7 @@ namespace v8 {
 namespace internal {
 
 // -----------------------------------------------------------------------------
-// Operand and MemOperand
+// Operand and MemOperand.
 
 Operand::Operand(int32_t immediate, RelocInfo::Mode rmode)  {
   rm_ = no_reg;
@@ -80,7 +80,7 @@ bool Operand::is_reg() const {
 
 
 // -----------------------------------------------------------------------------
-// RelocInfo
+// RelocInfo.
 
 void RelocInfo::apply(intptr_t delta) {
   if (IsCodeTarget(rmode_)) {
@@ -158,7 +158,7 @@ Object** RelocInfo::target_object_address() {
   // which can be de-referenced during heap iteration.
   ASSERT(IsCodeTarget(rmode_) || rmode_ == EMBEDDED_OBJECT);
   reconstructed_obj_ptr_ =
-    reinterpret_cast<Object*>(Assembler::target_address_at(pc_));
+      reinterpret_cast<Object*>(Assembler::target_address_at(pc_));
   return &reconstructed_obj_ptr_;
 }
 
@@ -259,10 +259,15 @@ bool RelocInfo::IsPatchedDebugBreakSlotSequence() {
 void RelocInfo::Visit(ObjectVisitor* visitor) {
   RelocInfo::Mode mode = rmode();
   if (mode == RelocInfo::EMBEDDED_OBJECT) {
+    Object** p = target_object_address();
+    Object* orig = *p;
+    visitor->VisitPointer(p, this);
+    if (*p != orig) {
+      set_target_object(*p);
+    }
     // RelocInfo is needed when pointer must be updated/serialized, such as
     // UpdatingVisitor in mark-compact.cc or Serializer in serialize.cc.
     // It is ignored by visitors that do not need it.
-    visitor->VisitPointer(target_object_address(), this);
   } else if (RelocInfo::IsCodeTarget(mode)) {
     visitor->VisitCodeTarget(this);
   } else if (mode == RelocInfo::GLOBAL_PROPERTY_CELL) {
@@ -273,11 +278,12 @@ void RelocInfo::Visit(ObjectVisitor* visitor) {
     // do not need it.
     visitor->VisitExternalReference(target_reference_address(), this);
 #ifdef ENABLE_DEBUGGER_SUPPORT
-  } else if (Debug::has_break_points() &&
-             ((RelocInfo::IsJSReturn(mode) &&
+  // TODO(isolates): Get a cached isolate below.
+  } else if (((RelocInfo::IsJSReturn(mode) &&
               IsPatchedReturnSequence()) ||
              (RelocInfo::IsDebugBreakSlot(mode) &&
-              IsPatchedDebugBreakSlotSequence()))) {
+             IsPatchedDebugBreakSlotSequence())) &&
+             Isolate::Current()->debug()->has_break_points()) {
     visitor->VisitDebugTarget(this);
 #endif
   } else if (mode == RelocInfo::RUNTIME_ENTRY) {
@@ -287,23 +293,23 @@ void RelocInfo::Visit(ObjectVisitor* visitor) {
 
 
 template<typename StaticVisitor>
-void RelocInfo::Visit() {
+void RelocInfo::Visit(Heap* heap) {
   RelocInfo::Mode mode = rmode();
   if (mode == RelocInfo::EMBEDDED_OBJECT) {
-    StaticVisitor::VisitPointer(target_object_address());
+    StaticVisitor::VisitPointer(heap, target_object_address());
   } else if (RelocInfo::IsCodeTarget(mode)) {
-    StaticVisitor::VisitCodeTarget(this);
+    StaticVisitor::VisitCodeTarget(heap, this);
   } else if (mode == RelocInfo::GLOBAL_PROPERTY_CELL) {
-    StaticVisitor::VisitGlobalPropertyCell(this);
+    StaticVisitor::VisitGlobalPropertyCell(heap, this);
   } else if (mode == RelocInfo::EXTERNAL_REFERENCE) {
     StaticVisitor::VisitExternalReference(target_reference_address());
 #ifdef ENABLE_DEBUGGER_SUPPORT
-  } else if (Debug::has_break_points() &&
+  } else if (heap->isolate()->debug()->has_break_points() &&
              ((RelocInfo::IsJSReturn(mode) &&
               IsPatchedReturnSequence()) ||
              (RelocInfo::IsDebugBreakSlot(mode) &&
               IsPatchedDebugBreakSlotSequence()))) {
-    StaticVisitor::VisitDebugTarget(this);
+    StaticVisitor::VisitDebugTarget(heap, this);
 #endif
   } else if (mode == RelocInfo::RUNTIME_ENTRY) {
     StaticVisitor::VisitRuntimeEntry(this);
@@ -312,7 +318,7 @@ void RelocInfo::Visit() {
 
 
 // -----------------------------------------------------------------------------
-// Assembler
+// Assembler.
 
 
 void Assembler::CheckBuffer() {

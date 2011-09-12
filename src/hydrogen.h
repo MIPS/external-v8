@@ -30,16 +30,18 @@
 
 #include "v8.h"
 
+#include "allocation.h"
 #include "ast.h"
 #include "compiler.h"
-#include "data-flow.h"
 #include "hydrogen-instructions.h"
+#include "type-info.h"
 #include "zone.h"
 
 namespace v8 {
 namespace internal {
 
 // Forward declarations.
+class BitVector;
 class HEnvironment;
 class HGraph;
 class HLoopInformation;
@@ -100,6 +102,7 @@ class HBasicBlock: public ZoneObject {
   void RemovePhi(HPhi* phi);
   void AddInstruction(HInstruction* instr);
   bool Dominates(HBasicBlock* other) const;
+  int LoopNestingDepth() const;
 
   void SetInitialEnvironment(HEnvironment* env);
   void ClearEnvironment() { last_environment_ = NULL; }
@@ -114,15 +117,19 @@ class HBasicBlock: public ZoneObject {
 
   bool HasParentLoopHeader() const { return parent_loop_header_ != NULL; }
 
-  void SetJoinId(int id);
+  void SetJoinId(int ast_id);
 
   void Finish(HControlInstruction* last);
   void FinishExit(HControlInstruction* instruction);
-  void Goto(HBasicBlock* block, bool include_stack_check = false);
+  void Goto(HBasicBlock* block);
 
   int PredecessorIndexOf(HBasicBlock* predecessor) const;
-  void AddSimulate(int id) { AddInstruction(CreateSimulate(id)); }
+  void AddSimulate(int ast_id) { AddInstruction(CreateSimulate(ast_id)); }
   void AssignCommonDominator(HBasicBlock* other);
+
+  void FinishExitWithDeoptimization(HDeoptimize::UseEnvironment has_uses) {
+    FinishExit(CreateDeoptimize(has_uses));
+  }
 
   // Add the inlined function exit sequence, adding an HLeaveInlined
   // instruction and updating the bailout environment.
@@ -137,6 +144,11 @@ class HBasicBlock: public ZoneObject {
   bool IsInlineReturnTarget() const { return is_inline_return_target_; }
   void MarkAsInlineReturnTarget() { is_inline_return_target_ = true; }
 
+  bool IsDeoptimizing() const { return is_deoptimizing_; }
+  void MarkAsDeoptimizing() { is_deoptimizing_ = true; }
+
+  inline Zone* zone();
+
 #ifdef DEBUG
   void Verify();
 #endif
@@ -145,7 +157,8 @@ class HBasicBlock: public ZoneObject {
   void RegisterPredecessor(HBasicBlock* pred);
   void AddDominatedBlock(HBasicBlock* block);
 
-  HSimulate* CreateSimulate(int id);
+  HSimulate* CreateSimulate(int ast_id);
+  HDeoptimize* CreateDeoptimize(HDeoptimize::UseEnvironment has_uses);
 
   int block_id_;
   HGraph* graph_;
@@ -166,13 +179,17 @@ class HBasicBlock: public ZoneObject {
   ZoneList<int> deleted_phis_;
   HBasicBlock* parent_loop_header_;
   bool is_inline_return_target_;
+  bool is_deoptimizing_;
 };
 
 
 class HLoopInformation: public ZoneObject {
  public:
   explicit HLoopInformation(HBasicBlock* loop_header)
-      : back_edges_(4), loop_header_(loop_header), blocks_(8) {
+      : back_edges_(4),
+        loop_header_(loop_header),
+        blocks_(8),
+        stack_check_(NULL) {
     blocks_.Add(loop_header);
   }
   virtual ~HLoopInformation() {}
@@ -183,18 +200,27 @@ class HLoopInformation: public ZoneObject {
   HBasicBlock* GetLastBackEdge() const;
   void RegisterBackEdge(HBasicBlock* block);
 
+  HStackCheck* stack_check() const { return stack_check_; }
+  void set_stack_check(HStackCheck* stack_check) {
+    stack_check_ = stack_check;
+  }
+
  private:
   void AddBlock(HBasicBlock* block);
 
   ZoneList<HBasicBlock*> back_edges_;
   HBasicBlock* loop_header_;
   ZoneList<HBasicBlock*> blocks_;
+  HStackCheck* stack_check_;
 };
 
 
 class HGraph: public ZoneObject {
  public:
   explicit HGraph(CompilationInfo* info);
+
+  Isolate* isolate() { return isolate_; }
+  Zone* zone() { return isolate_->zone(); }
 
   const ZoneList<HBasicBlock*>* blocks() const { return &blocks_; }
   const ZoneList<HPhi*>* phi_list() const { return phi_list_; }
@@ -204,6 +230,7 @@ class HGraph: public ZoneObject {
   void InitializeInferredTypes();
   void InsertTypeConversions();
   void InsertRepresentationChanges();
+  void MarkDeoptimizeOnUndefined();
   void ComputeMinusZeroChecks();
   bool ProcessArgumentsObject();
   void EliminateRedundantPhis();
@@ -211,9 +238,15 @@ class HGraph: public ZoneObject {
   void Canonicalize();
   void OrderBlocks();
   void AssignDominators();
+  void ReplaceCheckedValues();
+  void PropagateDeoptimizingMark();
 
   // Returns false if there are phi-uses of the arguments-object
   // which are not supported by the optimizing compiler.
+  bool CheckPhis();
+
+  // Returns false if there are phi-uses of hole values comming
+  // from uninitialized consts.
   bool CollectPhis();
 
   Handle<Code> Compile(CompilationInfo* info);
@@ -226,6 +259,7 @@ class HGraph: public ZoneObject {
   HConstant* GetConstantMinus1();
   HConstant* GetConstantTrue();
   HConstant* GetConstantFalse();
+  HConstant* GetConstantHole();
 
   HBasicBlock* CreateBasicBlock();
   HArgumentsObject* GetArgumentsObject() const {
@@ -264,18 +298,20 @@ class HGraph: public ZoneObject {
   HConstant* GetConstant(SetOncePointer<HConstant>* pointer,
                          Object* value);
 
+  void MarkAsDeoptimizingRecursively(HBasicBlock* block);
   void InsertTypeConversions(HInstruction* instr);
   void PropagateMinusZeroChecks(HValue* value, BitVector* visited);
+  void RecursivelyMarkPhiDeoptimizeOnUndefined(HPhi* phi);
   void InsertRepresentationChangeForUse(HValue* value,
-                                        HValue* use,
+                                        HValue* use_value,
+                                        int use_index,
                                         Representation to);
-  void InsertRepresentationChangesForValue(HValue* current,
-                                           ZoneList<HValue*>* value_list,
-                                           ZoneList<Representation>* rep_list);
+  void InsertRepresentationChangesForValue(HValue* value);
   void InferTypes(ZoneList<HValue*>* worklist);
   void InitializeInferredTypes(int from_inclusive, int to_inclusive);
   void CheckForBackEdge(HBasicBlock* block, HBasicBlock* successor);
 
+  Isolate* isolate_;
   int next_block_id_;
   HBasicBlock* entry_block_;
   HEnvironment* start_environment_;
@@ -287,10 +323,14 @@ class HGraph: public ZoneObject {
   SetOncePointer<HConstant> constant_minus1_;
   SetOncePointer<HConstant> constant_true_;
   SetOncePointer<HConstant> constant_false_;
+  SetOncePointer<HConstant> constant_hole_;
   SetOncePointer<HArgumentsObject> arguments_object_;
 
   DISALLOW_COPY_AND_ASSIGN(HGraph);
 };
+
+
+Zone* HBasicBlock::zone() { return graph_->zone(); }
 
 
 class HEnvironment: public ZoneObject {
@@ -306,6 +346,7 @@ class HEnvironment: public ZoneObject {
     return &assigned_variables_;
   }
   int parameter_count() const { return parameter_count_; }
+  int specials_count() const { return specials_count_; }
   int local_count() const { return local_count_; }
   HEnvironment* outer() const { return outer_; }
   int pop_count() const { return pop_count_; }
@@ -315,12 +356,19 @@ class HEnvironment: public ZoneObject {
   void set_ast_id(int id) { ast_id_ = id; }
 
   int length() const { return values_.length(); }
+  bool is_special_index(int i) const {
+    return i >= parameter_count() && i < parameter_count() + specials_count();
+  }
 
   void Bind(Variable* variable, HValue* value) {
     Bind(IndexFor(variable), value);
   }
 
   void Bind(int index, HValue* value);
+
+  void BindContext(HValue* value) {
+    Bind(parameter_count(), value);
+  }
 
   HValue* Lookup(Variable* variable) const {
     return Lookup(IndexFor(variable));
@@ -330,6 +378,11 @@ class HEnvironment: public ZoneObject {
     HValue* result = values_[index];
     ASSERT(result != NULL);
     return result;
+  }
+
+  HValue* LookupContext() const {
+    // Return first special.
+    return Lookup(parameter_count());
   }
 
   void Push(HValue* value) {
@@ -352,6 +405,8 @@ class HEnvironment: public ZoneObject {
 
   HValue* Top() const { return ExpressionStackAt(0); }
 
+  bool ExpressionStackIsEmpty() const;
+
   HValue* ExpressionStackAt(int index_from_top) const {
     int index = length() - index_from_top - 1;
     ASSERT(HasExpressionAt(index));
@@ -366,13 +421,11 @@ class HEnvironment: public ZoneObject {
 
   // Create an "inlined version" of this environment, where the original
   // environment is the outer environment but the top expression stack
-  // elements are moved to an inner environment as parameters. If
-  // is_speculative, the argument values are expected to be PushArgument
-  // instructions, otherwise they are the actual values.
+  // elements are moved to an inner environment as parameters.
   HEnvironment* CopyForInlining(Handle<JSFunction> target,
                                 FunctionLiteral* function,
-                                bool is_speculative,
-                                HConstant* undefined) const;
+                                HConstant* undefined,
+                                CallKind call_kind) const;
 
   void AddIncomingEdge(HBasicBlock* block, HEnvironment* other);
 
@@ -396,8 +449,6 @@ class HEnvironment: public ZoneObject {
   // True if index is included in the expression stack part of the environment.
   bool HasExpressionAt(int index) const;
 
-  bool ExpressionStackIsEmpty() const;
-
   void Initialize(int parameter_count, int local_count, int stack_height);
   void Initialize(const HEnvironment* other);
 
@@ -405,17 +456,19 @@ class HEnvironment: public ZoneObject {
   // by 1 (receiver is parameter index -1 but environment index 0).
   // Stack-allocated local indices are shifted by the number of parameters.
   int IndexFor(Variable* variable) const {
-    Slot* slot = variable->AsSlot();
-    ASSERT(slot != NULL && slot->IsStackAllocated());
-    int shift = (slot->type() == Slot::PARAMETER) ? 1 : parameter_count_;
-    return slot->index() + shift;
+    ASSERT(variable->IsStackAllocated());
+    int shift = variable->IsParameter()
+        ? 1
+        : parameter_count_ + specials_count_;
+    return variable->index() + shift;
   }
 
   Handle<JSFunction> closure_;
-  // Value array [parameters] [locals] [temporaries].
+  // Value array [parameters] [specials] [locals] [temporaries].
   ZoneList<HValue*> values_;
   ZoneList<int> assigned_variables_;
   int parameter_count_;
+  int specials_count_;
   int local_count_;
   HEnvironment* outer_;
   int pop_count_;
@@ -425,6 +478,11 @@ class HEnvironment: public ZoneObject {
 
 
 class HGraphBuilder;
+
+enum ArgumentsAllowedFlag {
+  ARGUMENTS_NOT_ALLOWED,
+  ARGUMENTS_ALLOWED
+};
 
 // This class is not BASE_EMBEDDED because our inlining implementation uses
 // new and delete.
@@ -445,11 +503,22 @@ class AstContext {
   // the instruction as value.
   virtual void ReturnInstruction(HInstruction* instr, int ast_id) = 0;
 
+  // Finishes the current basic block and materialize a boolean for
+  // value context, nothing for effect, generate a branch for test context.
+  // Call this function in tail position in the Visit functions for
+  // expressions.
+  virtual void ReturnControl(HControlInstruction* instr, int ast_id) = 0;
+
+  void set_for_typeof(bool for_typeof) { for_typeof_ = for_typeof; }
+  bool is_for_typeof() { return for_typeof_; }
+
  protected:
   AstContext(HGraphBuilder* owner, Expression::Context kind);
   virtual ~AstContext();
 
   HGraphBuilder* owner() const { return owner_; }
+
+  inline Zone* zone();
 
   // We want to be able to assert, in a context-specific way, that the stack
   // height makes sense when the context is filled.
@@ -461,6 +530,7 @@ class AstContext {
   HGraphBuilder* owner_;
   Expression::Context kind_;
   AstContext* outer_;
+  bool for_typeof_;
 };
 
 
@@ -473,39 +543,50 @@ class EffectContext: public AstContext {
 
   virtual void ReturnValue(HValue* value);
   virtual void ReturnInstruction(HInstruction* instr, int ast_id);
+  virtual void ReturnControl(HControlInstruction* instr, int ast_id);
 };
 
 
 class ValueContext: public AstContext {
  public:
-  explicit ValueContext(HGraphBuilder* owner)
-      : AstContext(owner, Expression::kValue) {
+  explicit ValueContext(HGraphBuilder* owner, ArgumentsAllowedFlag flag)
+      : AstContext(owner, Expression::kValue), flag_(flag) {
   }
   virtual ~ValueContext();
 
   virtual void ReturnValue(HValue* value);
   virtual void ReturnInstruction(HInstruction* instr, int ast_id);
+  virtual void ReturnControl(HControlInstruction* instr, int ast_id);
+
+  bool arguments_allowed() { return flag_ == ARGUMENTS_ALLOWED; }
+
+ private:
+  ArgumentsAllowedFlag flag_;
 };
 
 
 class TestContext: public AstContext {
  public:
   TestContext(HGraphBuilder* owner,
+              Expression* condition,
               HBasicBlock* if_true,
               HBasicBlock* if_false)
       : AstContext(owner, Expression::kTest),
+        condition_(condition),
         if_true_(if_true),
         if_false_(if_false) {
   }
 
   virtual void ReturnValue(HValue* value);
   virtual void ReturnInstruction(HInstruction* instr, int ast_id);
+  virtual void ReturnControl(HControlInstruction* instr, int ast_id);
 
   static TestContext* cast(AstContext* context) {
     ASSERT(context->IsTest());
     return reinterpret_cast<TestContext*>(context);
   }
 
+  Expression* condition() const { return condition_; }
   HBasicBlock* if_true() const { return if_true_; }
   HBasicBlock* if_false() const { return if_false_; }
 
@@ -514,6 +595,7 @@ class TestContext: public AstContext {
   // control flow.
   void BuildBranch(HValue* value);
 
+  Expression* condition_;
   HBasicBlock* if_true_;
   HBasicBlock* if_false_;
 };
@@ -535,6 +617,8 @@ class FunctionState BASE_EMBEDDED {
     delete test_context_;
     test_context_ = NULL;
   }
+
+  FunctionState* outer() { return outer_; }
 
  private:
   HGraphBuilder* owner_;
@@ -609,19 +693,7 @@ class HGraphBuilder: public AstVisitor {
     BreakAndContinueScope* next_;
   };
 
-  HGraphBuilder(CompilationInfo* info, TypeFeedbackOracle* oracle)
-      : function_state_(NULL),
-        initial_function_state_(this, info, oracle),
-        ast_context_(NULL),
-        break_scope_(NULL),
-        graph_(NULL),
-        current_block_(NULL),
-        inlined_count_(0) {
-    // This is not initialized in the initializer list because the
-    // constructor for the initial state relies on function_state_ == NULL
-    // to know it's the initial state.
-    function_state_= &initial_function_state_;
-  }
+  HGraphBuilder(CompilationInfo* info, TypeFeedbackOracle* oracle);
 
   HGraph* CreateGraph();
 
@@ -636,13 +708,23 @@ class HGraphBuilder: public AstVisitor {
     return current_block()->last_environment();
   }
 
+  bool inline_bailout() { return inline_bailout_; }
+
   // Adding instructions.
   HInstruction* AddInstruction(HInstruction* instr);
-  void AddSimulate(int id);
+  void AddSimulate(int ast_id);
 
   // Bailout environment manipulation.
   void Push(HValue* value) { environment()->Push(value); }
   HValue* Pop() { return environment()->Pop(); }
+
+  void Bailout(const char* reason);
+
+  HBasicBlock* CreateJoin(HBasicBlock* first,
+                          HBasicBlock* second,
+                          int join_id);
+
+  TypeFeedbackOracle* oracle() const { return function_state()->oracle(); }
 
  private:
   // Type of a member function that generates inline code for a native function.
@@ -672,7 +754,6 @@ class HGraphBuilder: public AstVisitor {
   CompilationInfo* info() const {
     return function_state()->compilation_info();
   }
-  TypeFeedbackOracle* oracle() const { return function_state()->oracle(); }
 
   AstContext* call_context() const {
     return function_state()->call_context();
@@ -686,6 +767,9 @@ class HGraphBuilder: public AstVisitor {
   void ClearInlinedTestContext() {
     function_state()->ClearInlinedTestContext();
   }
+  bool function_strict_mode() {
+    return function_state()->compilation_info()->is_strict_mode();
+  }
 
   // Generators for inline runtime functions.
 #define INLINE_FUNCTION_GENERATOR_DECLARATION(Name, argc, ressize)      \
@@ -695,15 +779,28 @@ class HGraphBuilder: public AstVisitor {
   INLINE_RUNTIME_FUNCTION_LIST(INLINE_FUNCTION_GENERATOR_DECLARATION)
 #undef INLINE_FUNCTION_GENERATOR_DECLARATION
 
-  void Bailout(const char* reason);
+  void HandleDeclaration(VariableProxy* proxy,
+                         Variable::Mode mode,
+                         FunctionLiteral* function);
+
+  void VisitDelete(UnaryOperation* expr);
+  void VisitVoid(UnaryOperation* expr);
+  void VisitTypeof(UnaryOperation* expr);
+  void VisitAdd(UnaryOperation* expr);
+  void VisitSub(UnaryOperation* expr);
+  void VisitBitNot(UnaryOperation* expr);
+  void VisitNot(UnaryOperation* expr);
+
+  void VisitComma(BinaryOperation* expr);
+  void VisitLogicalExpression(BinaryOperation* expr);
+  void VisitArithmeticExpression(BinaryOperation* expr);
 
   void PreProcessOsrEntry(IterationStatement* statement);
   // True iff. we are compiling for OSR and the statement is the entry.
   bool HasOsrEntryAt(IterationStatement* statement);
-
-  HBasicBlock* CreateJoin(HBasicBlock* first,
-                          HBasicBlock* second,
-                          int join_id);
+  void VisitLoopBody(IterationStatement* stmt,
+                     HBasicBlock* loop_entry,
+                     BreakAndContinueInfo* break_info);
 
   // Create a back edge in the flow graph.  body_exit is the predecessor
   // block and loop_entry is the successor block.  loop_successor is the
@@ -726,15 +823,21 @@ class HGraphBuilder: public AstVisitor {
   void Drop(int n) { environment()->Drop(n); }
   void Bind(Variable* var, HValue* value) { environment()->Bind(var, value); }
 
-  void VisitForValue(Expression* expr);
+  // The value of the arguments object is allowed in some but not most value
+  // contexts.  (It's allowed in all effect contexts and disallowed in all
+  // test contexts.)
+  void VisitForValue(Expression* expr,
+                     ArgumentsAllowedFlag flag = ARGUMENTS_NOT_ALLOWED);
+  void VisitForTypeOf(Expression* expr);
   void VisitForEffect(Expression* expr);
   void VisitForControl(Expression* expr,
                        HBasicBlock* true_block,
                        HBasicBlock* false_block);
 
   // Visit an argument subexpression and emit a push to the outgoing
-  // arguments.
-  void VisitArgument(Expression* expr);
+  // arguments.  Returns the hydrogen value that was pushed.
+  HValue* VisitArgument(Expression* expr);
+
   void VisitArgumentList(ZoneList<Expression*>* arguments);
 
   // Visit a list of expressions from left to right, each in a value context.
@@ -748,7 +851,10 @@ class HGraphBuilder: public AstVisitor {
   // to push them as outgoing parameters.
   template <int V> HInstruction* PreProcessCall(HCall<V>* call);
 
-  void AssumeRepresentation(HValue* value, Representation r);
+  void TraceRepresentation(Token::Value op,
+                           TypeInfo info,
+                           HValue* value,
+                           Representation rep);
   static Representation ToRepresentation(TypeInfo info);
 
   void SetupScope(Scope* scope);
@@ -762,12 +868,19 @@ class HGraphBuilder: public AstVisitor {
   HBasicBlock* CreateLoopHeaderBlock();
 
   // Helpers for flow graph construction.
-  void LookupGlobalPropertyCell(Variable* var,
-                                LookupResult* lookup,
-                                bool is_store);
+  enum GlobalPropertyAccess {
+    kUseCell,
+    kUseGeneric
+  };
+  GlobalPropertyAccess LookupGlobalProperty(Variable* var,
+                                            LookupResult* lookup,
+                                            bool is_store);
 
   bool TryArgumentsAccess(Property* expr);
+
+  // Try to optimize fun.apply(receiver, arguments) pattern.
   bool TryCallApply(Call* expr);
+
   bool TryInline(Call* expr);
   bool TryInlineBuiltinFunction(Call* expr,
                                 HValue* receiver,
@@ -777,7 +890,9 @@ class HGraphBuilder: public AstVisitor {
   // If --trace-inlining, print a line of the inlining trace.  Inlining
   // succeeded if the reason string is NULL and failed if there is a
   // non-NULL reason string.
-  void TraceInline(Handle<JSFunction> target, const char* failure_reason);
+  void TraceInline(Handle<JSFunction> target,
+                   Handle<JSFunction> caller,
+                   const char* failure_reason);
 
   void HandleGlobalVariableAssignment(Variable* var,
                                       HValue* value,
@@ -786,40 +901,66 @@ class HGraphBuilder: public AstVisitor {
 
   void HandlePropertyAssignment(Assignment* expr);
   void HandleCompoundAssignment(Assignment* expr);
-  void HandlePolymorphicLoadNamedField(Property* expr,
-                                       HValue* object,
-                                       ZoneMapList* types,
-                                       Handle<String> name);
   void HandlePolymorphicStoreNamedField(Assignment* expr,
                                         HValue* object,
                                         HValue* value,
-                                        ZoneMapList* types,
+                                        SmallMapList* types,
                                         Handle<String> name);
   void HandlePolymorphicCallNamed(Call* expr,
                                   HValue* receiver,
-                                  ZoneMapList* types,
+                                  SmallMapList* types,
                                   Handle<String> name);
+  void HandleLiteralCompareTypeof(CompareOperation* compare_expr,
+                                  Expression* expr,
+                                  Handle<String> check);
+  void HandleLiteralCompareUndefined(CompareOperation* compare_expr,
+                                     Expression* expr);
 
-  HStringCharCodeAt* BuildStringCharCodeAt(HValue* string,
+  HStringCharCodeAt* BuildStringCharCodeAt(HValue* context,
+                                           HValue* string,
                                            HValue* index);
   HInstruction* BuildBinaryOperation(BinaryOperation* expr,
                                      HValue* left,
                                      HValue* right);
-  HInstruction* BuildIncrement(HValue* value, bool increment);
+  HInstruction* BuildIncrement(bool returns_original_input,
+                               CountOperation* expr);
   HLoadNamedField* BuildLoadNamedField(HValue* object,
                                        Property* expr,
                                        Handle<Map> type,
                                        LookupResult* result,
                                        bool smi_and_map_check);
   HInstruction* BuildLoadNamedGeneric(HValue* object, Property* expr);
-  HInstruction* BuildLoadKeyedFastElement(HValue* object,
-                                          HValue* key,
-                                          Property* expr);
-  HInstruction* BuildLoadKeyedPixelArrayElement(HValue* object,
-                                                HValue* key,
-                                                Property* expr);
   HInstruction* BuildLoadKeyedGeneric(HValue* object,
                                       HValue* key);
+  HInstruction* BuildExternalArrayElementAccess(
+      HValue* external_elements,
+      HValue* checked_key,
+      HValue* val,
+      ElementsKind elements_kind,
+      bool is_store);
+
+  HInstruction* BuildMonomorphicElementAccess(HValue* object,
+                                              HValue* key,
+                                              HValue* val,
+                                              Expression* expr,
+                                              bool is_store);
+  HValue* HandlePolymorphicElementAccess(HValue* object,
+                                         HValue* key,
+                                         HValue* val,
+                                         Expression* prop,
+                                         int ast_id,
+                                         int position,
+                                         bool is_store,
+                                         bool* has_side_effects);
+
+  HValue* HandleKeyedElementAccess(HValue* obj,
+                                   HValue* key,
+                                   HValue* val,
+                                   Expression* expr,
+                                   int ast_id,
+                                   int position,
+                                   bool is_store,
+                                   bool* has_side_effects);
 
   HInstruction* BuildLoadNamed(HValue* object,
                                Property* prop,
@@ -841,16 +982,6 @@ class HGraphBuilder: public AstVisitor {
                                        HValue* key,
                                        HValue* value);
 
-  HInstruction* BuildStoreKeyedFastElement(HValue* object,
-                                           HValue* key,
-                                           HValue* val,
-                                           Expression* expr);
-
-  HInstruction* BuildStoreKeyedPixelArrayElement(HValue* object,
-                                                 HValue* key,
-                                                 HValue* val,
-                                                 Expression* expr);
-
   HValue* BuildContextChainWalk(Variable* var);
 
   void AddCheckConstantFunction(Call* expr,
@@ -858,6 +989,7 @@ class HGraphBuilder: public AstVisitor {
                                 Handle<Map> receiver_map,
                                 bool smi_and_map_check);
 
+  Zone* zone() { return zone_; }
 
   // The translation state of the currently-being-translated function.
   FunctionState* function_state_;
@@ -877,11 +1009,18 @@ class HGraphBuilder: public AstVisitor {
 
   int inlined_count_;
 
+  Zone* zone_;
+
+  bool inline_bailout_;
+
   friend class FunctionState;  // Pushes and pops the state stack.
   friend class AstContext;  // Pushes and pops the AST context stack.
 
   DISALLOW_COPY_AND_ASSIGN(HGraphBuilder);
 };
+
+
+Zone* AstContext::zone() { return owner_->zone(); }
 
 
 class HValueMap: public ZoneObject {
@@ -906,7 +1045,12 @@ class HValueMap: public ZoneObject {
   }
 
   HValue* Lookup(HValue* value) const;
-  HValueMap* Copy() const { return new HValueMap(this); }
+
+  HValueMap* Copy(Zone* zone) const {
+    return new(zone) HValueMap(zone, this);
+  }
+
+  bool IsEmpty() const { return count_ == 0; }
 
  private:
   // A linked list of HValue* values.  Stored in arrays.
@@ -919,7 +1063,7 @@ class HValueMap: public ZoneObject {
   // Must be a power of 2.
   static const int kInitialSize = 16;
 
-  explicit HValueMap(const HValueMap* other);
+  HValueMap(Zone* zone, const HValueMap* other);
 
   void Resize(int new_size);
   void ResizeLists(int new_size);
@@ -951,7 +1095,6 @@ class HStatistics: public Malloced {
   }
 
  private:
-
   HStatistics()
       : timing_(5),
         names_(5),
@@ -1073,11 +1216,6 @@ class HTracer: public Malloced {
   void PrintBlockProperty(const char* name, int block_id) {
     PrintIndent();
     trace_.Add("%s \"B%d\"\n", name, block_id);
-  }
-
-  void PrintBlockProperty(const char* name, int block_id1, int block_id2) {
-    PrintIndent();
-    trace_.Add("%s \"B%d\" \"B%d\"\n", name, block_id1, block_id2);
   }
 
   void PrintIntProperty(const char* name, int value) {

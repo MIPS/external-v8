@@ -1,4 +1,4 @@
-// Copyright 2010 the V8 project authors. All rights reserved.
+// Copyright 2011 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -64,7 +64,7 @@ TEST(MIPS0) {
   InitializeVM();
   v8::HandleScope scope;
 
-  MacroAssembler assm(NULL, 0);
+  MacroAssembler assm(Isolate::Current(), NULL, 0);
 
   // Addition.
   __ addu(v0, a0, a1);
@@ -73,14 +73,11 @@ TEST(MIPS0) {
 
   CodeDesc desc;
   assm.GetCode(&desc);
-  Object* code = Heap::CreateCode(
+  Object* code = HEAP->CreateCode(
       desc,
       Code::ComputeFlags(Code::STUB),
-      Handle<Object>(Heap::undefined_value()))->ToObjectChecked();
+      Handle<Object>(HEAP->undefined_value()))->ToObjectChecked();
   CHECK(code->IsCode());
-#ifdef DEBUG
-  Code::cast(code)->Print();
-#endif
   F2 f = FUNCTION_CAST<F2>(Code::cast(code)->entry());
   int res = reinterpret_cast<int>(CALL_GENERATED_CODE(f, 0xab0, 0xc, 0, 0, 0));
   ::printf("f() = %d\n", res);
@@ -92,7 +89,7 @@ TEST(MIPS1) {
   InitializeVM();
   v8::HandleScope scope;
 
-  MacroAssembler assm(NULL, 0);
+  MacroAssembler assm(Isolate::Current(), NULL, 0);
   Label L, C;
 
   __ mov(a1, a0);
@@ -114,14 +111,11 @@ TEST(MIPS1) {
 
   CodeDesc desc;
   assm.GetCode(&desc);
-  Object* code = Heap::CreateCode(
+  Object* code = HEAP->CreateCode(
       desc,
       Code::ComputeFlags(Code::STUB),
-      Handle<Object>(Heap::undefined_value()))->ToObjectChecked();
+      Handle<Object>(HEAP->undefined_value()))->ToObjectChecked();
   CHECK(code->IsCode());
-#ifdef DEBUG
-  Code::cast(code)->Print();
-#endif
   F1 f = FUNCTION_CAST<F1>(Code::cast(code)->entry());
   int res = reinterpret_cast<int>(CALL_GENERATED_CODE(f, 50, 0, 0, 0, 0));
   ::printf("f() = %d\n", res);
@@ -133,7 +127,7 @@ TEST(MIPS2) {
   InitializeVM();
   v8::HandleScope scope;
 
-  MacroAssembler assm(NULL, 0);
+  MacroAssembler assm(Isolate::Current(), NULL, 0);
 
   Label exit, error;
 
@@ -257,14 +251,11 @@ TEST(MIPS2) {
 
   CodeDesc desc;
   assm.GetCode(&desc);
-  Object* code = Heap::CreateCode(
+  Object* code = HEAP->CreateCode(
       desc,
       Code::ComputeFlags(Code::STUB),
-      Handle<Object>(Heap::undefined_value()))->ToObjectChecked();
+      Handle<Object>(HEAP->undefined_value()))->ToObjectChecked();
   CHECK(code->IsCode());
-#ifdef DEBUG
-  Code::cast(code)->Print();
-#endif
   F2 f = FUNCTION_CAST<F2>(Code::cast(code)->entry());
   int res = reinterpret_cast<int>(CALL_GENERATED_CODE(f, 0xab0, 0xc, 0, 0, 0));
   ::printf("f() = %d\n", res);
@@ -290,63 +281,64 @@ TEST(MIPS3) {
 
   // Create a function that accepts &t, and loads, manipulates, and stores
   // the doubles t.a ... t.f.
-  MacroAssembler assm(NULL, 0);
+  MacroAssembler assm(Isolate::Current(), NULL, 0);
   Label L, C;
 
-  __ ldc1(f4, MemOperand(a0, OFFSET_OF(T, a)) );
-  __ ldc1(f6, MemOperand(a0, OFFSET_OF(T, b)) );
-  __ add_d(f8, f4, f6);
-  __ sdc1(f8, MemOperand(a0, OFFSET_OF(T, c)) );   // c = a + b.
+  if (CpuFeatures::IsSupported(FPU)) {
+    CpuFeatures::Scope scope(FPU);
 
-  __ mov_d(f10, f8);  // c
-  __ neg_d(f12, f6);  // -b
-  __ sub_d(f10, f10, f12);
-  __ sdc1(f10, MemOperand(a0, OFFSET_OF(T, d)) );   // d = c - (-b).
+    __ ldc1(f4, MemOperand(a0, OFFSET_OF(T, a)) );
+    __ ldc1(f6, MemOperand(a0, OFFSET_OF(T, b)) );
+    __ add_d(f8, f4, f6);
+    __ sdc1(f8, MemOperand(a0, OFFSET_OF(T, c)) );  // c = a + b.
 
-  __ sdc1(f4, MemOperand(a0, OFFSET_OF(T, b)) );  // b = a.
+    __ mov_d(f10, f8);  // c
+    __ neg_d(f12, f6);  // -b
+    __ sub_d(f10, f10, f12);
+    __ sdc1(f10, MemOperand(a0, OFFSET_OF(T, d)) );  // d = c - (-b).
 
-  __ li(t0, 120);
-  __ mtc1(t0, f14);
-  __ cvt_d_w(f14, f14);   // f14 = 120.0.
-  __ mul_d(f10, f10, f14);
-  __ sdc1(f10, MemOperand(a0, OFFSET_OF(T, e)) );   // e = d * 120 = 1.8066e16.
+    __ sdc1(f4, MemOperand(a0, OFFSET_OF(T, b)) );   // b = a.
 
-  __ div_d(f12, f10, f4);
-  __ sdc1(f12, MemOperand(a0, OFFSET_OF(T, f)) );   // f = e / a = 120.44.
+    __ li(t0, 120);
+    __ mtc1(t0, f14);
+    __ cvt_d_w(f14, f14);   // f14 = 120.0.
+    __ mul_d(f10, f10, f14);
+    __ sdc1(f10, MemOperand(a0, OFFSET_OF(T, e)) );  // e = d * 120 = 1.8066e16.
 
-  __ sqrt_d(f14, f12);
-  __ sdc1(f14, MemOperand(a0, OFFSET_OF(T, g)) );
-  // g = sqrt(f) = 10.97451593465515908537
+    __ div_d(f12, f10, f4);
+    __ sdc1(f12, MemOperand(a0, OFFSET_OF(T, f)) );  // f = e / a = 120.44.
 
-  __ jr(ra);
-  __ nop();
+    __ sqrt_d(f14, f12);
+    __ sdc1(f14, MemOperand(a0, OFFSET_OF(T, g)) );
+    // g = sqrt(f) = 10.97451593465515908537
 
-  CodeDesc desc;
-  assm.GetCode(&desc);
-  Object* code = Heap::CreateCode(
-      desc,
-      Code::ComputeFlags(Code::STUB),
-      Handle<Object>(Heap::undefined_value()))->ToObjectChecked();
-  CHECK(code->IsCode());
-#ifdef DEBUG
-  Code::cast(code)->Print();
-#endif
-  F3 f = FUNCTION_CAST<F3>(Code::cast(code)->entry());
-  t.a = 1.5e14;
-  t.b = 2.75e11;
-  t.c = 0.0;
-  t.d = 0.0;
-  t.e = 0.0;
-  t.f = 0.0;
-  Object* dummy = CALL_GENERATED_CODE(f, &t, 0, 0, 0, 0);
-  USE(dummy);
-  CHECK_EQ(1.5e14, t.a);
-  CHECK_EQ(1.5e14, t.b);
-  CHECK_EQ(1.50275e14, t.c);
-  CHECK_EQ(1.50550e14, t.d);
-  CHECK_EQ(1.8066e16, t.e);
-  CHECK_EQ(120.44, t.f);
-  CHECK_EQ(10.97451593465515908537, t.g);
+    __ jr(ra);
+    __ nop();
+
+    CodeDesc desc;
+    assm.GetCode(&desc);
+    Object* code = HEAP->CreateCode(
+        desc,
+        Code::ComputeFlags(Code::STUB),
+        Handle<Object>(HEAP->undefined_value()))->ToObjectChecked();
+    CHECK(code->IsCode());
+    F3 f = FUNCTION_CAST<F3>(Code::cast(code)->entry());
+    t.a = 1.5e14;
+    t.b = 2.75e11;
+    t.c = 0.0;
+    t.d = 0.0;
+    t.e = 0.0;
+    t.f = 0.0;
+    Object* dummy = CALL_GENERATED_CODE(f, &t, 0, 0, 0, 0);
+    USE(dummy);
+    CHECK_EQ(1.5e14, t.a);
+    CHECK_EQ(1.5e14, t.b);
+    CHECK_EQ(1.50275e14, t.c);
+    CHECK_EQ(1.50550e14, t.d);
+    CHECK_EQ(1.8066e16, t.e);
+    CHECK_EQ(120.44, t.f);
+    CHECK_EQ(10.97451593465515908537, t.g);
+  }
 }
 
 
@@ -362,50 +354,51 @@ TEST(MIPS4) {
   } T;
   T t;
 
-  Assembler assm(NULL, 0);
+  Assembler assm(Isolate::Current(), NULL, 0);
   Label L, C;
 
-  __ ldc1(f4, MemOperand(a0, OFFSET_OF(T, a)) );
-  __ ldc1(f6, MemOperand(a0, OFFSET_OF(T, b)) );
+  if (CpuFeatures::IsSupported(FPU)) {
+    CpuFeatures::Scope scope(FPU);
 
-  // Swap f4 and f6, by using four integer registers, t0-t3.
-  __ mfc1(t0, f4);
-  __ mfc1(t1, f5);
-  __ mfc1(t2, f6);
-  __ mfc1(t3, f7);
+    __ ldc1(f4, MemOperand(a0, OFFSET_OF(T, a)) );
+    __ ldc1(f6, MemOperand(a0, OFFSET_OF(T, b)) );
 
-  __ mtc1(t0, f6);
-  __ mtc1(t1, f7);
-  __ mtc1(t2, f4);
-  __ mtc1(t3, f5);
+    // Swap f4 and f6, by using four integer registers, t0-t3.
+    __ mfc1(t0, f4);
+    __ mfc1(t1, f5);
+    __ mfc1(t2, f6);
+    __ mfc1(t3, f7);
 
-  // Store the swapped f4 and f5 back to memory.
-  __ sdc1(f4, MemOperand(a0, OFFSET_OF(T, a)) );
-  __ sdc1(f6, MemOperand(a0, OFFSET_OF(T, c)) );
+    __ mtc1(t0, f6);
+    __ mtc1(t1, f7);
+    __ mtc1(t2, f4);
+    __ mtc1(t3, f5);
 
-  __ jr(ra);
-  __ nop();
+    // Store the swapped f4 and f5 back to memory.
+    __ sdc1(f4, MemOperand(a0, OFFSET_OF(T, a)) );
+    __ sdc1(f6, MemOperand(a0, OFFSET_OF(T, c)) );
 
-  CodeDesc desc;
-  assm.GetCode(&desc);
-  Object* code = Heap::CreateCode(
-      desc,
-      Code::ComputeFlags(Code::STUB),
-      Handle<Object>(Heap::undefined_value()))->ToObjectChecked();
-  CHECK(code->IsCode());
-#ifdef DEBUG
-  Code::cast(code)->Print();
-#endif
-  F3 f = FUNCTION_CAST<F3>(Code::cast(code)->entry());
-  t.a = 1.5e22;
-  t.b = 2.75e11;
-  t.c = 17.17;
-  Object* dummy = CALL_GENERATED_CODE(f, &t, 0, 0, 0, 0);
-  USE(dummy);
+    __ jr(ra);
+    __ nop();
 
-  CHECK_EQ(2.75e11, t.a);
-  CHECK_EQ(2.75e11, t.b);
-  CHECK_EQ(1.5e22, t.c);
+    CodeDesc desc;
+    assm.GetCode(&desc);
+    Object* code = HEAP->CreateCode(
+        desc,
+        Code::ComputeFlags(Code::STUB),
+        Handle<Object>(HEAP->undefined_value()))->ToObjectChecked();
+    CHECK(code->IsCode());
+    F3 f = FUNCTION_CAST<F3>(Code::cast(code)->entry());
+    t.a = 1.5e22;
+    t.b = 2.75e11;
+    t.c = 17.17;
+    Object* dummy = CALL_GENERATED_CODE(f, &t, 0, 0, 0, 0);
+    USE(dummy);
+
+    CHECK_EQ(2.75e11, t.a);
+    CHECK_EQ(2.75e11, t.b);
+    CHECK_EQ(1.5e22, t.c);
+  }
 }
 
 
@@ -422,60 +415,61 @@ TEST(MIPS5) {
   } T;
   T t;
 
-  Assembler assm(NULL, 0);
+  Assembler assm(Isolate::Current(), NULL, 0);
   Label L, C;
 
-  // Load all structure elements to registers.
-  __ ldc1(f4, MemOperand(a0, OFFSET_OF(T, a)) );
-  __ ldc1(f6, MemOperand(a0, OFFSET_OF(T, b)) );
-  __ lw(t0, MemOperand(a0, OFFSET_OF(T, i)) );
-  __ lw(t1, MemOperand(a0, OFFSET_OF(T, j)) );
+  if (CpuFeatures::IsSupported(FPU)) {
+    CpuFeatures::Scope scope(FPU);
 
-  // Convert double in f4 to int in element i.
-  __ cvt_w_d(f8, f4);
-  __ mfc1(t2, f8);
-  __ sw(t2, MemOperand(a0, OFFSET_OF(T, i)) );
+    // Load all structure elements to registers.
+    __ ldc1(f4, MemOperand(a0, OFFSET_OF(T, a)) );
+    __ ldc1(f6, MemOperand(a0, OFFSET_OF(T, b)) );
+    __ lw(t0, MemOperand(a0, OFFSET_OF(T, i)) );
+    __ lw(t1, MemOperand(a0, OFFSET_OF(T, j)) );
 
-  // Convert double in f6 to int in element j.
-  __ cvt_w_d(f10, f6);
-  __ mfc1(t3, f10);
-  __ sw(t3, MemOperand(a0, OFFSET_OF(T, j)) );
+    // Convert double in f4 to int in element i.
+    __ cvt_w_d(f8, f4);
+    __ mfc1(t2, f8);
+    __ sw(t2, MemOperand(a0, OFFSET_OF(T, i)) );
 
-  // Convert int in original i (t0) to double in a.
-  __ mtc1(t0, f12);
-  __ cvt_d_w(f0, f12);
-  __ sdc1(f0, MemOperand(a0, OFFSET_OF(T, a)) );
+    // Convert double in f6 to int in element j.
+    __ cvt_w_d(f10, f6);
+    __ mfc1(t3, f10);
+    __ sw(t3, MemOperand(a0, OFFSET_OF(T, j)) );
 
-  // Convert int in original j (t1) to double in b.
-  __ mtc1(t1, f14);
-  __ cvt_d_w(f2, f14);
-  __ sdc1(f2, MemOperand(a0, OFFSET_OF(T, b)) );
+    // Convert int in original i (t0) to double in a.
+    __ mtc1(t0, f12);
+    __ cvt_d_w(f0, f12);
+    __ sdc1(f0, MemOperand(a0, OFFSET_OF(T, a)) );
 
-  __ jr(ra);
-  __ nop();
+    // Convert int in original j (t1) to double in b.
+    __ mtc1(t1, f14);
+    __ cvt_d_w(f2, f14);
+    __ sdc1(f2, MemOperand(a0, OFFSET_OF(T, b)) );
 
-  CodeDesc desc;
-  assm.GetCode(&desc);
-  Object* code = Heap::CreateCode(
-      desc,
-      Code::ComputeFlags(Code::STUB),
-      Handle<Object>(Heap::undefined_value()))->ToObjectChecked();
-  CHECK(code->IsCode());
-#ifdef DEBUG
-  Code::cast(code)->Print();
-#endif
-  F3 f = FUNCTION_CAST<F3>(Code::cast(code)->entry());
-  t.a = 1.5e4;
-  t.b = 2.75e8;
-  t.i = 12345678;
-  t.j = -100000;
-  Object* dummy = CALL_GENERATED_CODE(f, &t, 0, 0, 0, 0);
-  USE(dummy);
+    __ jr(ra);
+    __ nop();
 
-  CHECK_EQ(12345678.0, t.a);
-  CHECK_EQ(-100000.0, t.b);
-  CHECK_EQ(15000, t.i);
-  CHECK_EQ(275000000, t.j);
+    CodeDesc desc;
+    assm.GetCode(&desc);
+    Object* code = HEAP->CreateCode(
+        desc,
+        Code::ComputeFlags(Code::STUB),
+        Handle<Object>(HEAP->undefined_value()))->ToObjectChecked();
+    CHECK(code->IsCode());
+    F3 f = FUNCTION_CAST<F3>(Code::cast(code)->entry());
+    t.a = 1.5e4;
+    t.b = 2.75e8;
+    t.i = 12345678;
+    t.j = -100000;
+    Object* dummy = CALL_GENERATED_CODE(f, &t, 0, 0, 0, 0);
+    USE(dummy);
+
+    CHECK_EQ(12345678.0, t.a);
+    CHECK_EQ(-100000.0, t.b);
+    CHECK_EQ(15000, t.i);
+    CHECK_EQ(275000000, t.j);
+  }
 }
 
 
@@ -496,7 +490,7 @@ TEST(MIPS6) {
   } T;
   T t;
 
-  Assembler assm(NULL, 0);
+  Assembler assm(Isolate::Current(), NULL, 0);
   Label L, C;
 
   // Basic word load/store.
@@ -531,14 +525,11 @@ TEST(MIPS6) {
 
   CodeDesc desc;
   assm.GetCode(&desc);
-  Object* code = Heap::CreateCode(
+  Object* code = HEAP->CreateCode(
       desc,
       Code::ComputeFlags(Code::STUB),
-      Handle<Object>(Heap::undefined_value()))->ToObjectChecked();
+      Handle<Object>(HEAP->undefined_value()))->ToObjectChecked();
   CHECK(code->IsCode());
-#ifdef DEBUG
-  Code::cast(code)->Print();
-#endif
   F3 f = FUNCTION_CAST<F3>(Code::cast(code)->entry());
   t.ui = 0x11223344;
   t.si = 0x99aabbcc;
@@ -572,60 +563,61 @@ TEST(MIPS7) {
 
   // Create a function that accepts &t, and loads, manipulates, and stores
   // the doubles t.a ... t.f.
-  MacroAssembler assm(NULL, 0);
+  MacroAssembler assm(Isolate::Current(), NULL, 0);
   Label neither_is_nan, less_than, outa_here;
 
-  __ ldc1(f4, MemOperand(a0, OFFSET_OF(T, a)) );
-  __ ldc1(f6, MemOperand(a0, OFFSET_OF(T, b)) );
-  __ c(UN, D, f4, f6);
-  __ bc1f(&neither_is_nan);
-  __ nop();
-  __ sw(zero_reg, MemOperand(a0, OFFSET_OF(T, result)) );
-  __ Branch(&outa_here);
+  if (CpuFeatures::IsSupported(FPU)) {
+    CpuFeatures::Scope scope(FPU);
 
-  __ bind(&neither_is_nan);
+    __ ldc1(f4, MemOperand(a0, OFFSET_OF(T, a)) );
+    __ ldc1(f6, MemOperand(a0, OFFSET_OF(T, b)) );
+    __ c(UN, D, f4, f6);
+    __ bc1f(&neither_is_nan);
+    __ nop();
+    __ sw(zero_reg, MemOperand(a0, OFFSET_OF(T, result)) );
+    __ Branch(&outa_here);
 
-  __ c(OLT, D, f6, f4, 2);
-  __ bc1t(&less_than, 2);
-  __ nop();
-  __ sw(zero_reg, MemOperand(a0, OFFSET_OF(T, result)) );
-  __ Branch(&outa_here);
+    __ bind(&neither_is_nan);
 
-  __ bind(&less_than);
-  __ Addu(t0, zero_reg, Operand(1));
-  __ sw(t0, MemOperand(a0, OFFSET_OF(T, result)) );  // Set true.
+    __ c(OLT, D, f6, f4, 2);
+    __ bc1t(&less_than, 2);
+    __ nop();
+    __ sw(zero_reg, MemOperand(a0, OFFSET_OF(T, result)) );
+    __ Branch(&outa_here);
+
+    __ bind(&less_than);
+    __ Addu(t0, zero_reg, Operand(1));
+    __ sw(t0, MemOperand(a0, OFFSET_OF(T, result)) );  // Set true.
 
 
-  // This test-case should have additional tests.
+    // This test-case should have additional tests.
 
-  __ bind(&outa_here);
+    __ bind(&outa_here);
 
-  __ jr(ra);
-  __ nop();
+    __ jr(ra);
+    __ nop();
 
-  CodeDesc desc;
-  assm.GetCode(&desc);
-  Object* code = Heap::CreateCode(
-      desc,
-      Code::ComputeFlags(Code::STUB),
-      Handle<Object>(Heap::undefined_value()))->ToObjectChecked();
-  CHECK(code->IsCode());
-#ifdef DEBUG
-  Code::cast(code)->Print();
-#endif
-  F3 f = FUNCTION_CAST<F3>(Code::cast(code)->entry());
-  t.a = 1.5e14;
-  t.b = 2.75e11;
-  t.c = 2.0;
-  t.d = -4.0;
-  t.e = 0.0;
-  t.f = 0.0;
-  t.result = 0;
-  Object* dummy = CALL_GENERATED_CODE(f, &t, 0, 0, 0, 0);
-  USE(dummy);
-  CHECK_EQ(1.5e14, t.a);
-  CHECK_EQ(2.75e11, t.b);
-  CHECK_EQ(1, t.result);
+    CodeDesc desc;
+    assm.GetCode(&desc);
+    Object* code = HEAP->CreateCode(
+        desc,
+        Code::ComputeFlags(Code::STUB),
+        Handle<Object>(HEAP->undefined_value()))->ToObjectChecked();
+    CHECK(code->IsCode());
+    F3 f = FUNCTION_CAST<F3>(Code::cast(code)->entry());
+    t.a = 1.5e14;
+    t.b = 2.75e11;
+    t.c = 2.0;
+    t.d = -4.0;
+    t.e = 0.0;
+    t.f = 0.0;
+    t.result = 0;
+    Object* dummy = CALL_GENERATED_CODE(f, &t, 0, 0, 0, 0);
+    USE(dummy);
+    CHECK_EQ(1.5e14, t.a);
+    CHECK_EQ(2.75e11, t.b);
+    CHECK_EQ(1, t.result);
+  }
 }
 
 
@@ -653,7 +645,7 @@ TEST(MIPS8) {
   } T;
   T t;
 
-  MacroAssembler assm(NULL, 0);
+  MacroAssembler assm(Isolate::Current(), NULL, 0);
 
   // Basic word load.
   __ lw(t0, MemOperand(a0, OFFSET_OF(T, input)) );
@@ -706,14 +698,11 @@ TEST(MIPS8) {
 
   CodeDesc desc;
   assm.GetCode(&desc);
-  Object* code = Heap::CreateCode(
+  Object* code = HEAP->CreateCode(
       desc,
       Code::ComputeFlags(Code::STUB),
-      Handle<Object>(Heap::undefined_value()))->ToObjectChecked();
+      Handle<Object>(HEAP->undefined_value()))->ToObjectChecked();
   CHECK(code->IsCode());
-#ifdef DEBUG
-  Code::cast(code)->Print();
-#endif
   F3 f = FUNCTION_CAST<F3>(Code::cast(code)->entry());
   t.input = 0x12345678;
   Object* dummy = CALL_GENERATED_CODE(f, &t, 0x0, 0, 0, 0);
@@ -741,7 +730,7 @@ TEST(MIPS9) {
   InitializeVM();
   v8::HandleScope scope;
 
-  MacroAssembler assm(NULL, 0);
+  MacroAssembler assm(Isolate::Current(), NULL, 0);
   Label exit, exit2, exit3;
 
   __ Branch(&exit, ge, a0, Operand(0x00000000));
@@ -756,20 +745,17 @@ TEST(MIPS9) {
 
   CodeDesc desc;
   assm.GetCode(&desc);
-  Object* code = Heap::CreateCode(
+  Object* code = HEAP->CreateCode(
       desc,
       Code::ComputeFlags(Code::STUB),
-      Handle<Object>(Heap::undefined_value()))->ToObjectChecked();
+      Handle<Object>(HEAP->undefined_value()))->ToObjectChecked();
   CHECK(code->IsCode());
-#ifdef DEBUG
-  Code::cast(code)->Print();
-#endif
 }
 
 
 TEST(MIPS10) {
   // Test conversions between doubles and long integers.
-  // Test how the long ints map to FP regs pairs.
+  // Test hos the long ints map to FP regs pairs.
   InitializeVM();
   v8::HandleScope scope;
 
@@ -785,59 +771,60 @@ TEST(MIPS10) {
   } T;
   T t;
 
-  Assembler assm(NULL, 0);
+  Assembler assm(Isolate::Current(), NULL, 0);
   Label L, C;
 
-  // Load all structure elements to registers.
-  __ ldc1(f0, MemOperand(a0, OFFSET_OF(T, a)));
+  if (CpuFeatures::IsSupported(FPU) && mips32r2) {
+    CpuFeatures::Scope scope(FPU);
 
-  // Save the raw bits of the double.
-  __ mfc1(t0, f0);
-  __ mfc1(t1, f1);
-  __ sw(t0, MemOperand(a0, OFFSET_OF(T, dbl_mant)));
-  __ sw(t1, MemOperand(a0, OFFSET_OF(T, dbl_exp)));
+    // Load all structure elements to registers.
+    __ ldc1(f0, MemOperand(a0, OFFSET_OF(T, a)));
 
-  // Convert double in f0 to long, save hi/lo parts.
-  __ cvt_l_d(f0, f0);
-  __ mfc1(t0, f0);  // f0 has LS 32 bits of long.
-  __ mfc1(t1, f1);  // f1 has MS 32 bits of long.
-  __ sw(t0, MemOperand(a0, OFFSET_OF(T, long_lo)));
-  __ sw(t1, MemOperand(a0, OFFSET_OF(T, long_hi)));
+    // Save the raw bits of the double.
+    __ mfc1(t0, f0);
+    __ mfc1(t1, f1);
+    __ sw(t0, MemOperand(a0, OFFSET_OF(T, dbl_mant)));
+    __ sw(t1, MemOperand(a0, OFFSET_OF(T, dbl_exp)));
 
-  // Convert the b long integers to double b.
-  __ lw(t0, MemOperand(a0, OFFSET_OF(T, b_long_lo)));
-  __ lw(t1, MemOperand(a0, OFFSET_OF(T, b_long_hi)));
-  __ mtc1(t0, f8);  // f8 has LS 32-bits.
-  __ mtc1(t1, f9);  // f9 has MS 32-bits.
-  __ cvt_d_l(f10, f8);
-  __ sdc1(f10, MemOperand(a0, OFFSET_OF(T, b)));
+    // Convert double in f0 to long, save hi/lo parts.
+    __ cvt_l_d(f0, f0);
+    __ mfc1(t0, f0);  // f0 has LS 32 bits of long.
+    __ mfc1(t1, f1);  // f1 has MS 32 bits of long.
+    __ sw(t0, MemOperand(a0, OFFSET_OF(T, long_lo)));
+    __ sw(t1, MemOperand(a0, OFFSET_OF(T, long_hi)));
 
-  __ jr(ra);
-  __ nop();
+    // Convert the b long integers to double b.
+    __ lw(t0, MemOperand(a0, OFFSET_OF(T, b_long_lo)));
+    __ lw(t1, MemOperand(a0, OFFSET_OF(T, b_long_hi)));
+    __ mtc1(t0, f8);  // f8 has LS 32-bits.
+    __ mtc1(t1, f9);  // f9 has MS 32-bits.
+    __ cvt_d_l(f10, f8);
+    __ sdc1(f10, MemOperand(a0, OFFSET_OF(T, b)));
 
-  CodeDesc desc;
-  assm.GetCode(&desc);
-  Object* code = Heap::CreateCode(
-      desc,
-      Code::ComputeFlags(Code::STUB),
-      Handle<Object>(Heap::undefined_value()))->ToObjectChecked();
-  CHECK(code->IsCode());
-#ifdef DEBUG
-  Code::cast(code)->Print();
-#endif
-  F3 f = FUNCTION_CAST<F3>(Code::cast(code)->entry());
-  t.a = 2.147483647e9;       // 0x7fffffff -> 0x41DFFFFFFFC00000 as double.
-  t.b_long_hi = 0x000000ff;  // 0xFF00FF00FF -> 0x426FE01FE01FE000 as double.
-  t.b_long_lo = 0x00ff00ff;
-  Object* dummy = CALL_GENERATED_CODE(f, &t, 0, 0, 0, 0);
-  USE(dummy);
+    __ jr(ra);
+    __ nop();
 
-  CHECK_EQ(0x41DFFFFF, t.dbl_exp);
-  CHECK_EQ(0xFFC00000, t.dbl_mant);
-  CHECK_EQ(0, t.long_hi);
-  CHECK_EQ(0x7fffffff, t.long_lo);
-  // 0xFF00FF00FF -> 1.095233372415e12.
-  CHECK_EQ(1.095233372415e12, t.b);
+    CodeDesc desc;
+    assm.GetCode(&desc);
+    Object* code = HEAP->CreateCode(
+        desc,
+        Code::ComputeFlags(Code::STUB),
+        Handle<Object>(HEAP->undefined_value()))->ToObjectChecked();
+    CHECK(code->IsCode());
+    F3 f = FUNCTION_CAST<F3>(Code::cast(code)->entry());
+    t.a = 2.147483647e9;       // 0x7fffffff -> 0x41DFFFFFFFC00000 as double.
+    t.b_long_hi = 0x000000ff;  // 0xFF00FF00FF -> 0x426FE01FE01FE000 as double.
+    t.b_long_lo = 0x00ff00ff;
+    Object* dummy = CALL_GENERATED_CODE(f, &t, 0, 0, 0, 0);
+    USE(dummy);
+
+    CHECK_EQ(0x41DFFFFF, t.dbl_exp);
+    CHECK_EQ(0xFFC00000, t.dbl_mant);
+    CHECK_EQ(0, t.long_hi);
+    CHECK_EQ(0x7fffffff, t.long_lo);
+    // 0xFF00FF00FF -> 1.095233372415e12.
+    CHECK_EQ(1.095233372415e12, t.b);
+  }
 }
 
 
@@ -868,7 +855,7 @@ TEST(MIPS11) {
   } T;
   T t;
 
-  Assembler assm(NULL, 0);
+  Assembler assm(Isolate::Current(), NULL, 0);
 
   // Test all combinations of LWL and vAddr.
   __ lw(t0, MemOperand(a0, OFFSET_OF(T, reg_init)) );
@@ -951,14 +938,11 @@ TEST(MIPS11) {
 
   CodeDesc desc;
   assm.GetCode(&desc);
-  Object* code = Heap::CreateCode(
+  Object* code = HEAP->CreateCode(
       desc,
       Code::ComputeFlags(Code::STUB),
-      Handle<Object>(Heap::undefined_value()))->ToObjectChecked();
+      Handle<Object>(HEAP->undefined_value()))->ToObjectChecked();
   CHECK(code->IsCode());
-#ifdef DEBUG
-  Code::cast(code)->Print();
-#endif
   F3 f = FUNCTION_CAST<F3>(Code::cast(code)->entry());
   t.reg_init = 0xaabbccdd;
   t.mem_init = 0x11223344;
@@ -1002,7 +986,7 @@ TEST(MIPS12) {
   } T;
   T t;
 
-  MacroAssembler assm(NULL, 0);
+  MacroAssembler assm(Isolate::Current(), NULL, 0);
 
   __ mov(t6, fp);  // Save frame pointer.
   __ mov(fp, a0);  // Access struct T by fp.
@@ -1012,18 +996,18 @@ TEST(MIPS12) {
   __ addu(t1, t0, t3);
   __ subu(t4, t0, t3);
   __ nop();
-  __ Push(t0);  // These instructions disappear after opt.
+  __ push(t0);  // These instructions disappear after opt.
   __ Pop();
   __ addu(t0, t0, t0);
   __ nop();
   __ Pop();     // These instructions disappear after opt.
-  __ Push(t3);
+  __ push(t3);
   __ nop();
-  __ Push(t3);  // These instructions disappear after opt.
-  __ Pop(t3);
+  __ push(t3);  // These instructions disappear after opt.
+  __ pop(t3);
   __ nop();
-  __ Push(t3);
-  __ Pop(t4);
+  __ push(t3);
+  __ pop(t4);
   __ nop();
   __ sw(t0, MemOperand(fp, OFFSET_OF(T, y)) );
   __ lw(t0, MemOperand(fp, OFFSET_OF(T, y)) );
@@ -1031,25 +1015,25 @@ TEST(MIPS12) {
   __ sw(t0, MemOperand(fp, OFFSET_OF(T, y)) );
   __ lw(t1, MemOperand(fp, OFFSET_OF(T, y)) );
   __ nop();
-  __ Push(t1);
+  __ push(t1);
   __ lw(t1, MemOperand(fp, OFFSET_OF(T, y)) );
-  __ Pop(t1);
+  __ pop(t1);
   __ nop();
-  __ Push(t1);
+  __ push(t1);
   __ lw(t2, MemOperand(fp, OFFSET_OF(T, y)) );
-  __ Pop(t1);
+  __ pop(t1);
   __ nop();
-  __ Push(t1);
+  __ push(t1);
   __ lw(t2, MemOperand(fp, OFFSET_OF(T, y)) );
-  __ Pop(t2);
+  __ pop(t2);
   __ nop();
-  __ Push(t2);
+  __ push(t2);
   __ lw(t2, MemOperand(fp, OFFSET_OF(T, y)) );
-  __ Pop(t1);
+  __ pop(t1);
   __ nop();
-  __ Push(t1);
+  __ push(t1);
   __ lw(t2, MemOperand(fp, OFFSET_OF(T, y)) );
-  __ Pop(t3);
+  __ pop(t3);
   __ nop();
 
   __ mov(fp, t6);
@@ -1058,14 +1042,11 @@ TEST(MIPS12) {
 
   CodeDesc desc;
   assm.GetCode(&desc);
-  Object* code = Heap::CreateCode(
+  Object* code = HEAP->CreateCode(
       desc,
       Code::ComputeFlags(Code::STUB),
-      Handle<Object>(Heap::undefined_value()))->ToObjectChecked();
+      Handle<Object>(HEAP->undefined_value()))->ToObjectChecked();
   CHECK(code->IsCode());
-#ifdef DEBUG
-  Code::cast(code)->Print();
-#endif
   F3 f = FUNCTION_CAST<F3>(Code::cast(code)->entry());
   t.x = 1;
   t.y = 2;
@@ -1096,49 +1077,50 @@ TEST(MIPS13) {
   } T;
   T t;
 
-  MacroAssembler assm(NULL, 0);
+  MacroAssembler assm(Isolate::Current(), NULL, 0);
 
-  __ sw(t0, MemOperand(a0, OFFSET_OF(T, cvt_small_in)));
-  __ Cvt_d_uw(f10, t0);
-  __ sdc1(f10, MemOperand(a0, OFFSET_OF(T, cvt_small_out)));
+  if (CpuFeatures::IsSupported(FPU)) {
+    CpuFeatures::Scope scope(FPU);
 
-  __ Trunc_uw_d(f10, f10);
-  __ swc1(f10, MemOperand(a0, OFFSET_OF(T, trunc_small_out)));
+    __ sw(t0, MemOperand(a0, OFFSET_OF(T, cvt_small_in)));
+    __ Cvt_d_uw(f10, t0, f22);
+    __ sdc1(f10, MemOperand(a0, OFFSET_OF(T, cvt_small_out)));
 
-  __ sw(t0, MemOperand(a0, OFFSET_OF(T, cvt_big_in)));
-  __ Cvt_d_uw(f8, t0);
-  __ sdc1(f8, MemOperand(a0, OFFSET_OF(T, cvt_big_out)));
+    __ Trunc_uw_d(f10, f10, f22);
+    __ swc1(f10, MemOperand(a0, OFFSET_OF(T, trunc_small_out)));
 
-  __ Trunc_uw_d(f8, f8);
-  __ swc1(f8, MemOperand(a0, OFFSET_OF(T, trunc_big_out)));
+    __ sw(t0, MemOperand(a0, OFFSET_OF(T, cvt_big_in)));
+    __ Cvt_d_uw(f8, t0, f22);
+    __ sdc1(f8, MemOperand(a0, OFFSET_OF(T, cvt_big_out)));
 
-  __ jr(ra);
-  __ nop();
+    __ Trunc_uw_d(f8, f8, f22);
+    __ swc1(f8, MemOperand(a0, OFFSET_OF(T, trunc_big_out)));
 
-  CodeDesc desc;
-  assm.GetCode(&desc);
-  Object* code = Heap::CreateCode(
-      desc,
-      Code::ComputeFlags(Code::STUB),
-      Handle<Object>(Heap::undefined_value()))->ToObjectChecked();
-  CHECK(code->IsCode());
-#ifdef DEBUG
-  Code::cast(code)->Print();
-#endif
-  F3 f = FUNCTION_CAST<F3>(Code::cast(code)->entry());
+    __ jr(ra);
+    __ nop();
 
-  t.cvt_big_in = 0xFFFFFFFF;
-  t.cvt_small_in  = 333;
+    CodeDesc desc;
+    assm.GetCode(&desc);
+    Object* code = HEAP->CreateCode(
+        desc,
+        Code::ComputeFlags(Code::STUB),
+        Handle<Object>(HEAP->undefined_value()))->ToObjectChecked();
+    CHECK(code->IsCode());
+    F3 f = FUNCTION_CAST<F3>(Code::cast(code)->entry());
 
-  Object* dummy = CALL_GENERATED_CODE(f, &t, 0, 0, 0, 0);
-  USE(dummy);
+    t.cvt_big_in = 0xFFFFFFFF;
+    t.cvt_small_in  = 333;
 
-  CHECK_EQ(t.cvt_big_out, static_cast<double>(t.cvt_big_in));
-  CHECK_EQ(t.cvt_small_out, static_cast<double>(t.cvt_small_in));
+    Object* dummy = CALL_GENERATED_CODE(f, &t, 0, 0, 0, 0);
+    USE(dummy);
 
-  CHECK_EQ(static_cast<int>(t.trunc_big_out), static_cast<int>(t.cvt_big_in));
-  CHECK_EQ(static_cast<int>(t.trunc_small_out),
-           static_cast<int>(t.cvt_small_in));
+    CHECK_EQ(t.cvt_big_out, static_cast<double>(t.cvt_big_in));
+    CHECK_EQ(t.cvt_small_out, static_cast<double>(t.cvt_small_in));
+
+    CHECK_EQ(static_cast<int>(t.trunc_big_out), static_cast<int>(t.cvt_big_in));
+    CHECK_EQ(static_cast<int>(t.trunc_small_out),
+             static_cast<int>(t.cvt_small_in));
+  }
 }
 
 
@@ -1152,10 +1134,10 @@ TEST(MIPS14) {
   int32_t x##_down_out; \
   int32_t neg_##x##_up_out; \
   int32_t neg_##x##_down_out; \
-  int32_t x##_err1_out; \
-  int32_t x##_err2_out; \
-  int32_t x##_err3_out; \
-  int32_t x##_err4_out; \
+  uint32_t x##_err1_out; \
+  uint32_t x##_err2_out; \
+  uint32_t x##_err3_out; \
+  uint32_t x##_err4_out; \
   int32_t x##_invalid_result;
 
   typedef struct {
@@ -1178,152 +1160,119 @@ TEST(MIPS14) {
 
 #undef ROUND_STRUCT_ELEMENT
 
-  MacroAssembler assm(NULL, 0);
+  MacroAssembler assm(Isolate::Current(), NULL, 0);
 
-  // Save FCSR.
-  __ cfc1(a1, FCSR);
-  // Disable FPU exceptions.
-  __ ctc1(zero_reg, FCSR);
+  if (CpuFeatures::IsSupported(FPU)) {
+    CpuFeatures::Scope scope(FPU);
+
+    // Save FCSR.
+    __ cfc1(a1, FCSR);
+    // Disable FPU exceptions.
+    __ ctc1(zero_reg, FCSR);
 #define RUN_ROUND_TEST(x) \
-  __ ldc1(f0, MemOperand(a0, OFFSET_OF(T, round_up_in))); \
-  __ x##_w_d(f0, f0); \
-  __ swc1(f0, MemOperand(a0, OFFSET_OF(T, x##_up_out))); \
-  \
-  __ ldc1(f0, MemOperand(a0, OFFSET_OF(T, round_down_in))); \
-  __ x##_w_d(f0, f0); \
-  __ swc1(f0, MemOperand(a0, OFFSET_OF(T, x##_down_out))); \
-  \
-  __ ldc1(f0, MemOperand(a0, OFFSET_OF(T, neg_round_up_in))); \
-  __ x##_w_d(f0, f0); \
-  __ swc1(f0, MemOperand(a0, OFFSET_OF(T, neg_##x##_up_out))); \
-  \
-  __ ldc1(f0, MemOperand(a0, OFFSET_OF(T, neg_round_down_in))); \
-  __ x##_w_d(f0, f0); \
-  __ swc1(f0, MemOperand(a0, OFFSET_OF(T, neg_##x##_down_out))); \
-  \
-  __ ldc1(f0, MemOperand(a0, OFFSET_OF(T, err1_in))); \
-  __ ctc1(zero_reg, FCSR); \
-  __ x##_w_d(f0, f0); \
-  __ cfc1(a2, FCSR); \
-  __ sw(a2, MemOperand(a0, OFFSET_OF(T, x##_err1_out))); \
-  \
-  __ ldc1(f0, MemOperand(a0, OFFSET_OF(T, err2_in))); \
-  __ ctc1(zero_reg, FCSR); \
-  __ x##_w_d(f0, f0); \
-  __ cfc1(a2, FCSR); \
-  __ sw(a2, MemOperand(a0, OFFSET_OF(T, x##_err2_out))); \
-  \
-  __ ldc1(f0, MemOperand(a0, OFFSET_OF(T, err3_in))); \
-  __ ctc1(zero_reg, FCSR); \
-  __ x##_w_d(f0, f0); \
-  __ cfc1(a2, FCSR); \
-  __ sw(a2, MemOperand(a0, OFFSET_OF(T, x##_err3_out))); \
-  \
-  __ ldc1(f0, MemOperand(a0, OFFSET_OF(T, err4_in))); \
-  __ ctc1(zero_reg, FCSR); \
-  __ x##_w_d(f0, f0); \
-  __ cfc1(a2, FCSR); \
-  __ sw(a2, MemOperand(a0, OFFSET_OF(T, x##_err4_out))); \
-  __ swc1(f0, MemOperand(a0, OFFSET_OF(T, x##_invalid_result)));
+    __ ldc1(f0, MemOperand(a0, OFFSET_OF(T, round_up_in))); \
+    __ x##_w_d(f0, f0); \
+    __ swc1(f0, MemOperand(a0, OFFSET_OF(T, x##_up_out))); \
+    \
+    __ ldc1(f0, MemOperand(a0, OFFSET_OF(T, round_down_in))); \
+    __ x##_w_d(f0, f0); \
+    __ swc1(f0, MemOperand(a0, OFFSET_OF(T, x##_down_out))); \
+    \
+    __ ldc1(f0, MemOperand(a0, OFFSET_OF(T, neg_round_up_in))); \
+    __ x##_w_d(f0, f0); \
+    __ swc1(f0, MemOperand(a0, OFFSET_OF(T, neg_##x##_up_out))); \
+    \
+    __ ldc1(f0, MemOperand(a0, OFFSET_OF(T, neg_round_down_in))); \
+    __ x##_w_d(f0, f0); \
+    __ swc1(f0, MemOperand(a0, OFFSET_OF(T, neg_##x##_down_out))); \
+    \
+    __ ldc1(f0, MemOperand(a0, OFFSET_OF(T, err1_in))); \
+    __ ctc1(zero_reg, FCSR); \
+    __ x##_w_d(f0, f0); \
+    __ cfc1(a2, FCSR); \
+    __ sw(a2, MemOperand(a0, OFFSET_OF(T, x##_err1_out))); \
+    \
+    __ ldc1(f0, MemOperand(a0, OFFSET_OF(T, err2_in))); \
+    __ ctc1(zero_reg, FCSR); \
+    __ x##_w_d(f0, f0); \
+    __ cfc1(a2, FCSR); \
+    __ sw(a2, MemOperand(a0, OFFSET_OF(T, x##_err2_out))); \
+    \
+    __ ldc1(f0, MemOperand(a0, OFFSET_OF(T, err3_in))); \
+    __ ctc1(zero_reg, FCSR); \
+    __ x##_w_d(f0, f0); \
+    __ cfc1(a2, FCSR); \
+    __ sw(a2, MemOperand(a0, OFFSET_OF(T, x##_err3_out))); \
+    \
+    __ ldc1(f0, MemOperand(a0, OFFSET_OF(T, err4_in))); \
+    __ ctc1(zero_reg, FCSR); \
+    __ x##_w_d(f0, f0); \
+    __ cfc1(a2, FCSR); \
+    __ sw(a2, MemOperand(a0, OFFSET_OF(T, x##_err4_out))); \
+    __ swc1(f0, MemOperand(a0, OFFSET_OF(T, x##_invalid_result)));
 
-  RUN_ROUND_TEST(round)
-  RUN_ROUND_TEST(floor)
-  RUN_ROUND_TEST(ceil)
-  RUN_ROUND_TEST(trunc)
-  RUN_ROUND_TEST(cvt)
+    RUN_ROUND_TEST(round)
+    RUN_ROUND_TEST(floor)
+    RUN_ROUND_TEST(ceil)
+    RUN_ROUND_TEST(trunc)
+    RUN_ROUND_TEST(cvt)
 
-  // Restore FCSR.
-  __ ctc1(a1, FCSR);
+    // Restore FCSR.
+    __ ctc1(a1, FCSR);
 
-#undef RUN_ROUND_TEST
+    __ jr(ra);
+    __ nop();
 
-  __ jr(ra);
-  __ nop();
+    CodeDesc desc;
+    assm.GetCode(&desc);
+    Object* code = HEAP->CreateCode(
+        desc,
+        Code::ComputeFlags(Code::STUB),
+        Handle<Object>(HEAP->undefined_value()))->ToObjectChecked();
+    CHECK(code->IsCode());
+    F3 f = FUNCTION_CAST<F3>(Code::cast(code)->entry());
 
-  CodeDesc desc;
-  assm.GetCode(&desc);
-  Object* code = Heap::CreateCode(
-      desc,
-      Code::ComputeFlags(Code::STUB),
-      Handle<Object>(Heap::undefined_value()))->ToObjectChecked();
-  CHECK(code->IsCode());
-#ifdef DEBUG
-  Code::cast(code)->Print();
-#endif
-  F3 f = FUNCTION_CAST<F3>(Code::cast(code)->entry());
+    t.round_up_in = 123.51;
+    t.round_down_in = 123.49;
+    t.neg_round_up_in = -123.5;
+    t.neg_round_down_in = -123.49;
+    t.err1_in = 123.51;
+    t.err2_in = 1;
+    t.err3_in = static_cast<double>(1) + 0xFFFFFFFF;
+    t.err4_in = NAN;
 
-  t.round_up_in = 123.51;
-  t.round_down_in = 123.49;
-  t.neg_round_up_in = -123.5;
-  t.neg_round_down_in = -123.49;
-  t.err1_in = 123.51;
-  t.err2_in = 1;
-  t.err3_in = static_cast<double>(1) + 0xFFFFFFFF;
-  t.err4_in = NAN;
+    Object* dummy = CALL_GENERATED_CODE(f, &t, 0, 0, 0, 0);
+    USE(dummy);
 
-  Object* dummy = CALL_GENERATED_CODE(f, &t, 0, 0, 0, 0);
-  USE(dummy);
+#define GET_FPU_ERR(x) (static_cast<int>(x & kFCSRFlagMask))
+#define CHECK_ROUND_RESULT(type) \
+  CHECK(GET_FPU_ERR(t.type##_err1_out) & kFCSRInexactFlagMask); \
+  CHECK_EQ(0, GET_FPU_ERR(t.type##_err2_out)); \
+  CHECK(GET_FPU_ERR(t.type##_err3_out) & kFCSRInvalidOpFlagMask); \
+  CHECK(GET_FPU_ERR(t.type##_err4_out) & kFCSRInvalidOpFlagMask); \
+  CHECK_EQ(kFPUInvalidResult, t.type##_invalid_result);
 
-#define GET_FPU_ERR(x) \
-  ((x >> 2) & (32 - 1))
-
-  CHECK_EQ(124, t.round_up_out);
-  CHECK_EQ(123, t.round_down_out);
-  CHECK_EQ(-124, t.neg_round_up_out);
-  CHECK_EQ(-123, t.neg_round_down_out);
-
-  // Inaccurate.
-  CHECK_EQ(1, GET_FPU_ERR(t.round_err1_out));
-  // No error.
-  CHECK_EQ(0, GET_FPU_ERR(t.round_err2_out));
-  // Invalid operation.
-  CHECK_EQ(16, GET_FPU_ERR(t.round_err3_out));
-  CHECK_EQ(16, GET_FPU_ERR(t.round_err4_out));
-  CHECK_EQ(kFPUInvalidResult, t.round_invalid_result);
-
-  CHECK_EQ(123, t.floor_up_out);
-  CHECK_EQ(123, t.floor_down_out);
-  CHECK_EQ(-124, t.neg_floor_up_out);
-  CHECK_EQ(-124, t.neg_floor_down_out);
-
-  // Inaccurate.
-  CHECK_EQ(1, GET_FPU_ERR(t.floor_err1_out));
-  // No error.
-  CHECK_EQ(0, GET_FPU_ERR(t.floor_err2_out));
-  // Invalid operation.
-  CHECK_EQ(16, GET_FPU_ERR(t.floor_err3_out));
-  CHECK_EQ(16, GET_FPU_ERR(t.floor_err4_out));
-  CHECK_EQ(kFPUInvalidResult, t.floor_invalid_result);
-
-  CHECK_EQ(124, t.ceil_up_out);
-  CHECK_EQ(124, t.ceil_down_out);
-  CHECK_EQ(-123, t.neg_ceil_up_out);
-  CHECK_EQ(-123, t.neg_ceil_down_out);
-
-  // Inaccurate.
-  CHECK_EQ(1, GET_FPU_ERR(t.ceil_err1_out));
-  // No error.
-  CHECK_EQ(0, GET_FPU_ERR(t.ceil_err2_out));
-  // Invalid operation.
-  CHECK_EQ(16, GET_FPU_ERR(t.ceil_err3_out));
-  CHECK_EQ(16, GET_FPU_ERR(t.ceil_err4_out));
-  CHECK_EQ(kFPUInvalidResult, t.ceil_invalid_result);
-
-  // In rounding mode 0 cvt should behave like round.
-  CHECK_EQ(t.round_up_out, t.cvt_up_out);
-  CHECK_EQ(t.round_down_out, t.cvt_down_out);
-  CHECK_EQ(t.neg_round_up_out, t.neg_cvt_up_out);
-  CHECK_EQ(t.neg_round_down_out, t.neg_cvt_down_out);
-
-  // Inaccurate.
-  CHECK_EQ(1, GET_FPU_ERR(t.cvt_err1_out));
-  // No error.
-  CHECK_EQ(0, GET_FPU_ERR(t.cvt_err2_out));
-  // Invalid operation.
-  CHECK_EQ(16, GET_FPU_ERR(t.cvt_err3_out));
-  CHECK_EQ(16, GET_FPU_ERR(t.cvt_err4_out));
-  CHECK_EQ(kFPUInvalidResult, t.cvt_invalid_result);
+    CHECK_ROUND_RESULT(round);
+    CHECK_ROUND_RESULT(floor);
+    CHECK_ROUND_RESULT(ceil);
+    CHECK_ROUND_RESULT(cvt);
+  }
 }
 
+
+TEST(MIPS15) {
+  // Test chaining of label usages within instructions (issue 1644).
+  InitializeVM();
+  v8::HandleScope scope;
+  Assembler assm(Isolate::Current(), NULL, 0);
+
+  Label target;
+  __ beq(v0, v1, &target);
+  __ nop();
+  __ bne(v0, v1, &target);
+  __ nop();
+  __ bind(&target);
+  __ nop();
+}
 
 #undef __

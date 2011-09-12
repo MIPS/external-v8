@@ -30,7 +30,7 @@
 
 // The original source code covered by the above license above has been
 // modified significantly by Google Inc.
-// Copyright 2010 the V8 project authors. All rights reserved.
+// Copyright 2011 the V8 project authors. All rights reserved.
 
 
 #include "v8.h"
@@ -43,13 +43,53 @@
 namespace v8 {
 namespace internal {
 
-
-// Safe default is no features.
+#ifdef DEBUG
+bool CpuFeatures::initialized_ = false;
+#endif
 unsigned CpuFeatures::supported_ = 0;
-unsigned CpuFeatures::enabled_ = 0;
 unsigned CpuFeatures::found_by_runtime_probing_ = 0;
 
-void CpuFeatures::Probe(bool portable) {
+
+// Get the CPU features enabled by the build. For cross compilation the
+// preprocessor symbols CAN_USE_FPU_INSTRUCTIONS
+// can be defined to enable FPU instructions when building the
+// snapshot.
+static uint64_t CpuFeaturesImpliedByCompiler() {
+  uint64_t answer = 0;
+#ifdef CAN_USE_FPU_INSTRUCTIONS
+  answer |= 1u << FPU;
+#endif  // def CAN_USE_FPU_INSTRUCTIONS
+
+#ifdef __mips__
+  // If the compiler is allowed to use FPU then we can use FPU too in our code
+  // generation even when generating snapshots.  This won't work for cross
+  // compilation.
+#if(defined(__mips_hard_float) && __mips_hard_float != 0)
+  answer |= 1u << FPU;
+#endif  // defined(__mips_hard_float) && __mips_hard_float != 0
+#endif  // def __mips__
+
+  return answer;
+}
+
+
+void CpuFeatures::Probe() {
+  ASSERT(!initialized_);
+#ifdef DEBUG
+  initialized_ = true;
+#endif
+
+  // Get the features implied by the OS and the compiler settings. This is the
+  // minimal set of features which is also allowed for generated code in the
+  // snapshot.
+  supported_ |= OS::CpuFeaturesImpliedByPlatform();
+  supported_ |= CpuFeaturesImpliedByCompiler();
+
+  if (Serializer::enabled()) {
+    // No probing for features if we might serialize (generate snapshot).
+    return;
+  }
+
   // If the compiler is allowed to use fpu then we can use fpu too in our
   // code generation.
 #if !defined(__mips__)
@@ -58,19 +98,13 @@ void CpuFeatures::Probe(bool portable) {
       supported_ |= 1u << FPU;
   }
 #else
-  if (portable && Serializer::enabled()) {
-    supported_ |= OS::CpuFeaturesImpliedByPlatform();
-    return;  // No features if we might serialize.
-  }
-
+  // Probe for additional features not already known to be available.
   if (OS::MipsCpuHasFeature(FPU)) {
     // This implementation also sets the FPU flags if
     // runtime detection of FPU returns true.
     supported_ |= 1u << FPU;
     found_by_runtime_probing_ |= 1u << FPU;
   }
-
-  if (!portable) found_by_runtime_probing_ = 0;
 #endif
 }
 
@@ -179,7 +213,7 @@ Operand::Operand(Handle<Object> handle) {
   rm_ = no_reg;
   // Verify all Objects referred by code are NOT in new space.
   Object* obj = *handle;
-  ASSERT(!Heap::InNewSpace(obj));
+  ASSERT(!HEAP->InNewSpace(obj));
   if (obj->IsHeapObject()) {
     imm32_ = reinterpret_cast<intptr_t>(handle.location());
     rmode_ = RelocInfo::EMBEDDED_OBJECT;
@@ -199,8 +233,6 @@ MemOperand::MemOperand(Register rm, int32_t offset) : Operand(rm) {
 // -----------------------------------------------------------------------------
 // Specific instructions, constants, and masks.
 
-static const int kMinimalBufferSize = 4*KB;
-static byte* spare_buffer_ = NULL;
 static const int kNegOffset = 0x00008000;
 // addiu(sp, sp, 4) aka Pop() operation or part of Pop(r)
 // operations as post-increment of sp.
@@ -234,19 +266,22 @@ const Instr kLwSwInstrArgumentMask  = ~kLwSwInstrTypeMask;
 const Instr kLwSwOffsetMask = kImm16Mask;
 
 
-Assembler::Assembler(void* buffer, int buffer_size)
-    : positions_recorder_(this),
-      allow_peephole_optimization_(false),
+// Spare buffer.
+static const int kMinimalBufferSize = 4 * KB;
+
+
+Assembler::Assembler(Isolate* arg_isolate, void* buffer, int buffer_size)
+    : AssemblerBase(arg_isolate),
+      positions_recorder_(this),
       emit_debug_code_(FLAG_debug_code) {
-  allow_peephole_optimization_ = FLAG_peephole_optimization;
   if (buffer == NULL) {
     // Do our own buffer management.
     if (buffer_size <= kMinimalBufferSize) {
       buffer_size = kMinimalBufferSize;
 
-      if (spare_buffer_ != NULL) {
-        buffer = spare_buffer_;
-        spare_buffer_ = NULL;
+      if (isolate()->assembler_spare_buffer() != NULL) {
+        buffer = isolate()->assembler_spare_buffer();
+        isolate()->set_assembler_spare_buffer(NULL);
       }
     }
     if (buffer == NULL) {
@@ -277,17 +312,21 @@ Assembler::Assembler(void* buffer, int buffer_size)
   // for BlockTrampolinePoolScope buffer.
   next_buffer_check_ = kMaxBranchOffset - kTrampolineSlotsSize * 16;
   internal_trampoline_exception_ = false;
+  last_bound_pos_ = 0;
 
   trampoline_emitted_ = false;
   unbound_labels_count_ = 0;
   block_buffer_growth_ = false;
+
+  ClearRecordedAstId();
 }
 
 
 Assembler::~Assembler() {
   if (own_buffer_) {
-    if (spare_buffer_ == NULL && buffer_size_ == kMinimalBufferSize) {
-      spare_buffer_ = buffer_;
+    if (isolate()->assembler_spare_buffer() == NULL &&
+        buffer_size_ == kMinimalBufferSize) {
+      isolate()->set_assembler_spare_buffer(buffer_);
     } else {
       DeleteArray(buffer_);
     }
@@ -391,6 +430,11 @@ uint32_t Assembler::GetFunction(Instr instr) {
 }
 
 
+uint32_t Assembler::GetFunctionField(Instr instr) {
+  return instr & kFunctionFieldMask;
+}
+
+
 uint32_t Assembler::GetImmediate16(Instr instr) {
   return instr & kImm16Mask;
 }
@@ -466,11 +510,53 @@ bool Assembler::IsBranch(Instr instr) {
       opcode == BEQL ||
       opcode == BNEL ||
       opcode == BLEZL ||
-      opcode == BGTZL||
+      opcode == BGTZL ||
       (opcode == REGIMM && (rt_field == BLTZ || rt_field == BGEZ ||
                             rt_field == BLTZAL || rt_field == BGEZAL)) ||
       (opcode == COP1 && rs_field == BC1) ||  // Coprocessor branch.
       label_constant == 0;  // Emitted label const in reg-exp engine.
+}
+
+
+bool Assembler::IsBeq(Instr instr) {
+  return GetOpcodeField(instr) == BEQ;
+}
+
+
+bool Assembler::IsBne(Instr instr) {
+  return GetOpcodeField(instr) == BNE;
+}
+
+
+bool Assembler::IsJump(Instr instr) {
+  uint32_t opcode   = GetOpcodeField(instr);
+  uint32_t rt_field = GetRtField(instr);
+  uint32_t rd_field = GetRdField(instr);
+  uint32_t function_field = GetFunctionField(instr);
+  // Checks if the instruction is a jump.
+  return opcode == J || opcode == JAL ||
+      (opcode == SPECIAL && rt_field == 0 &&
+      ((function_field == JALR) || (rd_field == 0 && (function_field == JR))));
+}
+
+
+bool Assembler::IsJ(Instr instr) {
+  uint32_t opcode = GetOpcodeField(instr);
+  // Checks if the instruction is a jump.
+  return opcode == J;
+}
+
+
+bool Assembler::IsJal(Instr instr) {
+  return GetOpcodeField(instr) == JAL;
+}
+
+bool Assembler::IsJr(Instr instr) {
+  return GetOpcodeField(instr) == SPECIAL && GetFunctionField(instr) == JR;
+}
+
+bool Assembler::IsJalr(Instr instr) {
+  return GetOpcodeField(instr) == SPECIAL && GetFunctionField(instr) == JALR;
 }
 
 
@@ -486,6 +572,7 @@ bool Assembler::IsOri(Instr instr) {
   // Checks if the instruction is a load upper immediate.
   return opcode == ORI;
 }
+
 
 bool Assembler::IsNop(Instr instr, unsigned int type) {
   // See Assembler::nop(type).
@@ -511,19 +598,6 @@ bool Assembler::IsNop(Instr instr, unsigned int type) {
 int32_t Assembler::GetBranchOffset(Instr instr) {
   ASSERT(IsBranch(instr));
   return ((int16_t)(instr & kImm16Mask)) << 2;
-}
-
-
-int32_t Assembler::GetJumpOffset(Address addr_instr) {
-  byte *instruction_address = reinterpret_cast<byte*>(addr_instr);
-  Instr instr_lui = instr_at(instruction_address - 2 * Assembler::kInstrSize);
-  Instr instr_ori = instr_at(instruction_address - 1 * Assembler::kInstrSize);
-  ASSERT(IsLui(instr_lui) && IsOri(instr_ori));
-  int32_t imm = (instr_lui & static_cast<int32_t>(kImm16Mask)) << kLuiShift;
-  imm |= (instr_ori & static_cast<int32_t>(kImm16Mask));
-  uint32_t instr_address = reinterpret_cast<int32_t>(addr_instr);
-  int32_t delta = imm - instr_address;
-  return delta;
 }
 
 
@@ -568,6 +642,11 @@ bool Assembler::IsAddImmediate(Instr instr) {
 Instr Assembler::SetAddImmediateOffset(Instr instr, int16_t offset) {
   ASSERT(IsAddImmediate(instr));
   return ((instr & ~kImm16Mask) | (offset & kImm16Mask));
+}
+
+
+bool Assembler::IsAndImmediate(Instr instr) {
+  return GetOpcodeField(instr) == ANDI;
 }
 
 
@@ -747,10 +826,10 @@ void Assembler::bind(Label* L) {
 void Assembler::next(Label* L) {
   ASSERT(L->is_linked());
   int link = target_at(L->pos());
-  ASSERT(link > 0 || link == kEndOfChain);
   if (link == kEndOfChain) {
     L->Unuse();
-  } else if (link > 0) {
+  } else {
+    ASSERT(link >= 0);
     L->link_to(link);
   }
 }
@@ -874,7 +953,7 @@ void Assembler::GenInstrImmediate(Opcode opcode,
 
 
 void Assembler::GenInstrJump(Opcode opcode,
-                              uint32_t address) {
+                             uint32_t address) {
   BlockTrampolinePoolScope block_trampoline_pool(this);
   ASSERT(is_uint26(address));
   Instr instr = opcode | address;
@@ -1124,158 +1203,6 @@ void Assembler::addu(Register rd, Register rs, Register rt) {
 
 void Assembler::addiu(Register rd, Register rs, int32_t j) {
   GenInstrImmediate(ADDIU, rs, rd, j);
-
-  // Eliminate pattern: push(r), pop().
-  //   addiu(sp, sp, Operand(-kPointerSize));
-  //   sw(src, MemOperand(sp, 0);
-  //   addiu(sp, sp, Operand(kPointerSize));
-  // Both instructions can be eliminated.
-  if (can_peephole_optimize(3) &&
-      // Pattern.
-      instr_at(pc_ - 1 * kInstrSize) == kPopInstruction &&
-      (instr_at(pc_ - 2 * kInstrSize) & ~kRtMask) == kPushRegPattern &&
-      (instr_at(pc_ - 3 * kInstrSize)) == kPushInstruction) {
-    pc_ -= 3 * kInstrSize;
-    if (FLAG_print_peephole_optimization) {
-      PrintF("%x push(reg)/pop() eliminated\n", pc_offset());
-    }
-  }
-
-  // Eliminate pattern: push(ry), pop(rx).
-  //   addiu(sp, sp, -kPointerSize)
-  //   sw(ry, MemOperand(sp, 0)
-  //   lw(rx, MemOperand(sp, 0)
-  //   addiu(sp, sp, kPointerSize);
-  // Both instructions can be eliminated if ry = rx.
-  // If ry != rx, a register copy from ry to rx is inserted
-  // after eliminating the push and the pop instructions.
-  if (can_peephole_optimize(4)) {
-    Instr pre_push_sp_set = instr_at(pc_ - 4 * kInstrSize);
-    Instr push_instr = instr_at(pc_ - 3 * kInstrSize);
-    Instr pop_instr = instr_at(pc_ - 2 * kInstrSize);
-    Instr post_pop_sp_set = instr_at(pc_ - 1 * kInstrSize);
-
-    if (IsPush(push_instr) &&
-        IsPop(pop_instr) && pre_push_sp_set == kPushInstruction &&
-        post_pop_sp_set == kPopInstruction) {
-      if ((pop_instr & kRtMask) != (push_instr & kRtMask)) {
-        // For consecutive push and pop on different registers,
-        // we delete both the push & pop and insert a register move.
-        // push ry, pop rx --> mov rx, ry.
-        Register reg_pushed, reg_popped;
-        reg_pushed = GetRtReg(push_instr);
-        reg_popped = GetRtReg(pop_instr);
-        pc_ -= 4 * kInstrSize;
-        // Insert a mov instruction, which is better than a pair of push & pop.
-        or_(reg_popped, reg_pushed, zero_reg);
-        if (FLAG_print_peephole_optimization) {
-          PrintF("%x push/pop (diff reg) replaced by a reg move\n",
-                 pc_offset());
-        }
-      } else {
-        // For consecutive push and pop on the same register,
-        // both the push and the pop can be deleted.
-        pc_ -= 4 * kInstrSize;
-        if (FLAG_print_peephole_optimization) {
-          PrintF("%x push/pop (same reg) eliminated\n", pc_offset());
-        }
-      }
-    }
-  }
-
-  if (can_peephole_optimize(5)) {
-    Instr pre_push_sp_set = instr_at(pc_ - 5 * kInstrSize);
-    Instr mem_write_instr = instr_at(pc_ - 4 * kInstrSize);
-    Instr lw_instr = instr_at(pc_ - 3 * kInstrSize);
-    Instr mem_read_instr = instr_at(pc_ - 2 * kInstrSize);
-    Instr post_pop_sp_set = instr_at(pc_ - 1 * kInstrSize);
-
-    if (IsPush(mem_write_instr) &&
-        pre_push_sp_set == kPushInstruction &&
-        IsPop(mem_read_instr) &&
-        post_pop_sp_set == kPopInstruction) {
-      if ((IsLwRegFpOffset(lw_instr) ||
-        IsLwRegFpNegOffset(lw_instr))) {
-        if ((mem_write_instr & kRtMask) ==
-              (mem_read_instr & kRtMask)) {
-          // Pattern: push & pop from/to same register,
-          // with a fp + offset lw in between.
-          //
-          // The following:
-          // addiu sp, sp, -4
-          // sw rx, [sp, #0]!
-          // lw rz, [fp, #-24]
-          // lw rx, [sp, 0],
-          // addiu sp, sp, 4
-          //
-          // Becomes:
-          // if(rx == rz)
-          //   delete all
-          // else
-          //   lw rz, [fp, #-24]
-
-          if ((mem_write_instr & kRtMask) == (lw_instr & kRtMask)) {
-            pc_ -= 5 * kInstrSize;
-          } else {
-            pc_ -= 5 * kInstrSize;
-            // Reinsert back the lw rz.
-            emit(lw_instr);
-          }
-          if (FLAG_print_peephole_optimization) {
-            PrintF("%x push/pop -dead ldr fp + offset in middle\n",
-                   pc_offset());
-          }
-        } else {
-          // Pattern: push & pop from/to different registers
-          // with a fp + offset lw in between.
-          //
-          // The following:
-          // addiu sp, sp ,-4
-          // sw rx, [sp, 0]
-          // lw rz, [fp, #-24]
-          // lw ry, [sp, 0]
-          // addiu sp, sp, 4
-          //
-          // Becomes:
-          // if(ry == rz)
-          //   mov ry, rx;
-          // else if(rx != rz)
-          //   lw rz, [fp, #-24]
-          //   mov ry, rx
-          // else if((ry != rz) || (rx == rz)) becomes:
-          //   mov ry, rx
-          //   lw rz, [fp, #-24]
-
-          Register reg_pushed, reg_popped;
-          if ((mem_read_instr & kRtMask) == (lw_instr & kRtMask)) {
-            reg_pushed = GetRtReg(mem_write_instr);
-            reg_popped = GetRtReg(mem_read_instr);
-            pc_ -= 5 * kInstrSize;
-            or_(reg_popped, reg_pushed, zero_reg);  // Move instruction.
-          } else if ((mem_write_instr & kRtMask)
-                                != (lw_instr & kRtMask)) {
-            reg_pushed = GetRtReg(mem_write_instr);
-            reg_popped = GetRtReg(mem_read_instr);
-            pc_ -= 5 * kInstrSize;
-            emit(lw_instr);
-            or_(reg_popped, reg_pushed, zero_reg);  // Move instruction.
-          } else if (((mem_read_instr & kRtMask)
-                                     != (lw_instr & kRtMask)) ||
-                    ((mem_write_instr & kRtMask)
-                                     == (lw_instr & kRtMask)) ) {
-            reg_pushed = GetRtReg(mem_write_instr);
-            reg_popped = GetRtReg(mem_read_instr);
-            pc_ -= 5 * kInstrSize;
-            or_(reg_popped, reg_pushed, zero_reg);  // Move instruction.
-            emit(lw_instr);
-          }
-          if (FLAG_print_peephole_optimization) {
-            PrintF("%x push/pop (ldr fp+off in middle)\n", pc_offset());
-          }
-        }
-      }
-    }
-  }
 }
 
 
@@ -1463,54 +1390,6 @@ void Assembler::lw(Register rd, const MemOperand& rs) {
     LoadRegPlusOffsetToAt(rs);
     GenInstrImmediate(LW, at, rd, 0);  // Equiv to lw(rd, MemOperand(at, 0));
   }
-
-  if (can_peephole_optimize(2)) {
-    Instr sw_instr = instr_at(pc_ - 2 * kInstrSize);
-    Instr lw_instr = instr_at(pc_ - 1 * kInstrSize);
-
-    if ((IsSwRegFpOffset(sw_instr) &&
-         IsLwRegFpOffset(lw_instr)) ||
-       (IsSwRegFpNegOffset(sw_instr) &&
-         IsLwRegFpNegOffset(lw_instr))) {
-      if ((lw_instr & kLwSwInstrArgumentMask) ==
-            (sw_instr & kLwSwInstrArgumentMask)) {
-        // Pattern: Lw/sw same fp+offset, same register.
-        //
-        // The following:
-        // sw rx, [fp, #-12]
-        // lw rx, [fp, #-12]
-        //
-        // Becomes:
-        // sw rx, [fp, #-12]
-
-        pc_ -= 1 * kInstrSize;
-        if (FLAG_print_peephole_optimization) {
-          PrintF("%x sw/lw (fp + same offset), same reg\n", pc_offset());
-        }
-      } else if ((lw_instr & kLwSwOffsetMask) ==
-                 (sw_instr & kLwSwOffsetMask)) {
-        // Pattern: Lw/sw same fp+offset, different register.
-        //
-        // The following:
-        // sw rx, [fp, #-12]
-        // lw ry, [fp, #-12]
-        //
-        // Becomes:
-        // sw rx, [fp, #-12]
-        // mov ry, rx
-
-        Register reg_stored, reg_loaded;
-        reg_stored = GetRtReg(sw_instr);
-        reg_loaded = GetRtReg(lw_instr);
-        pc_ -= 1 * kInstrSize;
-        // Insert a mov instruction, which is better than lw.
-        or_(reg_loaded, reg_stored, zero_reg);  // Move instruction.
-        if (FLAG_print_peephole_optimization) {
-          PrintF("%x sw/lw (fp + same offset), diff reg \n", pc_offset());
-        }
-      }
-    }
-  }
 }
 
 
@@ -1551,23 +1430,6 @@ void Assembler::sw(Register rd, const MemOperand& rs) {
     LoadRegPlusOffsetToAt(rs);
     GenInstrImmediate(SW, at, rd, 0);  // Equiv to sw(rd, MemOperand(at, 0));
   }
-
-  // Eliminate pattern: pop(), push(r).
-  //     addiu sp, sp, Operand(kPointerSize);
-  //     addiu sp, sp, Operand(-kPointerSize);
-  // ->  sw r, MemOpernad(sp, 0);
-  if (can_peephole_optimize(3) &&
-     // Pattern.
-     instr_at(pc_ - 1 * kInstrSize) ==
-       (kPushRegPattern | (rd.code() << kRtShift)) &&
-     instr_at(pc_ - 2 * kInstrSize) == kPushInstruction &&
-     instr_at(pc_ - 3 * kInstrSize) == kPopInstruction) {
-    pc_ -= 3 * kInstrSize;
-    GenInstrImmediate(SW, rs.rm(), rd, rs.offset_);
-    if (FLAG_print_peephole_optimization) {
-      PrintF("%x pop()/push(reg) eliminated\n", pc_offset());
-    }
-  }
 }
 
 
@@ -1589,10 +1451,34 @@ void Assembler::lui(Register rd, int32_t j) {
 //-------------Misc-instructions--------------
 
 // Break / Trap instructions.
-void Assembler::break_(uint32_t code) {
+void Assembler::break_(uint32_t code, bool break_as_stop) {
   ASSERT((code & ~0xfffff) == 0);
+  // We need to invalidate breaks that could be stops as well because the
+  // simulator expects a char pointer after the stop instruction.
+  // See constants-mips.h for explanation.
+  ASSERT((break_as_stop &&
+          code <= kMaxStopCode &&
+          code > kMaxWatchpointCode) ||
+         (!break_as_stop &&
+          (code > kMaxStopCode ||
+           code <= kMaxWatchpointCode)));
   Instr break_instr = SPECIAL | BREAK | (code << 6);
   emit(break_instr);
+}
+
+
+void Assembler::stop(const char* msg, uint32_t code) {
+  ASSERT(code > kMaxWatchpointCode);
+  ASSERT(code <= kMaxStopCode);
+#if defined(V8_HOST_ARCH_MIPS)
+  break_(0x54321);
+#else  // V8_HOST_ARCH_MIPS
+  BlockTrampolinePoolFor(2);
+  // The Simulator will handle the stop instruction and get the message address.
+  // On MIPS stop() is just a special kind of break_().
+  break_(code, true);
+  emit(reinterpret_cast<Instr>(msg));
+#endif
 }
 
 
@@ -1623,8 +1509,8 @@ void Assembler::tlt(Register rs, Register rt, uint16_t code) {
 void Assembler::tltu(Register rs, Register rt, uint16_t code) {
   ASSERT(is_uint10(code));
   Instr instr =
-      SPECIAL | TLTU | rs.code() << kRsShift | rt.code() << kRtShift |
-      code << 6;
+      SPECIAL | TLTU | rs.code() << kRsShift
+      | rt.code() << kRtShift | code << 6;
   emit(instr);
 }
 
@@ -1691,14 +1577,14 @@ void Assembler::movn(Register rd, Register rs, Register rt) {
 
 void Assembler::movt(Register rd, Register rs, uint16_t cc) {
   Register rt;
-  rt.code_ = (cc & 0x0003) << 2 | 1;
+  rt.code_ = (cc & 0x0007) << 2 | 1;
   GenInstrRegister(SPECIAL, rs, rt, rd, 0, MOVCI);
 }
 
 
 void Assembler::movf(Register rd, Register rs, uint16_t cc) {
   Register rt;
-  rt.code_ = (cc & 0x0003) << 2 | 0;
+  rt.code_ = (cc & 0x0007) << 2 | 0;
   GenInstrRegister(SPECIAL, rs, rt, rd, 0, MOVCI);
 }
 
@@ -1778,6 +1664,13 @@ void Assembler::cfc1(Register rt, FPUControlRegister fs) {
   GenInstrRegister(COP1, CFC1, rt, fs);
 }
 
+void Assembler::DoubleAsTwoUInt32(double d, uint32_t* lo, uint32_t* hi) {
+  uint64_t i;
+  memcpy(&i, &d, 8);
+
+  *lo = i & 0xffffffff;
+  *hi = i >> 32;
+}
 
 // Arithmetic.
 
@@ -1990,6 +1883,7 @@ void Assembler::bc1f(int16_t offset, uint16_t cc) {
 
 
 void Assembler::bc1t(int16_t offset, uint16_t cc) {
+  ASSERT(CpuFeatures::IsEnabled(FPU));
   ASSERT(is_uint3(cc));
   Instr instr = COP1 | BC1 | cc << 18 | 1 << 16 | (offset & kImm16Mask);
   emit(instr);
@@ -2135,13 +2029,24 @@ void Assembler::RecordRelocInfo(RelocInfo::Mode rmode, intptr_t data) {
   }
   if (rinfo.rmode() != RelocInfo::NONE) {
     // Don't record external references unless the heap will be serialized.
-    if (rmode == RelocInfo::EXTERNAL_REFERENCE &&
-        !Serializer::enabled() &&
-        !FLAG_debug_code) {
-      return;
+    if (rmode == RelocInfo::EXTERNAL_REFERENCE) {
+#ifdef DEBUG
+      if (!Serializer::enabled()) {
+        Serializer::TooLateToEnableNow();
+      }
+#endif
+      if (!Serializer::enabled() && !emit_debug_code()) {
+        return;
+      }
     }
     ASSERT(buffer_space() >= kMaxRelocSize);  // Too late to grow buffer here.
-    reloc_info_writer.Write(&rinfo);
+    if (rmode == RelocInfo::CODE_TARGET_WITH_ID) {
+      RelocInfo reloc_info_with_ast_id(pc_, rmode, RecordedAstId());
+      ClearRecordedAstId();
+      reloc_info_writer.Write(&reloc_info_with_ast_id);
+    } else {
+      reloc_info_writer.Write(&rinfo);
+    }
   }
 }
 
@@ -2182,7 +2087,6 @@ void Assembler::CheckTrampolinePool() {
       for (int i = 0; i < unbound_labels_count_; i++) {
         uint32_t imm32;
         imm32 = jump_address(&after_pool);
-
         { BlockGrowBufferScope block_buf_growth(this);
           // Buffer growth (and relocation) must be blocked for internal
           // references until associated instructions are emitted and available
@@ -2215,54 +2119,17 @@ void Assembler::CheckTrampolinePool() {
 Address Assembler::target_address_at(Address pc) {
   Instr instr1 = instr_at(pc);
   Instr instr2 = instr_at(pc + kInstrSize);
-  // Check we have 2 instructions generated by li.
-  ASSERT((GetOpcodeField(instr1) == LUI && GetOpcodeField(instr2) == ORI) ||
-         ((instr1 == nopInstr) && (GetOpcodeField(instr2) == ADDI ||
-                            GetOpcodeField(instr2) == ORI ||
-                            GetOpcodeField(instr2) == LUI)));
-  // Interpret these 2 instructions.
-  if (instr1 == nopInstr) {
-    if (GetOpcodeField(instr2) == ADDI) {
-      return reinterpret_cast<Address>((GetImmediate16(instr2) << 16) >> 16);
-    } else if (GetOpcodeField(instr2) == ORI) {
-      return reinterpret_cast<Address>(GetImmediate16(instr2));
-    } else if (GetOpcodeField(instr2) == LUI) {
-      return reinterpret_cast<Address>(GetImmediate16(instr2) << 16);
-    }
-  } else if ((GetOpcodeField(instr1) == LUI) &&
-             (GetOpcodeField(instr2) == ORI)) {
-    // 32 bit value.
+  // Interpret 2 instructions generated by li: lui/ori
+  if ((GetOpcodeField(instr1) == LUI) && (GetOpcodeField(instr2) == ORI)) {
+    // Assemble the 32 bit value.
     return reinterpret_cast<Address>(
         (GetImmediate16(instr1) << 16) | GetImmediate16(instr2));
   }
 
-  // We should never get here.
+  // We should never get here, force a bad address if we do.
   UNREACHABLE();
   return (Address)0x0;
 }
-
-
-// TODO(plind): move these to correct place.
-uint32_t Assembler::GetFunctionField(Instr instr) {
-  return instr & kFunctionFieldMask;
-}
-
-bool Assembler::IsJ(Instr instr) {
-  return GetOpcodeField(instr) == J;
-}
-
-bool Assembler::IsJal(Instr instr) {
-  return GetOpcodeField(instr) == JAL;
-}
-
-bool Assembler::IsJr(Instr instr) {
-  return GetOpcodeField(instr) == SPECIAL && GetFunctionField(instr) == JR;
-}
-
-bool Assembler::IsJalr(Instr instr) {
-  return GetOpcodeField(instr) == SPECIAL && GetFunctionField(instr) == JALR;
-}
-
 
 
 // On Mips, a target address is stored in a lui/ori instruction pair, each
@@ -2302,8 +2169,8 @@ void Assembler::set_target_address_at(Address pc, Address target) {
   // load the register, but that code is left, since it makes it easy to
   // revert this process. A further optimization could try replacing the
   // li sequence with nops.
-  // There is an assumption that the rt-code from instr2 is the register
-  // used for the jalr/jr. Finally, we have to skip 'jr ra', which is
+  // This optimization can only be applied if the rt-code from instr2 is the
+  // register used for the jalr/jr. Finally, we have to skip 'jr ra', which is
   // mips return. Occasionally this lands after an li().
 
   Instr instr3 = instr_at(pc + 2 * kInstrSize);
@@ -2330,14 +2197,14 @@ void Assembler::set_target_address_at(Address pc, Address target) {
 
   if (IsJalr(instr3)) {
     // Try to convert JALR to JAL.
-    if (in_range) {
+    if (in_range && GetRt(instr2) == GetRs(instr3)) {
       *(p+2) = JAL | target_field;
       patched_jump = true;
     }
   } else if (IsJr(instr3)) {
     // Try to convert JR to J, skip returns (jr ra).
     bool is_ret = static_cast<int>(GetRs(instr3)) == ra.code();
-    if (in_range && !is_ret) {
+    if (in_range && !is_ret && GetRt(instr2) == GetRs(instr3)) {
       *(p+2) = J | target_field;
       patched_jump = true;
     }

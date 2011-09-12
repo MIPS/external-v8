@@ -131,6 +131,16 @@ class V8EXPORT CpuProfile {
 
   /** Returns the root node of the top down call tree. */
   const CpuProfileNode* GetTopDownRoot() const;
+
+  /**
+   * Deletes the profile and removes it from CpuProfiler's list.
+   * All pointers to nodes previously returned become invalid.
+   * Profiles with the same uid but obtained using different
+   * security token are not deleted, but become inaccessible
+   * using FindProfile method. It is embedder's responsibility
+   * to call Delete on these profiles.
+   */
+  void Delete();
 };
 
 
@@ -181,6 +191,13 @@ class V8EXPORT CpuProfiler {
   static const CpuProfile* StopProfiling(
       Handle<String> title,
       Handle<Value> security_token = Handle<Value>());
+
+  /**
+   * Deletes all existing profiles, also cancelling all profiling
+   * activity.  All previously returned pointers to profiles and their
+   * contents become invalid after this call.
+   */
+  static void DeleteAllProfiles();
 };
 
 
@@ -189,7 +206,7 @@ class HeapGraphNode;
 
 /**
  * HeapSnapshotEdge represents a directed connection between heap
- * graph nodes: from retaners to retained nodes.
+ * graph nodes: from retainers to retained nodes.
  */
 class V8EXPORT HeapGraphEdge {
  public:
@@ -214,22 +231,6 @@ class V8EXPORT HeapGraphEdge {
    * a property name.
    */
   Handle<Value> GetName() const;
-
-  /** Returns origin node. */
-  const HeapGraphNode* GetFromNode() const;
-
-  /** Returns destination node. */
-  const HeapGraphNode* GetToNode() const;
-};
-
-
-class V8EXPORT HeapGraphPath {
- public:
-  /** Returns the number of edges in the path. */
-  int GetEdgesCount() const;
-
-  /** Returns an edge from the path. */
-  const HeapGraphEdge* GetEdge(int index) const;
 
   /** Returns origin node. */
   const HeapGraphNode* GetFromNode() const;
@@ -268,16 +269,9 @@ class V8EXPORT HeapGraphNode {
 
   /**
    * Returns node id. For the same heap object, the id remains the same
-   * across all snapshots. Not applicable to aggregated heap snapshots
-   * as they only contain aggregated instances.
+   * across all snapshots.
    */
   uint64_t GetId() const;
-
-  /**
-   * Returns the number of instances. Only applicable to aggregated
-   * heap snapshots.
-   */
-  int GetInstancesCount() const;
 
   /** Returns node's own size, in bytes. */
   int GetSelfSize() const;
@@ -308,27 +302,11 @@ class V8EXPORT HeapGraphNode {
   /** Returns a retainer by index. */
   const HeapGraphEdge* GetRetainer(int index) const;
 
-  /** Returns the number of simple retaining paths from the root to the node. */
-  int GetRetainingPathsCount() const;
-
-  /** Returns a retaining path by index. */
-  const HeapGraphPath* GetRetainingPath(int index) const;
-
   /**
    * Returns a dominator node. This is the node that participates in every
    * path from the snapshot root to the current node.
    */
   const HeapGraphNode* GetDominatorNode() const;
-};
-
-
-class V8EXPORT HeapSnapshotsDiff {
- public:
-  /** Returns the root node for added nodes. */
-  const HeapGraphNode* GetAdditionsRoot() const;
-
-  /** Returns the root node for deleted nodes. */
-  const HeapGraphNode* GetDeletionsRoot() const;
 };
 
 
@@ -338,9 +316,7 @@ class V8EXPORT HeapSnapshotsDiff {
 class V8EXPORT HeapSnapshot {
  public:
   enum Type {
-    kFull = 0,       // Heap snapshot with all instances and references.
-    kAggregated = 1  // Snapshot doesn't contain individual heap entries,
-                     // instead they are grouped by constructor name.
+    kFull = 0  // Heap snapshot with all instances and references.
   };
   enum SerializationFormat {
     kJSON = 0  // See format description near 'Serialize' method.
@@ -361,17 +337,24 @@ class V8EXPORT HeapSnapshot {
   /** Returns a node by its id. */
   const HeapGraphNode* GetNodeById(uint64_t id) const;
 
+  /** Returns total nodes count in the snapshot. */
+  int GetNodesCount() const;
+
+  /** Returns a node by index. */
+  const HeapGraphNode* GetNode(int index) const;
+
   /**
-   * Returns a diff between this snapshot and another one. Only snapshots
-   * of the same type can be compared.
+   * Deletes the snapshot and removes it from HeapProfiler's list.
+   * All pointers to nodes, edges and paths previously returned become
+   * invalid.
    */
-  const HeapSnapshotsDiff* CompareWith(const HeapSnapshot* snapshot) const;
+  void Delete();
 
   /**
    * Prepare a serialized representation of the snapshot. The result
    * is written into the stream provided in chunks of specified size.
    * The total length of the serialized snapshot is unknown in
-   * advance, it is can be roughly equal to JS heap size (that means,
+   * advance, it can be roughly equal to JS heap size (that means,
    * it can be really big - tens of megabytes).
    *
    * For the JSON format, heap contents are represented as an object
@@ -426,6 +409,12 @@ class V8EXPORT HeapProfiler {
       Handle<String> title,
       HeapSnapshot::Type type = HeapSnapshot::kFull,
       ActivityControl* control = NULL);
+
+  /**
+   * Deletes all snapshots taken. All previously returned pointers to
+   * snapshots and their contents become invalid after this call.
+   */
+  static void DeleteAllSnapshots();
 
   /** Binds a callback to embedder's class ID. */
   static void DefineWrapperClass(
