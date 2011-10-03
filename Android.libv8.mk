@@ -67,7 +67,7 @@ LOCAL_SRC_FILES += \
 endif
 
 LOCAL_CFLAGS += \
-	-O2 \
+	-O3 \
 	-Wno-endif-labels \
 	-Wno-import \
 	-Wno-format \
