@@ -4009,7 +4009,7 @@ bool v8::V8::IdleNotification() {
 
 void v8::V8::LowMemoryNotification() {
   i::Isolate* isolate = i::Isolate::Current();
-  if (!isolate->IsInitialized()) return;
+  if (!isolate || !isolate->IsInitialized()) return;
   isolate->heap()->CollectAllGarbage(true);
 }
 
