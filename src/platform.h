@@ -44,52 +44,11 @@
 #ifndef V8_PLATFORM_H_
 #define V8_PLATFORM_H_
 
-#define V8_INFINITY INFINITY
-
-// Windows specific stuff.
-#ifdef WIN32
-
-// Microsoft Visual C++ specific stuff.
-#ifdef _MSC_VER
-
-enum {
-  FP_NAN,
-  FP_INFINITE,
-  FP_ZERO,
-  FP_SUBNORMAL,
-  FP_NORMAL
-};
-
-#undef V8_INFINITY
-#define V8_INFINITY HUGE_VAL
-
-namespace v8 {
-namespace internal {
-int isfinite(double x);
-} }
-int isnan(double x);
-int isinf(double x);
-int isless(double x, double y);
-int isgreater(double x, double y);
-int fpclassify(double x);
-int signbit(double x);
-
-int strncasecmp(const char* s1, const char* s2, int n);
-
-#endif  // _MSC_VER
-
-// Random is missing on both Visual Studio and MinGW.
-int random();
-
-#endif  // WIN32
-
-
 #ifdef __sun
 # ifndef signbit
 int signbit(double x);
 # endif
 #endif
-
 
 // GCC specific stuff
 #ifdef __GNUC__
@@ -99,19 +58,25 @@ int signbit(double x);
 
 #define __GNUC_VERSION__ (__GNUC__ * 10000 + __GNUC_MINOR__ * 100)
 
-// Unfortunately, the INFINITY macro cannot be used with the '-pedantic'
-// warning flag and certain versions of GCC due to a bug:
-// http://gcc.gnu.org/bugzilla/show_bug.cgi?id=11931
-// For now, we use the more involved template-based version from <limits>, but
-// only when compiling with GCC versions affected by the bug (2.96.x - 4.0.x)
-// __GNUC_PREREQ is not defined in GCC for Mac OS X, so we define our own macro
-#if __GNUC_VERSION__ >= 29600 && __GNUC_VERSION__ < 40100
-#include <limits>
-#undef V8_INFINITY
-#define V8_INFINITY std::numeric_limits<double>::infinity()
-#endif
-
 #endif  // __GNUC__
+
+
+// Windows specific stuff.
+#ifdef WIN32
+
+// Microsoft Visual C++ specific stuff.
+#ifdef _MSC_VER
+
+#include "win32-math.h"
+
+int strncasecmp(const char* s1, const char* s2, int n);
+
+#endif  // _MSC_VER
+
+// Random is missing on both Visual Studio and MinGW.
+int random();
+
+#endif  // WIN32
 
 #include "atomicops.h"
 #include "platform-tls.h"
@@ -177,6 +142,9 @@ class OS {
   static FILE* FOpen(const char* path, const char* mode);
   static bool Remove(const char* path);
 
+  // Opens a temporary file, the file is auto removed on close.
+  static FILE* OpenTemporaryFile();
+
   // Log file open mode is platform-dependent due to line ends issues.
   static const char* const LogFileOpenMode;
 
@@ -203,14 +171,15 @@ class OS {
                         size_t* allocated,
                         bool is_executable);
   static void Free(void* address, const size_t size);
+
+  // Mark code segments non-writable.
+  static void ProtectCode(void* address, const size_t size);
+
+  // Assign memory as a guard page so that access will cause an exception.
+  static void Guard(void* address, const size_t size);
+
   // Get the Alignment guaranteed by Allocate().
   static size_t AllocateAlignment();
-
-#ifdef ENABLE_HEAP_PROTECTION
-  // Protect/unprotect a block of memory by marking it read-only/writable.
-  static void Protect(void* address, size_t size);
-  static void Unprotect(void* address, size_t size, bool is_executable);
-#endif
 
   // Returns an indication of whether a pointer is in a space that
   // has been allocated by Allocate().  This method may conservatively
@@ -288,11 +257,19 @@ class OS {
   // positions indicated by the members of the CpuFeature enum from globals.h
   static uint64_t CpuFeaturesImpliedByPlatform();
 
+  // Maximum size of the virtual memory.  0 means there is no artificial
+  // limit.
+  static intptr_t MaxVirtualMemory();
+
   // Returns the double constant NAN
   static double nan_value();
 
   // Support runtime detection of VFP3 on ARM CPUs.
   static bool ArmCpuHasFeature(CpuFeature feature);
+
+  // Support runtime detection of whether the hard float option of the
+  // EABI is used.
+  static bool ArmUsingHardFloat();
 
   // Support runtime detection of FPU on MIPS CPUs.
   static bool MipsCpuHasFeature(CpuFeature feature);
@@ -380,9 +357,9 @@ class Thread {
     int stack_size;
   };
 
-  // Create new thread (with a value for storing in the TLS isolate field).
-  Thread(Isolate* isolate, const Options& options);
-  Thread(Isolate* isolate, const char* name);
+  // Create new thread.
+  explicit Thread(const Options& options);
+  explicit Thread(const char* name);
   virtual ~Thread();
 
   // Start new thread by calling the Run() method in the new thread.
@@ -429,7 +406,6 @@ class Thread {
   // A hint to the scheduler to let another thread run.
   static void YieldCPU();
 
-  Isolate* isolate() const { return isolate_; }
 
   // The thread name length is limited to 16 based on Linux's implementation of
   // prctl().
@@ -443,7 +419,6 @@ class Thread {
 
   PlatformData* data_;
 
-  Isolate* isolate_;
   char name_[kMaxThreadNameLength];
   int stack_size_;
 
@@ -597,7 +572,6 @@ class TickSample {
   bool has_external_callback : 1;
 };
 
-#ifdef ENABLE_LOGGING_AND_PROFILING
 class Sampler {
  public:
   // Initialize sampler.
@@ -655,8 +629,6 @@ class Sampler {
   DISALLOW_IMPLICIT_CONSTRUCTORS(Sampler);
 };
 
-
-#endif  // ENABLE_LOGGING_AND_PROFILING
 
 } }  // namespace v8::internal
 

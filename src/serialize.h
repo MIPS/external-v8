@@ -60,6 +60,52 @@ const int kDebugRegisterBits = 4;
 const int kDebugIdShift = kDebugRegisterBits;
 
 
+// ExternalReferenceTable is a helper class that defines the relationship
+// between external references and their encodings. It is used to build
+// hashmaps in ExternalReferenceEncoder and ExternalReferenceDecoder.
+class ExternalReferenceTable {
+ public:
+  static ExternalReferenceTable* instance(Isolate* isolate);
+
+  ~ExternalReferenceTable() { }
+
+  int size() const { return refs_.length(); }
+
+  Address address(int i) { return refs_[i].address; }
+
+  uint32_t code(int i) { return refs_[i].code; }
+
+  const char* name(int i) { return refs_[i].name; }
+
+  int max_id(int code) { return max_id_[code]; }
+
+ private:
+  explicit ExternalReferenceTable(Isolate* isolate) : refs_(64) {
+      PopulateTable(isolate);
+  }
+
+  struct ExternalReferenceEntry {
+    Address address;
+    uint32_t code;
+    const char* name;
+  };
+
+  void PopulateTable(Isolate* isolate);
+
+  // For a few types of references, we can get their address from their id.
+  void AddFromId(TypeCode type,
+                 uint16_t id,
+                 const char* name,
+                 Isolate* isolate);
+
+  // For other types of references, the caller will figure out the address.
+  void Add(Address address, TypeCode type, uint16_t id, const char* name);
+
+  List<ExternalReferenceEntry> refs_;
+  int max_id_[kTypeCodeCount];
+};
+
+
 class ExternalReferenceEncoder {
  public:
   ExternalReferenceEncoder();
@@ -148,7 +194,7 @@ class SnapshotByteSource {
 // This only works for objects in the first page of a space.  Don't use this for
 // things in newspace since it bypasses the write barrier.
 
-RLYSTC const int k64 = (sizeof(uintptr_t) - 4) / 4;
+static const int k64 = (sizeof(uintptr_t) - 4) / 4;
 
 #define COMMON_REFERENCE_PATTERNS(f)                               \
   f(kNumberOfSpaces, 2, (11 - k64))                                \
@@ -181,8 +227,8 @@ RLYSTC const int k64 = (sizeof(uintptr_t) - 4) / 4;
 // both.
 class SerializerDeserializer: public ObjectVisitor {
  public:
-  RLYSTC void Iterate(ObjectVisitor* visitor);
-  RLYSTC void SetSnapshotCacheSize(int size);
+  static void Iterate(ObjectVisitor* visitor);
+  static void SetSnapshotCacheSize(int size);
 
  protected:
   // Where the pointed-to object can be found:
@@ -220,34 +266,34 @@ class SerializerDeserializer: public ObjectVisitor {
 
   // Misc.
   // Raw data to be copied from the snapshot.
-  RLYSTC const int kRawData = 0x30;
+  static const int kRawData = 0x30;
   // Some common raw lengths: 0x31-0x3f
   // A tag emitted at strategic points in the snapshot to delineate sections.
   // If the deserializer does not find these at the expected moments then it
   // is an indication that the snapshot and the VM do not fit together.
   // Examine the build process for architecture, version or configuration
   // mismatches.
-  RLYSTC const int kSynchronize = 0x70;
+  static const int kSynchronize = 0x70;
   // Used for the source code of the natives, which is in the executable, but
   // is referred to from external strings in the snapshot.
-  RLYSTC const int kNativesStringResource = 0x71;
-  RLYSTC const int kNewPage = 0x72;
+  static const int kNativesStringResource = 0x71;
+  static const int kNewPage = 0x72;
   // 0x73-0x7f                            Free.
   // 0xb0-0xbf                            Free.
   // 0xf0-0xff                            Free.
 
 
-  RLYSTC const int kLargeData = LAST_SPACE;
-  RLYSTC const int kLargeCode = kLargeData + 1;
-  RLYSTC const int kLargeFixedArray = kLargeCode + 1;
-  RLYSTC const int kNumberOfSpaces = kLargeFixedArray + 1;
-  RLYSTC const int kAnyOldSpace = -1;
+  static const int kLargeData = LAST_SPACE;
+  static const int kLargeCode = kLargeData + 1;
+  static const int kLargeFixedArray = kLargeCode + 1;
+  static const int kNumberOfSpaces = kLargeFixedArray + 1;
+  static const int kAnyOldSpace = -1;
 
   // A bitmask for getting the space out of an instruction.
-  RLYSTC const int kSpaceMask = 15;
+  static const int kSpaceMask = 15;
 
-  RLYSTC inline bool SpaceIsLarge(int space) { return space >= kLargeData; }
-  RLYSTC inline bool SpaceIsPaged(int space) {
+  static inline bool SpaceIsLarge(int space) { return space >= kLargeData; }
+  static inline bool SpaceIsPaged(int space) {
     return space >= FIRST_PAGED_SPACE && space <= LAST_PAGED_SPACE;
   }
 };
@@ -380,19 +426,19 @@ class SerializationAddressMapper {
   }
 
  private:
-  RLYSTC bool SerializationMatchFun(void* key1, void* key2) {
+  static bool SerializationMatchFun(void* key1, void* key2) {
     return key1 == key2;
   }
 
-  RLYSTC uint32_t Hash(HeapObject* obj) {
+  static uint32_t Hash(HeapObject* obj) {
     return static_cast<int32_t>(reinterpret_cast<intptr_t>(obj->address()));
   }
 
-  RLYSTC void* Key(HeapObject* obj) {
+  static void* Key(HeapObject* obj) {
     return reinterpret_cast<void*>(obj->address());
   }
 
-  RLYSTC void* Value(int v) {
+  static void* Value(int v) {
     return reinterpret_cast<void*>(v);
   }
 
@@ -403,7 +449,7 @@ class SerializationAddressMapper {
 
 
 // There can be only one serializer per V8 process.
-STATIC_CLASS Serializer : public SerializerDeserializer {
+class Serializer : public SerializerDeserializer {
  public:
   explicit Serializer(SnapshotByteSink* sink);
   ~Serializer();
@@ -415,25 +461,25 @@ STATIC_CLASS Serializer : public SerializerDeserializer {
     return fullness_[space];
   }
 
-  RLYSTC void Enable() {
+  static void Enable() {
     if (!serialization_enabled_) {
       ASSERT(!too_late_to_enable_now_);
     }
     serialization_enabled_ = true;
   }
 
-  RLYSTC void Disable() { serialization_enabled_ = false; }
+  static void Disable() { serialization_enabled_ = false; }
   // Call this when you have made use of the fact that there is no serialization
   // going on.
-  RLYSTC void TooLateToEnableNow() { too_late_to_enable_now_ = true; }
-  RLYSTC bool enabled() { return serialization_enabled_; }
+  static void TooLateToEnableNow() { too_late_to_enable_now_ = true; }
+  static bool enabled() { return serialization_enabled_; }
   SerializationAddressMapper* address_mapper() { return &address_mapper_; }
 #ifdef DEBUG
   virtual void Synchronize(const char* tag);
 #endif
 
  protected:
-  RLYSTC const int kInvalidRootIndex = -1;
+  static const int kInvalidRootIndex = -1;
   virtual int RootIndex(HeapObject* heap_object) = 0;
   virtual bool ShouldBeInThePartialSnapshotCache(HeapObject* o) = 0;
 
@@ -451,7 +497,17 @@ STATIC_CLASS Serializer : public SerializerDeserializer {
         bytes_processed_so_far_(0) { }
     void Serialize();
     void VisitPointers(Object** start, Object** end);
+    // Variant of VisitPointer(). Reloc info is needed to obtain address of
+    // the object pointer in the code (if pointer is mixed into instruction
+    // bits of several instructions).
+    void VisitPointer(Object** obj, RelocInfo* rinfo);
+    void VisitPointers(Object** start, Object** end, RelocInfo* rinfo);
     void VisitExternalReferences(Address* start, Address* end);
+    // Variant of VisitExternalReference(). Reloc info is needed to obtain
+    // address of the ExternalReference pointer in the code (if pointer is
+    // mixed into instruction bits of several instructions).
+    void VisitExternalReference(Address* adr, RelocInfo* r);
+    void VisitExternalReferences(Address* start, Address* end, RelocInfo* r);
     void VisitCodeTarget(RelocInfo* target);
     void VisitCodeEntry(Address entry_address);
     void VisitGlobalPropertyCell(RelocInfo* rinfo);
@@ -488,11 +544,11 @@ STATIC_CLASS Serializer : public SerializerDeserializer {
   // object space it may return kLargeCode or kLargeFixedArray in order
   // to indicate to the deserializer what kind of large object allocation
   // to make.
-  RLYSTC int SpaceOfObject(HeapObject* object);
+  static int SpaceOfObject(HeapObject* object);
   // This just returns the space of the object.  It will return LO_SPACE
   // for all large objects since you can't check the type of the object
   // once the map has been used for the serialization address.
-  RLYSTC int SpaceOfAlreadySerializedObject(HeapObject* object);
+  static int SpaceOfAlreadySerializedObject(HeapObject* object);
   int Allocate(int space, int size, bool* new_page_started);
   int EncodeExternalReference(Address addr) {
     return external_reference_encoder_->Encode(addr);
@@ -506,9 +562,9 @@ STATIC_CLASS Serializer : public SerializerDeserializer {
   SnapshotByteSink* sink_;
   int current_root_index_;
   ExternalReferenceEncoder* external_reference_encoder_;
-  RLYSTC bool serialization_enabled_;
+  static bool serialization_enabled_;
   // Did we already make use of the fact that serialization was not enabled?
-  RLYSTC bool too_late_to_enable_now_;
+  static bool too_late_to_enable_now_;
   int large_object_total_;
   SerializationAddressMapper address_mapper_;
 
@@ -544,6 +600,7 @@ class PartialSerializer : public Serializer {
     ASSERT(!o->IsScript());
     return o->IsString() || o->IsSharedFunctionInfo() ||
            o->IsHeapNumber() || o->IsCode() ||
+           o->IsSerializedScopeInfo() ||
            o->map() == HEAP->fixed_cow_array_map();
   }
 

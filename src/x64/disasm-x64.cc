@@ -58,7 +58,7 @@ struct ByteMnemonic {
 };
 
 
-static ByteMnemonic two_operands_instr[] = {
+static const ByteMnemonic two_operands_instr[] = {
   { 0x00, BYTE_OPER_REG_OP_ORDER, "add" },
   { 0x01, OPER_REG_OP_ORDER,      "add" },
   { 0x02, BYTE_REG_OPER_OP_ORDER, "add" },
@@ -105,7 +105,7 @@ static ByteMnemonic two_operands_instr[] = {
 };
 
 
-static ByteMnemonic zero_operands_instr[] = {
+static const ByteMnemonic zero_operands_instr[] = {
   { 0xC3, UNSET_OP_ORDER, "ret" },
   { 0xC9, UNSET_OP_ORDER, "leave" },
   { 0xF4, UNSET_OP_ORDER, "hlt" },
@@ -125,14 +125,14 @@ static ByteMnemonic zero_operands_instr[] = {
 };
 
 
-static ByteMnemonic call_jump_instr[] = {
+static const ByteMnemonic call_jump_instr[] = {
   { 0xE8, UNSET_OP_ORDER, "call" },
   { 0xE9, UNSET_OP_ORDER, "jmp" },
   { -1, UNSET_OP_ORDER, "" }
 };
 
 
-static ByteMnemonic short_immediate_instr[] = {
+static const ByteMnemonic short_immediate_instr[] = {
   { 0x05, UNSET_OP_ORDER, "add" },
   { 0x0D, UNSET_OP_ORDER, "or" },
   { 0x15, UNSET_OP_ORDER, "adc" },
@@ -145,7 +145,7 @@ static ByteMnemonic short_immediate_instr[] = {
 };
 
 
-static const char* conditional_code_suffix[] = {
+static const char* const conditional_code_suffix[] = {
   "o", "no", "c", "nc", "z", "nz", "na", "a",
   "s", "ns", "pe", "po", "l", "ge", "le", "g"
 };
@@ -193,7 +193,7 @@ class InstructionTable {
   InstructionDesc instructions_[256];
   void Clear();
   void Init();
-  void CopyTable(ByteMnemonic bm[], InstructionType type);
+  void CopyTable(const ByteMnemonic bm[], InstructionType type);
   void SetTableRange(InstructionType type, byte start, byte end, bool byte_size,
                      const char* mnem);
   void AddJumpConditionalShort();
@@ -228,7 +228,8 @@ void InstructionTable::Init() {
 }
 
 
-void InstructionTable::CopyTable(ByteMnemonic bm[], InstructionType type) {
+void InstructionTable::CopyTable(const ByteMnemonic bm[],
+                                 InstructionType type) {
   for (int i = 0; bm[i].b >= 0; i++) {
     InstructionDesc* id = &instructions_[bm[i].b];
     id->mnem = bm[i].mnem;
@@ -1021,12 +1022,26 @@ int DisassemblerX64::TwoByteOpcodeInstruction(byte* data) {
         current += PrintRightOperand(current);
         AppendToBuffer(", %s, %d", NameOfCPURegister(regop), (*current) & 3);
         current += 1;
+      } else if (third_byte == 0x0b) {
+        get_modrm(*current, &mod, &regop, &rm);
+         // roundsd xmm, xmm/m64, imm8
+        AppendToBuffer("roundsd %s, ", NameOfCPURegister(regop));
+        current += PrintRightOperand(current);
+        AppendToBuffer(", %d", (*current) & 3);
+        current += 1;
       } else {
         UnimplementedInstruction();
       }
     } else {
       get_modrm(*current, &mod, &regop, &rm);
-      if (opcode == 0x6E) {
+      if (opcode == 0x28) {
+        AppendToBuffer("movapd %s, ", NameOfXMMRegister(regop));
+        current += PrintRightXMMOperand(current);
+      } else if (opcode == 0x29) {
+        AppendToBuffer("movapd ");
+        current += PrintRightXMMOperand(current);
+        AppendToBuffer(", %s", NameOfXMMRegister(regop));
+      } else if (opcode == 0x6E) {
         AppendToBuffer("mov%c %s,",
                        rex_w() ? 'q' : 'd',
                        NameOfXMMRegister(regop));
@@ -1044,11 +1059,16 @@ int DisassemblerX64::TwoByteOpcodeInstruction(byte* data) {
         AppendToBuffer("movdqa ");
         current += PrintRightXMMOperand(current);
         AppendToBuffer(", %s", NameOfXMMRegister(regop));
+      } else if (opcode == 0xD6) {
+        AppendToBuffer("movq ");
+        current += PrintRightXMMOperand(current);
+        AppendToBuffer(", %s", NameOfXMMRegister(regop));
+      } else if (opcode == 0x50) {
+        AppendToBuffer("movmskpd %s,", NameOfCPURegister(regop));
+        current += PrintRightXMMOperand(current);
       } else {
         const char* mnemonic = "?";
-        if (opcode == 0x50) {
-          mnemonic = "movmskpd";
-        } else  if (opcode == 0x54) {
+        if (opcode == 0x54) {
           mnemonic = "andpd";
         } else  if (opcode == 0x56) {
           mnemonic = "orpd";
@@ -1145,6 +1165,11 @@ int DisassemblerX64::TwoByteOpcodeInstruction(byte* data) {
       get_modrm(*current, &mod, &regop, &rm);
       AppendToBuffer("cvtss2sd %s,", NameOfXMMRegister(regop));
       current += PrintRightXMMOperand(current);
+    } else if (opcode == 0x7E) {
+      int mod, regop, rm;
+      get_modrm(*current, &mod, &regop, &rm);
+      AppendToBuffer("movq %s, ", NameOfXMMRegister(regop));
+      current += PrintRightXMMOperand(current);
     } else {
       UnimplementedInstruction();
     }
@@ -1162,6 +1187,22 @@ int DisassemblerX64::TwoByteOpcodeInstruction(byte* data) {
       current += 4;
     }  // else no immediate displacement.
     AppendToBuffer("nop");
+
+  } else if (opcode == 0x28) {
+    // movaps xmm, xmm/m128
+    int mod, regop, rm;
+    get_modrm(*current, &mod, &regop, &rm);
+    AppendToBuffer("movaps %s, ", NameOfXMMRegister(regop));
+    current += PrintRightXMMOperand(current);
+
+  } else if (opcode == 0x29) {
+    // movaps xmm/m128, xmm
+    int mod, regop, rm;
+    get_modrm(*current, &mod, &regop, &rm);
+    AppendToBuffer("movaps ");
+    current += PrintRightXMMOperand(current);
+    AppendToBuffer(", %s", NameOfXMMRegister(regop));
+
   } else if (opcode == 0xA2 || opcode == 0x31) {
     // RDTSC or CPUID
     AppendToBuffer("%s", mnemonic);
@@ -1172,6 +1213,13 @@ int DisassemblerX64::TwoByteOpcodeInstruction(byte* data) {
     const InstructionDesc& idesc = cmov_instructions[condition];
     byte_size_operand_ = idesc.byte_size_operation;
     current += PrintOperands(idesc.mnem, idesc.op_order_, current);
+
+  } else if (opcode == 0x57) {
+    // xorps xmm, xmm/m128
+    int mod, regop, rm;
+    get_modrm(*current, &mod, &regop, &rm);
+    AppendToBuffer("xorps %s, ", NameOfXMMRegister(regop));
+    current += PrintRightXMMOperand(current);
 
   } else if ((opcode & 0xF0) == 0x80) {
     // Jcc: Conditional jump (branch).

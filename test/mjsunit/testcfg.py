@@ -107,7 +107,7 @@ class MjsunitTestCase(test.TestCase):
     return self_script
 
   def AfterRun(self, result):
-    if self.self_script and (not result.HasPreciousOutput()):
+    if self.self_script and (not result or (not result.HasPreciousOutput())):
       test.CheckedUnlink(self.self_script)
 
 class MjsunitTestConfiguration(test.TestConfiguration):
@@ -127,13 +127,15 @@ class MjsunitTestConfiguration(test.TestConfiguration):
     third_party = [current_path + ['third_party', t] for t in self.Ls(join(self.root, 'third_party'))]
     tools = [current_path + ['tools', t] for t in self.Ls(join(self.root, 'tools'))]
     compiler = [current_path + ['compiler', t] for t in self.Ls(join(self.root, 'compiler'))]
+    harmony = [current_path + ['harmony', t] for t in self.Ls(join(self.root, 'harmony'))]
     mjsunit.sort()
     regress.sort()
     bugs.sort()
     third_party.sort()
     tools.sort()
     compiler.sort()
-    all_tests = mjsunit + regress + bugs + third_party + tools + compiler
+    harmony.sort()
+    all_tests = mjsunit + regress + bugs + third_party + tools + compiler + harmony
     result = []
     for test in all_tests:
       if self.Contains(path, test):
@@ -143,7 +145,7 @@ class MjsunitTestConfiguration(test.TestConfiguration):
     return result
 
   def GetBuildRequirements(self):
-    return ['sample', 'sample=shell']
+    return ['d8']
 
   def GetTestStatus(self, sections, defs):
     status_file = join(self.root, 'mjsunit.status')

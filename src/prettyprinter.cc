@@ -1,4 +1,4 @@
-// Copyright 2006-2008 the V8 project authors. All rights reserved.
+// Copyright 2011 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -123,15 +123,11 @@ void PrettyPrinter::VisitReturnStatement(ReturnStatement* node) {
 }
 
 
-void PrettyPrinter::VisitWithEnterStatement(WithEnterStatement* node) {
-  Print("<enter with> (");
+void PrettyPrinter::VisitWithStatement(WithStatement* node) {
+  Print("with (");
   Visit(node->expression());
   Print(") ");
-}
-
-
-void PrettyPrinter::VisitWithExitStatement(WithExitStatement* node) {
-  Print("<exit with>");
+  Visit(node->statement());
 }
 
 
@@ -201,7 +197,8 @@ void PrettyPrinter::VisitTryCatchStatement(TryCatchStatement* node) {
   Print("try ");
   Visit(node->try_block());
   Print(" catch (");
-  Visit(node->catch_var());
+  const bool quote = false;
+  PrintLiteral(node->variable()->name(), quote);
   Print(") ");
   Visit(node->catch_block());
 }
@@ -282,37 +279,6 @@ void PrettyPrinter::VisitArrayLiteral(ArrayLiteral* node) {
 }
 
 
-void PrettyPrinter::VisitCatchExtensionObject(CatchExtensionObject* node) {
-  Print("{ ");
-  Visit(node->key());
-  Print(": ");
-  Visit(node->value());
-  Print(" }");
-}
-
-
-void PrettyPrinter::VisitSlot(Slot* node) {
-  switch (node->type()) {
-    case Slot::PARAMETER:
-      Print("parameter[%d]", node->index());
-      break;
-    case Slot::LOCAL:
-      Print("local[%d]", node->index());
-      break;
-    case Slot::CONTEXT:
-      Print("context[%d]", node->index());
-      break;
-    case Slot::LOOKUP:
-      Print("lookup[");
-      PrintLiteral(node->var()->name(), false);
-      Print("]");
-      break;
-    default:
-      UNREACHABLE();
-  }
-}
-
-
 void PrettyPrinter::VisitVariableProxy(VariableProxy* node) {
   PrintLiteral(node->name(), false);
 }
@@ -370,7 +336,10 @@ void PrettyPrinter::VisitCallRuntime(CallRuntime* node) {
 
 
 void PrettyPrinter::VisitUnaryOperation(UnaryOperation* node) {
-  Print("(%s", Token::String(node->op()));
+  Token::Value op = node->op();
+  bool needsSpace =
+      op == Token::DELETE || op == Token::TYPEOF || op == Token::VOID;
+  Print("(%s%s", Token::String(op), needsSpace ? " " : "");
   Visit(node->expression());
   Print(")");
 }
@@ -388,7 +357,7 @@ void PrettyPrinter::VisitCountOperation(CountOperation* node) {
 void PrettyPrinter::VisitBinaryOperation(BinaryOperation* node) {
   Print("(");
   Visit(node->left());
-  Print("%s", Token::String(node->op()));
+  Print(" %s ", Token::String(node->op()));
   Visit(node->right());
   Print(")");
 }
@@ -397,7 +366,7 @@ void PrettyPrinter::VisitBinaryOperation(BinaryOperation* node) {
 void PrettyPrinter::VisitCompareOperation(CompareOperation* node) {
   Print("(");
   Visit(node->left());
-  Print("%s", Token::String(node->op()));
+  Print(" %s ", Token::String(node->op()));
   Visit(node->right());
   Print(")");
 }
@@ -755,7 +724,7 @@ void AstPrinter::VisitDeclaration(Declaration* node) {
   if (node->fun() == NULL) {
     // var or const declarations
     PrintLiteralWithModeIndented(Variable::Mode2String(node->mode()),
-                                 node->proxy()->AsVariable(),
+                                 node->proxy()->var(),
                                  node->proxy()->name());
   } else {
     // function declarations
@@ -802,13 +771,10 @@ void AstPrinter::VisitReturnStatement(ReturnStatement* node) {
 }
 
 
-void AstPrinter::VisitWithEnterStatement(WithEnterStatement* node) {
-  PrintIndentedVisit("WITH ENTER", node->expression());
-}
-
-
-void AstPrinter::VisitWithExitStatement(WithExitStatement* node) {
-  PrintIndented("WITH EXIT\n");
+void AstPrinter::VisitWithStatement(WithStatement* node) {
+  IndentedScope indent(this, "WITH");
+  PrintIndentedVisit("OBJECT", node->expression());
+  PrintIndentedVisit("BODY", node->statement());
 }
 
 
@@ -859,7 +825,9 @@ void AstPrinter::VisitForInStatement(ForInStatement* node) {
 void AstPrinter::VisitTryCatchStatement(TryCatchStatement* node) {
   IndentedScope indent(this, "TRY CATCH");
   PrintIndentedVisit("TRY", node->try_block());
-  PrintIndentedVisit("CATCHVAR", node->catch_var());
+  PrintLiteralWithModeIndented("CATCHVAR",
+                               node->variable(),
+                               node->variable()->name());
   PrintIndentedVisit("CATCH", node->catch_block());
 }
 
@@ -959,26 +927,26 @@ void AstPrinter::VisitArrayLiteral(ArrayLiteral* node) {
 }
 
 
-void AstPrinter::VisitCatchExtensionObject(CatchExtensionObject* node) {
-  IndentedScope indent(this, "CatchExtensionObject");
-  PrintIndentedVisit("KEY", node->key());
-  PrintIndentedVisit("VALUE", node->value());
-}
-
-
-void AstPrinter::VisitSlot(Slot* node) {
-  PrintIndented("SLOT ");
-  PrettyPrinter::VisitSlot(node);
-  Print("\n");
-}
-
-
 void AstPrinter::VisitVariableProxy(VariableProxy* node) {
-  PrintLiteralWithModeIndented("VAR PROXY", node->AsVariable(), node->name());
   Variable* var = node->var();
-  if (var != NULL && var->rewrite() != NULL) {
-    IndentedScope indent(this);
-    Visit(var->rewrite());
+  PrintLiteralWithModeIndented("VAR PROXY", var, node->name());
+  { IndentedScope indent(this);
+    switch (var->location()) {
+      case Variable::UNALLOCATED:
+        break;
+      case Variable::PARAMETER:
+        Print("parameter[%d]", var->index());
+        break;
+      case Variable::LOCAL:
+        Print("local[%d]", var->index());
+        break;
+      case Variable::CONTEXT:
+        Print("context[%d]", var->index());
+        break;
+      case Variable::LOOKUP:
+        Print("lookup");
+        break;
+    }
   }
 }
 
@@ -1137,7 +1105,7 @@ void JsonAstBuilder::AddAttributePrefix(const char* name) {
 
 
 void JsonAstBuilder::AddAttribute(const char* name, Handle<String> value) {
-  SmartPointer<char> value_string = value->ToCString();
+  SmartArrayPointer<char> value_string = value->ToCString();
   AddAttributePrefix(name);
   Print("\"%s\"", *value_string);
 }
@@ -1202,14 +1170,10 @@ void JsonAstBuilder::VisitReturnStatement(ReturnStatement* stmt) {
 }
 
 
-void JsonAstBuilder::VisitWithEnterStatement(WithEnterStatement* stmt) {
-  TagScope tag(this, "WithEnterStatement");
+void JsonAstBuilder::VisitWithStatement(WithStatement* stmt) {
+  TagScope tag(this, "WithStatement");
   Visit(stmt->expression());
-}
-
-
-void JsonAstBuilder::VisitWithExitStatement(WithExitStatement* stmt) {
-  TagScope tag(this, "WithExitStatement");
+  Visit(stmt->statement());
 }
 
 
@@ -1251,8 +1215,10 @@ void JsonAstBuilder::VisitForInStatement(ForInStatement* stmt) {
 
 void JsonAstBuilder::VisitTryCatchStatement(TryCatchStatement* stmt) {
   TagScope tag(this, "TryCatchStatement");
+  { AttributesScope attributes(this);
+    AddAttribute("variable", stmt->variable()->name());
+  }
   Visit(stmt->try_block());
-  Visit(stmt->catch_var());
   Visit(stmt->catch_block());
 }
 
@@ -1291,39 +1257,32 @@ void JsonAstBuilder::VisitConditional(Conditional* expr) {
 }
 
 
-void JsonAstBuilder::VisitSlot(Slot* expr) {
-  TagScope tag(this, "Slot");
+void JsonAstBuilder::VisitVariableProxy(VariableProxy* expr) {
+  TagScope tag(this, "Variable");
   {
     AttributesScope attributes(this);
-    switch (expr->type()) {
-      case Slot::PARAMETER:
-        AddAttribute("type", "PARAMETER");
+    Variable* var = expr->var();
+    AddAttribute("name", var->name());
+    switch (var->location()) {
+      case Variable::UNALLOCATED:
+        AddAttribute("location", "UNALLOCATED");
         break;
-      case Slot::LOCAL:
-        AddAttribute("type", "LOCAL");
+      case Variable::PARAMETER:
+        AddAttribute("location", "PARAMETER");
+        AddAttribute("index", var->index());
         break;
-      case Slot::CONTEXT:
-        AddAttribute("type", "CONTEXT");
+      case Variable::LOCAL:
+        AddAttribute("location", "LOCAL");
+        AddAttribute("index", var->index());
         break;
-      case Slot::LOOKUP:
-        AddAttribute("type", "LOOKUP");
+      case Variable::CONTEXT:
+        AddAttribute("location", "CONTEXT");
+        AddAttribute("index", var->index());
+        break;
+      case Variable::LOOKUP:
+        AddAttribute("location", "LOOKUP");
         break;
     }
-    AddAttribute("index", expr->index());
-  }
-}
-
-
-void JsonAstBuilder::VisitVariableProxy(VariableProxy* expr) {
-  if (expr->var()->rewrite() == NULL) {
-    TagScope tag(this, "VariableProxy");
-    {
-      AttributesScope attributes(this);
-      AddAttribute("name", expr->name());
-      AddAttribute("mode", Variable::Mode2String(expr->var()->mode()));
-    }
-  } else {
-    Visit(expr->var()->rewrite());
   }
 }
 
@@ -1357,13 +1316,6 @@ void JsonAstBuilder::VisitArrayLiteral(ArrayLiteral* expr) {
 }
 
 
-void JsonAstBuilder::VisitCatchExtensionObject(CatchExtensionObject* expr) {
-  TagScope tag(this, "CatchExtensionObject");
-  Visit(expr->key());
-  Visit(expr->value());
-}
-
-
 void JsonAstBuilder::VisitAssignment(Assignment* expr) {
   TagScope tag(this, "Assignment");
   {
@@ -1383,10 +1335,6 @@ void JsonAstBuilder::VisitThrow(Throw* expr) {
 
 void JsonAstBuilder::VisitProperty(Property* expr) {
   TagScope tag(this, "Property");
-  {
-    AttributesScope attributes(this);
-    AddAttribute("type", expr->is_synthetic() ? "SYNTHETIC" : "NORMAL");
-  }
   Visit(expr->obj());
   Visit(expr->key());
 }

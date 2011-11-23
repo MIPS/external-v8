@@ -7,7 +7,9 @@ Google Inc.
 Sigma Designs Inc.
 ARM Ltd.
 Hewlett-Packard Development Company, LP
+Igalia, S.L.
 
+Akinori MUSHA <knu@FreeBSD.org>
 Alexander Botero-Lowry <alexbl@FreeBSD.org>
 Alexander Karpinsky <homm86@gmail.com>
 Alexandre Vassalotti <avassalotti@gmail.com>
@@ -34,9 +36,11 @@ Patrick Gansterer <paroga@paroga.com>
 Peter Varga <pvarga@inf.u-szeged.hu>
 Rafal Krypa <rafal@krypa.net>
 Rene Rebe <rene@exactcode.de>
+Robert Mustacchi <rm@fingolfin.org>
 Rodolph Perfetta <rodolph.perfetta@arm.com>
 Ryan Dahl <coldredlemur@gmail.com>
 Sanjoy Das <sanjoy@playingwithpointers.com>
 Subrato K De <subratokde@codeaurora.org>
 Vlad Burlik <vladbph@gmail.com>
+Yuqiang Xian <yuqiang.xian@intel.com>
 Zaheer Ahmad <zahmad@codeaurora.org>

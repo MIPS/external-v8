@@ -1,4 +1,4 @@
-// Copyright 2006-2010 the V8 project authors. All rights reserved.
+// Copyright 2011 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -28,7 +28,8 @@
 #ifndef V8_SPACES_H_
 #define V8_SPACES_H_
 
-#include "list-inl.h"
+#include "allocation.h"
+#include "list.h"
 #include "log.h"
 
 namespace v8 {
@@ -199,9 +200,9 @@ class Page {
 
   inline void SetIsLargeObjectPage(bool is_large_object_page);
 
-  inline bool IsPageExecutable();
+  inline Executability PageExecutability();
 
-  inline void SetIsPageExecutable(bool is_page_executable);
+  inline void SetPageExecutability(Executability executable);
 
   // Returns the offset of a given address to this page.
   INLINE(int Offset(Address a)) {
@@ -257,7 +258,12 @@ class Page {
   static const int kMaxHeapObjectSize = kObjectAreaSize;
 
   static const int kDirtyFlagOffset = 2 * kPointerSize;
+#if defined(V8_TARGET_ARCH_MIPS)
+  // For MIPS, page size is 16K bytes, so we need region size to be 512.
+  static const int kRegionSizeLog2 = 9;
+#else
   static const int kRegionSizeLog2 = 8;
+#endif //V8_TARGET_ARCH_MIPS
   static const int kRegionSize = 1 << kRegionSizeLog2;
   static const intptr_t kRegionAlignmentMask = (kRegionSize - 1);
 
@@ -379,12 +385,6 @@ class Space : public Malloced {
   // (e.g. see LargeObjectSpace).
   virtual intptr_t SizeOfObjects() { return Size(); }
 
-#ifdef ENABLE_HEAP_PROTECTION
-  // Protect/unprotect the space by marking it read-only/writable.
-  virtual void Protect() = 0;
-  virtual void Unprotect() = 0;
-#endif
-
 #ifdef DEBUG
   virtual void Print() = 0;
 #endif
@@ -414,6 +414,7 @@ class Space : public Malloced {
 class CodeRange {
  public:
   explicit CodeRange(Isolate* isolate);
+  ~CodeRange() { TearDown(); }
 
   // Reserves a range of virtual memory, but does not commit any of it.
   // Can only be called once, at heap initialization time.
@@ -640,17 +641,6 @@ class MemoryAllocator {
                                   Page** last_page,
                                   Page** last_page_in_use);
 
-#ifdef ENABLE_HEAP_PROTECTION
-  // Protect/unprotect a block of memory by marking it read-only/writable.
-  inline void Protect(Address start, size_t size);
-  inline void Unprotect(Address start, size_t size,
-                        Executability executable);
-
-  // Protect/unprotect a chunk given a page in the chunk.
-  inline void ProtectChunkFromPage(Page* page);
-  inline void UnprotectChunkFromPage(Page* page);
-#endif
-
 #ifdef DEBUG
   // Reports statistic info of the space.
   void ReportStatistics();
@@ -663,20 +653,17 @@ class MemoryAllocator {
 #ifdef V8_TARGET_ARCH_X64
   static const int kPagesPerChunk = 32;
   // On 64 bit the chunk table consists of 4 levels of 4096-entry tables.
-  static const int kPagesPerChunkLog2 = 5;
   static const int kChunkTableLevels = 4;
   static const int kChunkTableBitsPerLevel = 12;
 #else
   static const int kPagesPerChunk = 16;
   // On 32 bit the chunk table consists of 2 levels of 256-entry tables.
-  static const int kPagesPerChunkLog2 = 4;
   static const int kChunkTableLevels = 2;
   static const int kChunkTableBitsPerLevel = 8;
 #endif
 
  private:
   static const int kChunkSize = kPagesPerChunk * Page::kPageSize;
-  static const int kChunkSizeLog2 = kPagesPerChunkLog2 + kPageSizeBits;
 
   Isolate* isolate_;
 
@@ -1152,12 +1139,6 @@ class PagedSpace : public Space {
   // Ensures that the capacity is at least 'capacity'. Returns false on failure.
   bool EnsureCapacity(int capacity);
 
-#ifdef ENABLE_HEAP_PROTECTION
-  // Protect/unprotect the space by marking it read-only/writable.
-  void Protect();
-  void Unprotect();
-#endif
-
 #ifdef DEBUG
   // Print meta info and objects in this space.
   virtual void Print();
@@ -1256,8 +1237,8 @@ class PagedSpace : public Space {
   // Returns the number of total pages in this space.
   int CountTotalPages();
 #endif
- private:
 
+ private:
   // Returns a pointer to the page of the relocation pointer.
   Page* MCRelocationTopPage() { return TopPageOf(mc_forwarding_info_); }
 
@@ -1265,7 +1246,6 @@ class PagedSpace : public Space {
 };
 
 
-#if defined(DEBUG) || defined(ENABLE_LOGGING_AND_PROFILING)
 class NumberAndSizeInfo BASE_EMBEDDED {
  public:
   NumberAndSizeInfo() : number_(0), bytes_(0) {}
@@ -1288,9 +1268,7 @@ class NumberAndSizeInfo BASE_EMBEDDED {
 
 
 // HistogramInfo class for recording a single "bar" of a histogram.  This
-// class is used for collecting statistics to print to stdout (when compiled
-// with DEBUG) or to the log file (when compiled with
-// ENABLE_LOGGING_AND_PROFILING).
+// class is used for collecting statistics to print to the log file.
 class HistogramInfo: public NumberAndSizeInfo {
  public:
   HistogramInfo() : NumberAndSizeInfo() {}
@@ -1301,7 +1279,6 @@ class HistogramInfo: public NumberAndSizeInfo {
  private:
   const char* name_;
 };
-#endif
 
 
 // -----------------------------------------------------------------------------
@@ -1386,12 +1363,6 @@ class SemiSpace : public Space {
   bool is_committed() { return committed_; }
   bool Commit();
   bool Uncommit();
-
-#ifdef ENABLE_HEAP_PROTECTION
-  // Protect/unprotect the space by marking it read-only/writable.
-  virtual void Protect() {}
-  virtual void Unprotect() {}
-#endif
 
 #ifdef DEBUG
   virtual void Print();
@@ -1623,12 +1594,6 @@ class NewSpace : public Space {
   template <typename StringType>
   inline void ShrinkStringAtAllocationBoundary(String* string, int len);
 
-#ifdef ENABLE_HEAP_PROTECTION
-  // Protect/unprotect the space by marking it read-only/writable.
-  virtual void Protect();
-  virtual void Unprotect();
-#endif
-
 #ifdef DEBUG
   // Verify the active semispace.
   virtual void Verify();
@@ -1636,7 +1601,6 @@ class NewSpace : public Space {
   virtual void Print() { to_space_.Print(); }
 #endif
 
-#if defined(DEBUG) || defined(ENABLE_LOGGING_AND_PROFILING)
   // Iterates the active semispace to collect statistics.
   void CollectStatistics();
   // Reports previously collected statistics of the active semispace.
@@ -1649,7 +1613,6 @@ class NewSpace : public Space {
   // to space during a scavenge GC.
   void RecordAllocation(HeapObject* obj);
   void RecordPromotion(HeapObject* obj);
-#endif
 
   // Return whether the operation succeded.
   bool CommitFromSpaceIfNeeded() {
@@ -1678,10 +1641,8 @@ class NewSpace : public Space {
   AllocationInfo allocation_info_;
   AllocationInfo mc_forwarding_info_;
 
-#if defined(DEBUG) || defined(ENABLE_LOGGING_AND_PROFILING)
   HistogramInfo* allocated_histogram_;
   HistogramInfo* promoted_histogram_;
-#endif
 
   // Implementation of AllocateRaw and MCAllocateRaw.
   MUST_USE_RESULT inline MaybeObject* AllocateRawInternal(
@@ -1860,7 +1821,6 @@ class FixedSizeFreeList BASE_EMBEDDED {
   void MarkNodes();
 
  private:
-
   Heap* heap_;
 
   // Available bytes on the free list.
@@ -2188,7 +2148,7 @@ class LargeObjectChunk {
   static LargeObjectChunk* New(int size_in_bytes, Executability executable);
 
   // Free the memory associated with the chunk.
-  inline void Free(Executability executable);
+  void Free(Executability executable);
 
   // Interpret a raw address as a large object chunk.
   static LargeObjectChunk* FromAddress(Address address) {
@@ -2198,13 +2158,17 @@ class LargeObjectChunk {
   // Returns the address of this chunk.
   Address address() { return reinterpret_cast<Address>(this); }
 
+  Page* GetPage() {
+    return Page::FromAddress(RoundUp(address(), Page::kPageSize));
+  }
+
   // Accessors for the fields of the chunk.
   LargeObjectChunk* next() { return next_; }
   void set_next(LargeObjectChunk* chunk) { next_ = chunk; }
   size_t size() { return size_ & ~Page::kPageFlagMask; }
 
   // Compute the start address in the chunk.
-  inline Address GetStartAddress();
+  Address GetStartAddress() { return GetPage()->ObjectAreaStart(); }
 
   // Returns the object in this chunk.
   HeapObject* GetObject() { return HeapObject::FromAddress(GetStartAddress()); }
@@ -2290,12 +2254,6 @@ class LargeObjectSpace : public Space {
   // called after ReserveSpace has been called on the paged spaces, since they
   // may use some memory, leaving less for large objects.
   virtual bool ReserveSpace(int bytes);
-
-#ifdef ENABLE_HEAP_PROTECTION
-  // Protect/unprotect the space by marking it read-only/writable.
-  void Protect();
-  void Unprotect();
-#endif
 
 #ifdef DEBUG
   virtual void Verify();

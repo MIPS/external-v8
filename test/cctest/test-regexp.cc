@@ -30,30 +30,37 @@
 
 #include "v8.h"
 
-#include "string-stream.h"
-#include "cctest.h"
-#include "zone-inl.h"
-#include "parser.h"
 #include "ast.h"
+#include "char-predicates-inl.h"
+#include "cctest.h"
 #include "jsregexp.h"
+#include "parser.h"
 #include "regexp-macro-assembler.h"
 #include "regexp-macro-assembler-irregexp.h"
+#include "string-stream.h"
+#include "zone-inl.h"
 #ifdef V8_INTERPRETED_REGEXP
 #include "interpreter-irregexp.h"
 #else  // V8_INTERPRETED_REGEXP
+#include "macro-assembler.h"
+#include "code.h"
 #ifdef V8_TARGET_ARCH_ARM
+#include "arm/assembler-arm.h"
 #include "arm/macro-assembler-arm.h"
 #include "arm/regexp-macro-assembler-arm.h"
 #endif
 #ifdef V8_TARGET_ARCH_MIPS
+#include "mips/assembler-mips.h"
 #include "mips/macro-assembler-mips.h"
 #include "mips/regexp-macro-assembler-mips.h"
 #endif
 #ifdef V8_TARGET_ARCH_X64
+#include "x64/assembler-x64.h"
 #include "x64/macro-assembler-x64.h"
 #include "x64/regexp-macro-assembler-x64.h"
 #endif
 #ifdef V8_TARGET_ARCH_IA32
+#include "ia32/assembler-ia32.h"
 #include "ia32/macro-assembler-ia32.h"
 #include "ia32/regexp-macro-assembler-ia32.h"
 #endif
@@ -65,23 +72,23 @@ using namespace v8::internal;
 static bool CheckParse(const char* input) {
   V8::Initialize(NULL);
   v8::HandleScope scope;
-  ZoneScope zone_scope(DELETE_ON_EXIT);
+  ZoneScope zone_scope(Isolate::Current(), DELETE_ON_EXIT);
   FlatStringReader reader(Isolate::Current(), CStrVector(input));
   RegExpCompileData result;
   return v8::internal::RegExpParser::ParseRegExp(&reader, false, &result);
 }
 
 
-static SmartPointer<const char> Parse(const char* input) {
+static SmartArrayPointer<const char> Parse(const char* input) {
   V8::Initialize(NULL);
   v8::HandleScope scope;
-  ZoneScope zone_scope(DELETE_ON_EXIT);
+  ZoneScope zone_scope(Isolate::Current(), DELETE_ON_EXIT);
   FlatStringReader reader(Isolate::Current(), CStrVector(input));
   RegExpCompileData result;
   CHECK(v8::internal::RegExpParser::ParseRegExp(&reader, false, &result));
   CHECK(result.tree != NULL);
   CHECK(result.error.is_null());
-  SmartPointer<const char> output = result.tree->ToString();
+  SmartArrayPointer<const char> output = result.tree->ToString();
   return output;
 }
 
@@ -89,7 +96,7 @@ static bool CheckSimple(const char* input) {
   V8::Initialize(NULL);
   v8::HandleScope scope;
   unibrow::Utf8InputBuffer<> buffer(input, StrLength(input));
-  ZoneScope zone_scope(DELETE_ON_EXIT);
+  ZoneScope zone_scope(Isolate::Current(), DELETE_ON_EXIT);
   FlatStringReader reader(Isolate::Current(), CStrVector(input));
   RegExpCompileData result;
   CHECK(v8::internal::RegExpParser::ParseRegExp(&reader, false, &result));
@@ -107,7 +114,7 @@ static MinMaxPair CheckMinMaxMatch(const char* input) {
   V8::Initialize(NULL);
   v8::HandleScope scope;
   unibrow::Utf8InputBuffer<> buffer(input, StrLength(input));
-  ZoneScope zone_scope(DELETE_ON_EXIT);
+  ZoneScope zone_scope(Isolate::Current(), DELETE_ON_EXIT);
   FlatStringReader reader(Isolate::Current(), CStrVector(input));
   RegExpCompileData result;
   CHECK(v8::internal::RegExpParser::ParseRegExp(&reader, false, &result));
@@ -378,13 +385,13 @@ static void ExpectError(const char* input,
                         const char* expected) {
   V8::Initialize(NULL);
   v8::HandleScope scope;
-  ZoneScope zone_scope(DELETE_ON_EXIT);
+  ZoneScope zone_scope(Isolate::Current(), DELETE_ON_EXIT);
   FlatStringReader reader(Isolate::Current(), CStrVector(input));
   RegExpCompileData result;
   CHECK(!v8::internal::RegExpParser::ParseRegExp(&reader, false, &result));
   CHECK(result.tree == NULL);
   CHECK(!result.error.is_null());
-  SmartPointer<char> str = result.error->ToCString(ALLOW_NULLS);
+  SmartArrayPointer<char> str = result.error->ToCString(ALLOW_NULLS);
   CHECK_EQ(expected, *str);
 }
 
@@ -416,7 +423,7 @@ TEST(Errors) {
   for (int i = 0; i <= kMaxCaptures; i++) {
     accumulator.Add("()");
   }
-  SmartPointer<const char> many_captures(accumulator.ToCString());
+  SmartArrayPointer<const char> many_captures(accumulator.ToCString());
   ExpectError(*many_captures, kTooManyCaptures);
 }
 
@@ -460,7 +467,7 @@ static bool NotWord(uc16 c) {
 
 
 static void TestCharacterClassEscapes(uc16 c, bool (pred)(uc16 c)) {
-  ZoneScope scope(DELETE_ON_EXIT);
+  ZoneScope scope(Isolate::Current(), DELETE_ON_EXIT);
   ZoneList<CharacterRange>* ranges = new ZoneList<CharacterRange>(2);
   CharacterRange::AddClassEscape(c, ranges);
   for (unsigned i = 0; i < (1 << 16); i++) {
@@ -506,7 +513,7 @@ static void Execute(const char* input,
                     bool is_ascii,
                     bool dot_output = false) {
   v8::HandleScope scope;
-  ZoneScope zone_scope(DELETE_ON_EXIT);
+  ZoneScope zone_scope(Isolate::Current(), DELETE_ON_EXIT);
   RegExpNode* node = Compile(input, multiline, is_ascii);
   USE(node);
 #ifdef DEBUG
@@ -547,7 +554,7 @@ static unsigned PseudoRandom(int i, int j) {
 TEST(SplayTreeSimple) {
   v8::internal::V8::Initialize(NULL);
   static const unsigned kLimit = 1000;
-  ZoneScope zone_scope(DELETE_ON_EXIT);
+  ZoneScope zone_scope(Isolate::Current(), DELETE_ON_EXIT);
   ZoneSplayTree<TestConfig> tree;
   bool seen[kLimit];
   for (unsigned i = 0; i < kLimit; i++) seen[i] = false;
@@ -615,7 +622,7 @@ TEST(DispatchTableConstruction) {
     }
   }
   // Enter test data into dispatch table.
-  ZoneScope zone_scope(DELETE_ON_EXIT);
+  ZoneScope zone_scope(Isolate::Current(), DELETE_ON_EXIT);
   DispatchTable table;
   for (int i = 0; i < kRangeCount; i++) {
     uc16* range = ranges[i];
@@ -682,7 +689,7 @@ typedef RegExpMacroAssemblerMIPS ArchRegExpMacroAssembler;
 class ContextInitializer {
  public:
   ContextInitializer()
-      : env_(), scope_(), zone_(DELETE_ON_EXIT) {
+      : env_(), scope_(), zone_(Isolate::Current(), DELETE_ON_EXIT) {
     env_ = v8::Context::New();
     env_->Enter();
   }
@@ -1377,7 +1384,7 @@ TEST(AddInverseToTable) {
   static const int kLimit = 1000;
   static const int kRangeCount = 16;
   for (int t = 0; t < 10; t++) {
-    ZoneScope zone_scope(DELETE_ON_EXIT);
+    ZoneScope zone_scope(Isolate::Current(), DELETE_ON_EXIT);
     ZoneList<CharacterRange>* ranges =
         new ZoneList<CharacterRange>(kRangeCount);
     for (int i = 0; i < kRangeCount; i++) {
@@ -1398,7 +1405,7 @@ TEST(AddInverseToTable) {
       CHECK_EQ(is_on, set->Get(0) == false);
     }
   }
-  ZoneScope zone_scope(DELETE_ON_EXIT);
+  ZoneScope zone_scope(Isolate::Current(), DELETE_ON_EXIT);
   ZoneList<CharacterRange>* ranges =
           new ZoneList<CharacterRange>(1);
   ranges->Add(CharacterRange(0xFFF0, 0xFFFE));
@@ -1511,7 +1518,7 @@ TEST(UncanonicalizeEquivalence) {
 
 static void TestRangeCaseIndependence(CharacterRange input,
                                       Vector<CharacterRange> expected) {
-  ZoneScope zone_scope(DELETE_ON_EXIT);
+  ZoneScope zone_scope(Isolate::Current(), DELETE_ON_EXIT);
   int count = expected.length();
   ZoneList<CharacterRange>* list = new ZoneList<CharacterRange>(count);
   input.AddCaseEquivalents(list, false);
@@ -1575,7 +1582,7 @@ static bool InClass(uc16 c, ZoneList<CharacterRange>* ranges) {
 
 TEST(CharClassDifference) {
   v8::internal::V8::Initialize(NULL);
-  ZoneScope zone_scope(DELETE_ON_EXIT);
+  ZoneScope zone_scope(Isolate::Current(), DELETE_ON_EXIT);
   ZoneList<CharacterRange>* base = new ZoneList<CharacterRange>(1);
   base->Add(CharacterRange::Everything());
   Vector<const uc16> overlay = CharacterRange::GetWordBounds();
@@ -1602,7 +1609,7 @@ TEST(CharClassDifference) {
 
 TEST(CanonicalizeCharacterSets) {
   v8::internal::V8::Initialize(NULL);
-  ZoneScope scope(DELETE_ON_EXIT);
+  ZoneScope scope(Isolate::Current(), DELETE_ON_EXIT);
   ZoneList<CharacterRange>* list = new ZoneList<CharacterRange>(4);
   CharacterSet set(list);
 
@@ -1673,7 +1680,7 @@ static bool CharacterInSet(ZoneList<CharacterRange>* set, uc16 value) {
 
 TEST(CharacterRangeMerge) {
   v8::internal::V8::Initialize(NULL);
-  ZoneScope zone_scope(DELETE_ON_EXIT);
+  ZoneScope zone_scope(Isolate::Current(), DELETE_ON_EXIT);
   ZoneList<CharacterRange> l1(4);
   ZoneList<CharacterRange> l2(4);
   // Create all combinations of intersections of ranges, both singletons and

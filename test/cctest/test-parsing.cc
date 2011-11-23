@@ -31,18 +31,16 @@
 
 #include "v8.h"
 
-#include "isolate.h"
-#include "token.h"
-#include "scanner.h"
-#include "parser.h"
-#include "utils.h"
-#include "execution.h"
-#include "preparser.h"
 #include "cctest.h"
+#include "execution.h"
+#include "isolate.h"
+#include "parser.h"
+#include "preparser.h"
+#include "scanner-character-streams.h"
+#include "token.h"
+#include "utils.h"
 
-namespace i = ::v8::internal;
-
-TEST(KeywordMatcher) {
+TEST(ScanKeywords) {
   struct KeywordToken {
     const char* keyword;
     i::Token::Value token;
@@ -50,86 +48,58 @@ TEST(KeywordMatcher) {
 
   static const KeywordToken keywords[] = {
 #define KEYWORD(t, s, d) { s, i::Token::t },
-#define IGNORE(t, s, d)  /* */
-      TOKEN_LIST(IGNORE, KEYWORD, IGNORE)
+      TOKEN_LIST(IGNORE_TOKEN, KEYWORD)
 #undef KEYWORD
       { NULL, i::Token::IDENTIFIER }
   };
 
-  static const char* future_keywords[] = {
-#define FUTURE(t, s, d) s,
-      TOKEN_LIST(IGNORE, IGNORE, FUTURE)
-#undef FUTURE
-#undef IGNORE
-      NULL
-  };
-
   KeywordToken key_token;
+  i::UnicodeCache unicode_cache;
+  i::byte buffer[32];
   for (int i = 0; (key_token = keywords[i]).keyword != NULL; i++) {
-    i::KeywordMatcher matcher;
-    const char* keyword = key_token.keyword;
-    int length = i::StrLength(keyword);
-    for (int j = 0; j < length; j++) {
-      if (key_token.token == i::Token::INSTANCEOF && j == 2) {
-        // "in" is a prefix of "instanceof". It's the only keyword
-        // that is a prefix of another.
-        CHECK_EQ(i::Token::IN, matcher.token());
-      } else {
-        CHECK_EQ(i::Token::IDENTIFIER, matcher.token());
-      }
-      matcher.AddChar(keyword[j]);
+    const i::byte* keyword =
+        reinterpret_cast<const i::byte*>(key_token.keyword);
+    int length = i::StrLength(key_token.keyword);
+    CHECK(static_cast<int>(sizeof(buffer)) >= length);
+    {
+      i::Utf8ToUC16CharacterStream stream(keyword, length);
+      i::JavaScriptScanner scanner(&unicode_cache);
+      // The scanner should parse 'let' as Token::LET for this test.
+      scanner.SetHarmonyBlockScoping(true);
+      scanner.Initialize(&stream);
+      CHECK_EQ(key_token.token, scanner.Next());
+      CHECK_EQ(i::Token::EOS, scanner.Next());
     }
-    CHECK_EQ(key_token.token, matcher.token());
-    // Adding more characters will make keyword matching fail.
-    matcher.AddChar('z');
-    CHECK_EQ(i::Token::IDENTIFIER, matcher.token());
-    // Adding a keyword later will not make it match again.
-    matcher.AddChar('i');
-    matcher.AddChar('f');
-    CHECK_EQ(i::Token::IDENTIFIER, matcher.token());
-  }
-
-  // Future keywords are not recognized.
-  const char* future_keyword;
-  for (int i = 0; (future_keyword = future_keywords[i]) != NULL; i++) {
-    i::KeywordMatcher matcher;
-    int length = i::StrLength(future_keyword);
-    for (int j = 0; j < length; j++) {
-      matcher.AddChar(future_keyword[j]);
+    // Removing characters will make keyword matching fail.
+    {
+      i::Utf8ToUC16CharacterStream stream(keyword, length - 1);
+      i::JavaScriptScanner scanner(&unicode_cache);
+      scanner.Initialize(&stream);
+      CHECK_EQ(i::Token::IDENTIFIER, scanner.Next());
+      CHECK_EQ(i::Token::EOS, scanner.Next());
     }
-    CHECK_EQ(i::Token::IDENTIFIER, matcher.token());
+    // Adding characters will make keyword matching fail.
+    static const char chars_to_append[] = { 'z', '0', '_' };
+    for (int j = 0; j < static_cast<int>(ARRAY_SIZE(chars_to_append)); ++j) {
+      memmove(buffer, keyword, length);
+      buffer[length] = chars_to_append[j];
+      i::Utf8ToUC16CharacterStream stream(buffer, length + 1);
+      i::JavaScriptScanner scanner(&unicode_cache);
+      scanner.Initialize(&stream);
+      CHECK_EQ(i::Token::IDENTIFIER, scanner.Next());
+      CHECK_EQ(i::Token::EOS, scanner.Next());
+    }
+    // Replacing characters will make keyword matching fail.
+    {
+      memmove(buffer, keyword, length);
+      buffer[length - 1] = '_';
+      i::Utf8ToUC16CharacterStream stream(buffer, length);
+      i::JavaScriptScanner scanner(&unicode_cache);
+      scanner.Initialize(&stream);
+      CHECK_EQ(i::Token::IDENTIFIER, scanner.Next());
+      CHECK_EQ(i::Token::EOS, scanner.Next());
+    }
   }
-
-  // Zero isn't ignored at first.
-  i::KeywordMatcher bad_start;
-  bad_start.AddChar(0);
-  CHECK_EQ(i::Token::IDENTIFIER, bad_start.token());
-  bad_start.AddChar('i');
-  bad_start.AddChar('f');
-  CHECK_EQ(i::Token::IDENTIFIER, bad_start.token());
-
-  // Zero isn't ignored at end.
-  i::KeywordMatcher bad_end;
-  bad_end.AddChar('i');
-  bad_end.AddChar('f');
-  CHECK_EQ(i::Token::IF, bad_end.token());
-  bad_end.AddChar(0);
-  CHECK_EQ(i::Token::IDENTIFIER, bad_end.token());
-
-  // Case isn't ignored.
-  i::KeywordMatcher bad_case;
-  bad_case.AddChar('i');
-  bad_case.AddChar('F');
-  CHECK_EQ(i::Token::IDENTIFIER, bad_case.token());
-
-  // If we mark it as failure, continuing won't help.
-  i::KeywordMatcher full_stop;
-  full_stop.AddChar('i');
-  CHECK_EQ(i::Token::IDENTIFIER, full_stop.token());
-  full_stop.Fail();
-  CHECK_EQ(i::Token::IDENTIFIER, full_stop.token());
-  full_stop.AddChar('f');
-  CHECK_EQ(i::Token::IDENTIFIER, full_stop.token());
 }
 
 
@@ -139,8 +109,9 @@ TEST(ScanHTMLEndComments) {
   // Regression test. See:
   //    http://code.google.com/p/chromium/issues/detail?id=53548
   // Tests that --> is correctly interpreted as comment-to-end-of-line if there
-  // is only whitespace before it on the line, even after a multiline-comment
-  // comment. This was not the case if it occurred before the first real token
+  // is only whitespace before it on the line (with comments considered as
+  // whitespace, even a multiline-comment containing a newline).
+  // This was not the case if it occurred before the first real token
   // in the input.
   const char* tests[] = {
       // Before first real token.
@@ -154,6 +125,16 @@ TEST(ScanHTMLEndComments) {
       NULL
   };
 
+  const char* fail_tests[] = {
+      "x --> is eol-comment\nvar y = 37;\n",
+      "\"\\n\" --> is eol-comment\nvar y = 37;\n",
+      "x/* precomment */ --> is eol-comment\nvar y = 37;\n",
+      "x/* precomment\n */ --> is eol-comment\nvar y = 37;\n",
+      "var x = 42; --> is eol-comment\nvar y = 37;\n",
+      "var x = 42; /* precomment\n */ --> is eol-comment\nvar y = 37;\n",
+      NULL
+  };
+
   // Parser/Scanner needs a stack limit.
   int marker;
   i::Isolate::Current()->stack_guard()->SetStackLimit(
@@ -163,6 +144,13 @@ TEST(ScanHTMLEndComments) {
     v8::ScriptData* data =
         v8::ScriptData::PreCompile(tests[i], i::StrLength(tests[i]));
     CHECK(data != NULL && !data->HasError());
+    delete data;
+  }
+
+  for (int i = 0; fail_tests[i]; i++) {
+    v8::ScriptData* data =
+        v8::ScriptData::PreCompile(fail_tests[i], i::StrLength(fail_tests[i]));
+    CHECK(data == NULL || data->HasError());
     delete data;
   }
 }
@@ -257,7 +245,7 @@ TEST(StandAlonePreParser) {
       "{label: 42}",
       "var x = 42;",
       "function foo(x, y) { return x + y; }",
-      "native function foo(); return %ArgleBargle(glop);",
+      "%ArgleBargle(glop);",
       "var x = new new Function('this.x = 42');",
       NULL
   };
@@ -269,7 +257,7 @@ TEST(StandAlonePreParser) {
         reinterpret_cast<const i::byte*>(program),
         static_cast<unsigned>(strlen(program)));
     i::CompleteParserRecorder log;
-    i::V8JavaScriptScanner scanner(i::Isolate::Current()->unicode_cache());
+    i::JavaScriptScanner scanner(i::Isolate::Current()->unicode_cache());
     scanner.Initialize(&stream);
 
     v8::preparser::PreParser::PreParseResult result =
@@ -301,7 +289,7 @@ TEST(RegressChromium62639) {
   i::Utf8ToUC16CharacterStream stream(reinterpret_cast<const i::byte*>(program),
                                       static_cast<unsigned>(strlen(program)));
   i::ScriptDataImpl* data =
-      i::ParserApi::PreParse(&stream, NULL);
+      i::ParserApi::PreParse(&stream, NULL, false);
   CHECK(data->HasError());
   delete data;
 }
@@ -325,7 +313,7 @@ TEST(Regress928) {
   i::Utf8ToUC16CharacterStream stream(reinterpret_cast<const i::byte*>(program),
                                       static_cast<unsigned>(strlen(program)));
   i::ScriptDataImpl* data =
-      i::ParserApi::PartialPreParse(&stream, NULL);
+      i::ParserApi::PartialPreParse(&stream, NULL, false);
   CHECK(!data->HasError());
 
   data->Initialize();
@@ -357,7 +345,7 @@ TEST(PreParseOverflow) {
       reinterpret_cast<uintptr_t>(&marker) - 128 * 1024);
 
   size_t kProgramSize = 1024 * 1024;
-  i::SmartPointer<char> program(
+  i::SmartArrayPointer<char> program(
       reinterpret_cast<char*>(malloc(kProgramSize + 1)));
   memset(*program, '(', kProgramSize);
   program[kProgramSize] = '\0';
@@ -368,7 +356,7 @@ TEST(PreParseOverflow) {
       reinterpret_cast<const i::byte*>(*program),
       static_cast<unsigned>(kProgramSize));
   i::CompleteParserRecorder log;
-  i::V8JavaScriptScanner scanner(i::Isolate::Current()->unicode_cache());
+  i::JavaScriptScanner scanner(i::Isolate::Current()->unicode_cache());
   scanner.Initialize(&stream);
 
 
@@ -410,7 +398,7 @@ void TestCharacterStream(const char* ascii_source,
   if (end == 0) end = length;
   unsigned sub_length = end - start;
   i::HandleScope test_scope;
-  i::SmartPointer<i::uc16> uc16_buffer(new i::uc16[length]);
+  i::SmartArrayPointer<i::uc16> uc16_buffer(new i::uc16[length]);
   for (unsigned i = 0; i < length; i++) {
     uc16_buffer[i] = static_cast<i::uc16>(ascii_source[i]);
   }
@@ -586,7 +574,7 @@ void TestStreamScanner(i::UC16CharacterStream* stream,
                        i::Token::Value* expected_tokens,
                        int skip_pos = 0,  // Zero means not skipping.
                        int skip_to = 0) {
-  i::V8JavaScriptScanner scanner(i::Isolate::Current()->unicode_cache());
+  i::JavaScriptScanner scanner(i::Isolate::Current()->unicode_cache());
   scanner.Initialize(stream);
 
   int i = 0;
@@ -667,7 +655,7 @@ void TestScanRegExp(const char* re_source, const char* expected) {
   i::Utf8ToUC16CharacterStream stream(
        reinterpret_cast<const i::byte*>(re_source),
        static_cast<unsigned>(strlen(re_source)));
-  i::V8JavaScriptScanner scanner(i::Isolate::Current()->unicode_cache());
+  i::JavaScriptScanner scanner(i::Isolate::Current()->unicode_cache());
   scanner.Initialize(&stream);
 
   i::Token::Value start = scanner.peek();
