@@ -244,13 +244,13 @@ static bool ReportEmptyHandle(const char* location) {
  * yet been done.
  */
 static inline bool IsDeadCheck(i::Isolate* isolate, const char* location) {
-  return !isolate->IsInitialized()
-      && i::V8::IsDead() ? ReportV8Dead(location) : false;
+  return ((isolate == NULL || !isolate->IsInitialized()) && i::V8::IsDead())
+      ? ReportV8Dead(location) : false;
 }
 
 
 static inline bool IsExecutionTerminatingCheck(i::Isolate* isolate) {
-  if (!isolate->IsInitialized()) return false;
+  if (isolate == NULL || !isolate->IsInitialized()) return false;
   if (isolate->has_scheduled_exception()) {
     return isolate->scheduled_exception() ==
         isolate->heap()->termination_exception();
@@ -613,24 +613,24 @@ void V8::MarkIndependent(i::Object** object) {
 
 bool V8::IsGlobalNearDeath(i::Object** obj) {
   i::Isolate* isolate = i::Isolate::Current();
+  if (isolate == NULL || !isolate->IsInitialized()) return false;
   LOG_API(isolate, "IsGlobalNearDeath");
-  if (!isolate->IsInitialized()) return false;
   return i::GlobalHandles::IsNearDeath(obj);
 }
 
 
 bool V8::IsGlobalWeak(i::Object** obj) {
   i::Isolate* isolate = i::Isolate::Current();
+  if (isolate == NULL || !isolate->IsInitialized()) return false;
   LOG_API(isolate, "IsGlobalWeak");
-  if (!isolate->IsInitialized()) return false;
   return i::GlobalHandles::IsWeak(obj);
 }
 
 
 void V8::DisposeGlobal(i::Object** obj) {
   i::Isolate* isolate = i::Isolate::Current();
+  if (isolate == NULL || !isolate->IsInitialized()) return;
   LOG_API(isolate, "DisposeGlobal");
-  if (!isolate->IsInitialized()) return;
   isolate->global_handles()->Destroy(obj);
 }
 
@@ -713,7 +713,7 @@ void Context::Exit() {
   // receiver, so we have to get the current isolate from the thread
   // local.
   i::Isolate* isolate = i::Isolate::Current();
-  if (!isolate->IsInitialized()) return;
+  if (isolate == NULL || !isolate->IsInitialized()) return;
 
   if (!ApiCheck(isolate->handle_scope_implementer()->LeaveLastContext(),
                 "v8::Context::Exit()",
@@ -4002,21 +4002,22 @@ void v8::V8::GetHeapStatistics(HeapStatistics* heap_statistics) {
 bool v8::V8::IdleNotification() {
   // Returning true tells the caller that it need not
   // continue to call IdleNotification.
-  if (!i::Isolate::Current()->IsInitialized()) return true;
+  i::Isolate* isolate = i::Isolate::Current();
+  if (isolate == NULL || !isolate->IsInitialized()) return true;
   return i::V8::IdleNotification();
 }
 
 
 void v8::V8::LowMemoryNotification() {
   i::Isolate* isolate = i::Isolate::Current();
-  if (!isolate || !isolate->IsInitialized()) return;
+  if (isolate == NULL || !isolate->IsInitialized()) return;
   isolate->heap()->CollectAllGarbage(true);
 }
 
 
 int v8::V8::ContextDisposedNotification() {
   i::Isolate* isolate = i::Isolate::Current();
-  if (!isolate->IsInitialized()) return 0;
+  if (isolate == NULL || !isolate->IsInitialized()) return 0;
   return isolate->heap()->NotifyContextDisposed();
 }
 
@@ -5044,7 +5045,7 @@ int V8::GetCurrentThreadId() {
 
 void V8::TerminateExecution(int thread_id) {
   i::Isolate* isolate = i::Isolate::Current();
-  if (!isolate->IsInitialized()) return;
+  if (isolate == NULL || !isolate->IsInitialized()) return;
   API_ENTRY_CHECK(isolate, "V8::TerminateExecution()");
   // If the thread_id identifies the current thread just terminate
   // execution right away.  Otherwise, ask the thread manager to
@@ -5432,7 +5433,7 @@ void Debug::SetDebugMessageDispatchHandler(
 Local<Value> Debug::Call(v8::Handle<v8::Function> fun,
                          v8::Handle<v8::Value> data) {
   i::Isolate* isolate = i::Isolate::Current();
-  if (!isolate->IsInitialized()) return Local<Value>();
+  if (isolate == NULL || !isolate->IsInitialized()) return Local<Value>();
   ON_BAILOUT(isolate, "v8::Debug::Call()", return Local<Value>());
   ENTER_V8(isolate);
   i::Handle<i::Object> result;
@@ -5453,7 +5454,7 @@ Local<Value> Debug::Call(v8::Handle<v8::Function> fun,
 
 Local<Value> Debug::GetMirror(v8::Handle<v8::Value> obj) {
   i::Isolate* isolate = i::Isolate::Current();
-  if (!isolate->IsInitialized()) return Local<Value>();
+  if (isolate == NULL || !isolate->IsInitialized()) return Local<Value>();
   ON_BAILOUT(isolate, "v8::Debug::GetMirror()", return Local<Value>());
   ENTER_V8(isolate);
   v8::HandleScope scope;
