@@ -387,8 +387,7 @@ void* OS::Allocate(const size_t requested,
                    bool is_executable) {
   const size_t msize = RoundUp(requested, sysconf(_SC_PAGESIZE));
   int prot = PROT_READ | PROT_WRITE | (is_executable ? PROT_EXEC : 0);
-  void* addr = GetRandomMmapAddr();
-  void* mbase = mmap(addr, msize, prot, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  void* mbase = mmap(NULL, msize, prot, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (mbase == MAP_FAILED) {
     LOG(i::Isolate::Current(),
         StringEvent("OS::Allocate", "mmap failed"));
@@ -604,7 +603,7 @@ static const int kMmapFdOffset = 0;
 
 
 VirtualMemory::VirtualMemory(size_t size) {
-  address_ = mmap(GetRandomMmapAddr(), size, PROT_NONE,
+  address_ = mmap(NULL, size, PROT_NONE,
                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE,
                   kMmapFd, kMmapFdOffset);
   size_ = size;
