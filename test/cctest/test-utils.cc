@@ -1,4 +1,4 @@
-// Copyright 2006-2008 the V8 project authors. All rights reserved.
+// Copyright 2011 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -29,8 +29,9 @@
 
 #include "v8.h"
 
-#include "platform.h"
 #include "cctest.h"
+#include "platform.h"
+#include "utils-inl.h"
 
 using namespace v8::internal;
 
@@ -193,4 +194,16 @@ TEST(SequenceCollector) {
     }
   }
   result.Dispose();
+}
+
+
+TEST(SequenceCollectorRegression) {
+  SequenceCollector<char> collector(16);
+  collector.StartSequence();
+  collector.Add('0');
+  collector.AddBlock(
+      i::Vector<const char>("12345678901234567890123456789012", 32));
+  i::Vector<char> seq = collector.EndSequence();
+  CHECK_EQ(0, strncmp("0123456789012345678901234567890123",
+                      seq.start(), seq.length()));
 }

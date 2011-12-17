@@ -1,4 +1,4 @@
-// Copyright 2006-2008 the V8 project authors. All rights reserved.
+// Copyright 2011 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -29,6 +29,7 @@
 
 #include "accessors.h"
 #include "api.h"
+#include "bootstrapper.h"
 #include "execution.h"
 #include "global-handles.h"
 #include "ic-inl.h"
@@ -38,7 +39,6 @@
 #include "serialize.h"
 #include "stub-cache.h"
 #include "v8threads.h"
-#include "bootstrapper.h"
 
 namespace v8 {
 namespace internal {
@@ -62,57 +62,15 @@ static int* GetInternalPointer(StatsCounter* counter) {
 }
 
 
-// ExternalReferenceTable is a helper class that defines the relationship
-// between external references and their encodings. It is used to build
-// hashmaps in ExternalReferenceEncoder and ExternalReferenceDecoder.
-class ExternalReferenceTable {
- public:
-  static ExternalReferenceTable* instance(Isolate* isolate) {
-    ExternalReferenceTable* external_reference_table =
-        isolate->external_reference_table();
-    if (external_reference_table == NULL) {
-      external_reference_table = new ExternalReferenceTable(isolate);
-      isolate->set_external_reference_table(external_reference_table);
-    }
-    return external_reference_table;
+ExternalReferenceTable* ExternalReferenceTable::instance(Isolate* isolate) {
+  ExternalReferenceTable* external_reference_table =
+      isolate->external_reference_table();
+  if (external_reference_table == NULL) {
+    external_reference_table = new ExternalReferenceTable(isolate);
+    isolate->set_external_reference_table(external_reference_table);
   }
-
-  int size() const { return refs_.length(); }
-
-  Address address(int i) { return refs_[i].address; }
-
-  uint32_t code(int i) { return refs_[i].code; }
-
-  const char* name(int i) { return refs_[i].name; }
-
-  int max_id(int code) { return max_id_[code]; }
-
- private:
-  explicit ExternalReferenceTable(Isolate* isolate) : refs_(64) {
-      PopulateTable(isolate);
-  }
-  ~ExternalReferenceTable() { }
-
-  struct ExternalReferenceEntry {
-    Address address;
-    uint32_t code;
-    const char* name;
-  };
-
-  void PopulateTable(Isolate* isolate);
-
-  // For a few types of references, we can get their address from their id.
-  void AddFromId(TypeCode type,
-                 uint16_t id,
-                 const char* name,
-                 Isolate* isolate);
-
-  // For other types of references, the caller will figure out the address.
-  void Add(Address address, TypeCode type, uint16_t id, const char* name);
-
-  List<ExternalReferenceEntry> refs_;
-  int max_id_[kTypeCodeCount];
-};
+  return external_reference_table;
+}
 
 
 void ExternalReferenceTable::AddFromId(TypeCode type,
@@ -282,14 +240,14 @@ void ExternalReferenceTable::PopulateTable(Isolate* isolate) {
   // Top addresses
 
   const char* AddressNames[] = {
-#define C(name) "Isolate::" #name,
-    ISOLATE_ADDRESS_LIST(C)
-    ISOLATE_ADDRESS_LIST_PROF(C)
+#define BUILD_NAME_LITERAL(CamelName, hacker_name)      \
+    "Isolate::" #hacker_name "_address",
+    FOR_EACH_ISOLATE_ADDRESS_NAME(BUILD_NAME_LITERAL)
     NULL
 #undef C
   };
 
-  for (uint16_t i = 0; i < Isolate::k_isolate_address_count; ++i) {
+  for (uint16_t i = 0; i < Isolate::kIsolateAddressCount; ++i) {
     Add(isolate->get_address_from_id((Isolate::AddressId)i),
         TOP_ADDRESS, i, AddressNames[i]);
   }
@@ -325,6 +283,10 @@ void ExternalReferenceTable::PopulateTable(Isolate* isolate) {
       "StubCache::secondary_->value");
 
   // Runtime entries
+  Add(ExternalReference::flush_icache_function(isolate).address(),
+      RUNTIME_ENTRY,
+      2,
+      "Runtime::PerformGC");
   Add(ExternalReference::perform_gc_function(isolate).address(),
       RUNTIME_ENTRY,
       1,
@@ -775,6 +737,11 @@ void Deserializer::ReadObject(int space_number,
 
 static const int kUnknownOffsetFromStart = -1;
 
+#ifdef V8_TARGET_ARCH_MIPS
+#define BRANCH_LOCATION_ADJUST (- 3 * Assembler::kInstrSize)
+#else
+#define BRANCH_LOCATION_ADJUST 0
+#endif
 
 void Deserializer::ReadChunk(Object** current,
                              Object** limit,
@@ -843,8 +810,11 @@ void Deserializer::ReadChunk(Object** current,
           if (how == kFromCode) {                                              \
             Address location_of_branch_data =                                  \
                 reinterpret_cast<Address>(current);                            \
-            Assembler::set_target_at(location_of_branch_data,                  \
+            Assembler::set_target_at(location_of_branch_data                   \
+                                     + BRANCH_LOCATION_ADJUST,                 \
                                      reinterpret_cast<Address>(new_object));   \
+            current_was_incremented =                                          \
+              Assembler::kCallTargetSize ? false : true;                       \
             if (within == kFirstInstruction) {                                 \
               location_of_branch_data += Assembler::kCallTargetSize;           \
               current = reinterpret_cast<Object**>(location_of_branch_data);   \
@@ -937,6 +907,11 @@ void Deserializer::ReadChunk(Object** current,
       // Deserialize a new object and write a pointer to it to the current
       // object.
       ONE_PER_SPACE(kNewObject, kPlain, kStartOfObject)
+#ifdef V8_TARGET_ARCH_MIPS
+      // Deserialize a new object from pointer found in code and write
+      // a pointer to it to the current object.
+      ONE_PER_SPACE(kNewObject, kFromCode, kStartOfObject)
+#endif
       // Support for direct instruction pointers in functions
       ONE_PER_CODE_SPACE(kNewObject, kPlain, kFirstInstruction)
       // Deserialize a new code object and write a pointer to its first
@@ -950,6 +925,12 @@ void Deserializer::ReadChunk(Object** current,
       // to the current code object or the instruction pointer in a function
       // object.
       ALL_SPACES(kBackref, kFromCode, kFirstInstruction)
+#ifdef V8_TARGET_ARCH_MIPS
+      // Find a recently deserialized code object using its offset from the
+      // current allocation point and write a pointer to it to the current
+      // object.
+      ALL_SPACES(kBackref, kFromCode, kStartOfObject)
+#endif
       ALL_SPACES(kBackref, kPlain, kFirstInstruction)
       // Find an already deserialized object using its offset from the start
       // and write a pointer to it to the current object.
@@ -959,6 +940,11 @@ void Deserializer::ReadChunk(Object** current,
       // start and write a pointer to its first instruction to the current code
       // object.
       ALL_SPACES(kFromStart, kFromCode, kFirstInstruction)
+#ifdef V8_TARGET_ARCH_MIPS
+      // Find an already deserialized code object using its offset from
+      // the start and write a pointer to it to the current object.
+      ALL_SPACES(kFromStart, kFromCode, kStartOfObject)
+#endif
       // Find an already deserialized object at one of the predetermined popular
       // offsets from the start and write a pointer to it in the current object.
       COMMON_REFERENCE_PATTERNS(EMIT_COMMON_REFERENCE_PATTERNS)
@@ -1017,10 +1003,11 @@ void Deserializer::ReadChunk(Object** current,
 
       case kNativesStringResource: {
         int index = source_->Get();
-        Vector<const char> source_vector = Natives::GetScriptSource(index);
+        Vector<const char> source_vector = Natives::GetRawScriptSource(index);
         NativesExternalStringResource* resource =
-            new NativesExternalStringResource(
-                isolate->bootstrapper(), source_vector.start());
+            new NativesExternalStringResource(isolate->bootstrapper(),
+                                              source_vector.start(),
+                                              source_vector.length());
         *current++ = reinterpret_cast<Object*>(resource);
         break;
       }
@@ -1394,6 +1381,32 @@ void Serializer::ObjectSerializer::VisitPointers(Object** start,
 }
 
 
+void Serializer::ObjectSerializer::VisitPointer(Object** p, RelocInfo* rinfo) {
+  VisitPointers(p, p + 1, rinfo);
+}
+
+
+void Serializer::ObjectSerializer::VisitPointers(Object** start, Object** end,
+                                                 RelocInfo* rinfo) {
+  Object** current = start;
+  for (current = start; current < end; current++) {
+    while (current < end && (*current)->IsSmi()) current++;
+    if (current < end) {
+      OutputRawData(rinfo->target_address_address());
+    }
+
+    while (current < end && !(*current)->IsSmi()) {
+      // kFromCode tag is needed to instruct deserialization functions to call
+      // platform specific object address modification function
+      // (Assmebler::set_target_at)
+      serializer_->SerializeObject(*current, kFromCode, kStartOfObject);
+      bytes_processed_so_far_ += rinfo->target_address_size();
+      current++;
+    }
+  }
+}
+
+
 void Serializer::ObjectSerializer::VisitExternalReferences(Address* start,
                                                            Address* end) {
   Address references_start = reinterpret_cast<Address>(start);
@@ -1405,6 +1418,31 @@ void Serializer::ObjectSerializer::VisitExternalReferences(Address* start,
     sink_->PutInt(reference_id, "reference id");
   }
   bytes_processed_so_far_ += static_cast<int>((end - start) * kPointerSize);
+}
+
+
+void Serializer::ObjectSerializer::VisitExternalReference(Address* adr,
+                                                          RelocInfo* rinfo) {
+  VisitExternalReferences(adr, adr+1, rinfo);
+}
+
+
+void Serializer::ObjectSerializer::VisitExternalReferences(Address* start,
+                                                           Address* end,
+                                                           RelocInfo* rinfo) {
+  Address references_start = rinfo->target_address_address();
+  OutputRawData(references_start);
+
+  for (Address* current = start; current < end; current++) {
+    // kFromCode tag is needed to instruct deserialization functions to call
+    // platform specific ExternalReference address modification function
+    // (Assmebler::set_target_at)
+    sink_->Put(kExternalReference + kFromCode + kStartOfObject, "ExternalRef");
+    int reference_id = serializer_->EncodeExternalReference(*current);
+    sink_->PutInt(reference_id, "reference id");
+  }
+  bytes_processed_so_far_ +=
+    static_cast<int>((end-start)*rinfo->target_address_size());
 }
 
 

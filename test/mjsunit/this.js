@@ -44,3 +44,4 @@ assertTrue(y === y.f(), "y.f()");
 assertTrue(y === y[new String('f')]());
 assertFalse(x === y.f());
 assertFalse(y === x.f());
+

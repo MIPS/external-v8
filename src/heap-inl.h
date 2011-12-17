@@ -1,4 +1,4 @@
-// Copyright 2006-2010 the V8 project authors. All rights reserved.
+// Copyright 2011 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -29,8 +29,9 @@
 #define V8_HEAP_INL_H_
 
 #include "heap.h"
-#include "objects.h"
 #include "isolate.h"
+#include "list-inl.h"
+#include "objects.h"
 #include "v8-counters.h"
 
 namespace v8 {
@@ -138,6 +139,11 @@ MaybeObject* Heap::AllocateTwoByteSymbol(Vector<const uc16> str,
 
 MaybeObject* Heap::CopyFixedArray(FixedArray* src) {
   return CopyFixedArrayWithMap(src, src->map());
+}
+
+
+MaybeObject* Heap::CopyFixedDoubleArray(FixedDoubleArray* src) {
+  return CopyFixedDoubleArrayWithMap(src, src->map());
 }
 
 
@@ -317,10 +323,10 @@ AllocationSpace Heap::TargetSpaceId(InstanceType type) {
   ASSERT(type != JS_GLOBAL_PROPERTY_CELL_TYPE);
 
   if (type < FIRST_NONSTRING_TYPE) {
-    // There are three string representations: sequential strings, cons
-    // strings, and external strings.  Only cons strings contain
-    // non-map-word pointers to heap objects.
-    return ((type & kStringRepresentationMask) == kConsStringTag)
+    // There are four string representations: sequential strings, external
+    // strings, cons strings, and sliced strings.
+    // Only the latter two contain non-map-word pointers to heap objects.
+    return ((type & kIsIndirectStringMask) == kIsIndirectStringTag)
         ? OLD_POINTER_SPACE
         : OLD_DATA_SPACE;
   } else {
@@ -525,8 +531,6 @@ Isolate* Heap::isolate() {
   } while (false)
 
 
-// TODO(isolates): cache isolate: either accept as a parameter or
-//                 set to some known symbol (__CUR_ISOLATE__?)
 #define CALL_HEAP_FUNCTION(ISOLATE, FUNCTION_CALL, TYPE)       \
   CALL_AND_RETRY(ISOLATE,                                      \
                  FUNCTION_CALL,                                \

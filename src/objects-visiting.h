@@ -1,4 +1,4 @@
-// Copyright 2006-2009 the V8 project authors. All rights reserved.
+// Copyright 2011 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -28,6 +28,24 @@
 #ifndef V8_OBJECTS_VISITING_H_
 #define V8_OBJECTS_VISITING_H_
 
+#include "allocation.h"
+
+#if V8_TARGET_ARCH_IA32
+#include "ia32/assembler-ia32.h"
+#include "ia32/assembler-ia32-inl.h"
+#elif V8_TARGET_ARCH_X64
+#include "x64/assembler-x64.h"
+#include "x64/assembler-x64-inl.h"
+#elif V8_TARGET_ARCH_ARM
+#include "arm/assembler-arm.h"
+#include "arm/assembler-arm-inl.h"
+#elif V8_TARGET_ARCH_MIPS
+#include "mips/assembler-mips.h"
+#include "mips/assembler-mips-inl.h"
+#else
+#error Unsupported target architecture.
+#endif
+
 // This file provides base classes and auxiliary methods for defining
 // static object visitors used during GC.
 // Visiting HeapObject body with a normal ObjectVisitor requires performing
@@ -50,6 +68,7 @@ class StaticVisitorBase : public AllStatic {
     kVisitShortcutCandidate,
     kVisitByteArray,
     kVisitFixedArray,
+    kVisitFixedDoubleArray,
     kVisitGlobalContext,
 
     // For data objects, JS objects and structs along with generic visitor which
@@ -96,12 +115,15 @@ class StaticVisitorBase : public AllStatic {
     kVisitStructGeneric,
 
     kVisitConsString,
+    kVisitSlicedString,
     kVisitOddball,
     kVisitCode,
     kVisitMap,
     kVisitPropertyCell,
     kVisitSharedFunctionInfo,
     kVisitJSFunction,
+    kVisitJSWeakMap,
+    kVisitJSRegExp,
 
     kVisitorIdCount,
     kMinObjectSizeInWords = 2
@@ -278,10 +300,17 @@ class StaticNewSpaceVisitor : public StaticVisitorBase {
                                       ConsString::BodyDescriptor,
                                       int>::Visit);
 
+    table_.Register(kVisitSlicedString,
+                    &FixedBodyVisitor<StaticVisitor,
+                                      SlicedString::BodyDescriptor,
+                                      int>::Visit);
+
     table_.Register(kVisitFixedArray,
                     &FlexibleBodyVisitor<StaticVisitor,
                                          FixedArray::BodyDescriptor,
                                          int>::Visit);
+
+    table_.Register(kVisitFixedDoubleArray, &VisitFixedDoubleArray);
 
     table_.Register(kVisitGlobalContext,
                     &FixedBodyVisitor<StaticVisitor,
@@ -294,6 +323,10 @@ class StaticNewSpaceVisitor : public StaticVisitorBase {
                     &FixedBodyVisitor<StaticVisitor,
                                       SharedFunctionInfo::BodyDescriptor,
                                       int>::Visit);
+
+    table_.Register(kVisitJSWeakMap, &VisitJSObject);
+
+    table_.Register(kVisitJSRegExp, &VisitJSObject);
 
     table_.Register(kVisitSeqAsciiString, &VisitSeqAsciiString);
 
@@ -325,6 +358,15 @@ class StaticNewSpaceVisitor : public StaticVisitorBase {
  private:
   static inline int VisitByteArray(Map* map, HeapObject* object) {
     return reinterpret_cast<ByteArray*>(object)->ByteArraySize();
+  }
+
+  static inline int VisitFixedDoubleArray(Map* map, HeapObject* object) {
+    int length = reinterpret_cast<FixedDoubleArray*>(object)->length();
+    return FixedDoubleArray::SizeFor(length);
+  }
+
+  static inline int VisitJSObject(Map* map, HeapObject* object) {
+    return JSObjectVisitor::Visit(map, object);
   }
 
   static inline int VisitSeqAsciiString(Map* map, HeapObject* object) {

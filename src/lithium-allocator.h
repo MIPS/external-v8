@@ -1,4 +1,4 @@
-// Copyright 2010 the V8 project authors. All rights reserved.
+// Copyright 2011 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -30,7 +30,7 @@
 
 #include "v8.h"
 
-#include "data-flow.h"
+#include "allocation.h"
 #include "lithium.h"
 #include "zone.h"
 
@@ -162,12 +162,12 @@ class LEnvironment;
 class TempIterator BASE_EMBEDDED {
  public:
   inline explicit TempIterator(LInstruction* instr);
-  inline bool HasNext();
-  inline LOperand* Next();
+  inline bool Done();
+  inline LOperand* Current();
   inline void Advance();
 
  private:
-  inline int AdvanceToNext(int start);
+  inline void SkipUninteresting();
   LInstruction* instr_;
   int limit_;
   int current_;
@@ -178,12 +178,12 @@ class TempIterator BASE_EMBEDDED {
 class InputIterator BASE_EMBEDDED {
  public:
   inline explicit InputIterator(LInstruction* instr);
-  inline bool HasNext();
-  inline LOperand* Next();
+  inline bool Done();
+  inline LOperand* Current();
   inline void Advance();
 
  private:
-  inline int AdvanceToNext(int start);
+  inline void SkipUninteresting();
   LInstruction* instr_;
   int limit_;
   int current_;
@@ -193,8 +193,8 @@ class InputIterator BASE_EMBEDDED {
 class UseIterator BASE_EMBEDDED {
  public:
   inline explicit UseIterator(LInstruction* instr);
-  inline bool HasNext();
-  inline LOperand* Next();
+  inline bool Done();
+  inline LOperand* Current();
   inline void Advance();
 
  private:

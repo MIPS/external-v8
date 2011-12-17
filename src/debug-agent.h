@@ -43,23 +43,26 @@ class DebuggerAgentSession;
 // handles connection from a remote debugger.
 class DebuggerAgent: public Thread {
  public:
-  DebuggerAgent(Isolate* isolate, const char* name, int port)
-      : Thread(isolate, name),
+  DebuggerAgent(const char* name, int port)
+      : Thread(name),
+        isolate_(Isolate::Current()),
         name_(StrDup(name)), port_(port),
         server_(OS::CreateSocket()), terminate_(false),
         session_access_(OS::CreateMutex()), session_(NULL),
         terminate_now_(OS::CreateSemaphore(0)),
         listening_(OS::CreateSemaphore(0)) {
-    ASSERT(Isolate::Current()->debugger_agent_instance() == NULL);
-    Isolate::Current()->set_debugger_agent_instance(this);
+    ASSERT(isolate_->debugger_agent_instance() == NULL);
+    isolate_->set_debugger_agent_instance(this);
   }
   ~DebuggerAgent() {
-     Isolate::Current()->set_debugger_agent_instance(NULL);
+     isolate_->set_debugger_agent_instance(NULL);
      delete server_;
   }
 
   void Shutdown();
   void WaitUntilListening();
+
+  Isolate* isolate() { return isolate_; }
 
  private:
   void Run();
@@ -68,7 +71,8 @@ class DebuggerAgent: public Thread {
   void CloseSession();
   void OnSessionClosed(DebuggerAgentSession* session);
 
-  SmartPointer<const char> name_;  // Name of the embedding application.
+  Isolate* isolate_;
+  SmartArrayPointer<const char> name_;  // Name of the embedding application.
   int port_;  // Port to use for the agent.
   Socket* server_;  // Server socket for listen/accept.
   bool terminate_;  // Termination flag.
@@ -88,8 +92,8 @@ class DebuggerAgent: public Thread {
 // debugger and sends debugger events/responses to the remote debugger.
 class DebuggerAgentSession: public Thread {
  public:
-  DebuggerAgentSession(Isolate* isolate, DebuggerAgent* agent, Socket* client)
-      : Thread(isolate, "v8:DbgAgntSessn"),
+  DebuggerAgentSession(DebuggerAgent* agent, Socket* client)
+      : Thread("v8:DbgAgntSessn"),
         agent_(agent), client_(client) {}
 
   void DebuggerMessage(Vector<uint16_t> message);
@@ -113,7 +117,7 @@ class DebuggerAgentUtil {
   static const char* const kContentLength;
   static const int kContentLengthSize;
 
-  static SmartPointer<char> ReceiveMessage(const Socket* conn);
+  static SmartArrayPointer<char> ReceiveMessage(const Socket* conn);
   static bool SendConnectMessage(const Socket* conn,
                                  const char* embedding_host);
   static bool SendMessage(const Socket* conn, const Vector<uint16_t> message);

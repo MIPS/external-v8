@@ -68,6 +68,7 @@ inline T* Handle<T>::operator*() const {
 
 
 HandleScope::HandleScope() {
+  Isolate::EnsureDefaultIsolate();
   Isolate* isolate = Isolate::Current();
   v8::ImplementationUtilities::HandleScopeData* current =
       isolate->handle_scope_data();

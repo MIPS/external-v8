@@ -28,6 +28,9 @@
 #ifndef V8_ARM_REGEXP_MACRO_ASSEMBLER_ARM_H_
 #define V8_ARM_REGEXP_MACRO_ASSEMBLER_ARM_H_
 
+#include "arm/assembler-arm.h"
+#include "arm/assembler-arm-inl.h"
+
 namespace v8 {
 namespace internal {
 
@@ -113,6 +116,7 @@ class RegExpMacroAssemblerARM: public NativeRegExpMacroAssembler {
   static int CheckStackGuardState(Address* return_address,
                                   Code* re_code,
                                   Address re_frame);
+
  private:
   // Offsets from frame_pointer() of function parameters and stored registers.
   static const int kFramePointer = 0;

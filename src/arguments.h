@@ -28,6 +28,8 @@
 #ifndef V8_ARGUMENTS_H_
 #define V8_ARGUMENTS_H_
 
+#include "allocation.h"
+
 namespace v8 {
 namespace internal {
 
@@ -61,10 +63,19 @@ class Arguments BASE_EMBEDDED {
     return Handle<S>(reinterpret_cast<S**>(value));
   }
 
+  int smi_at(int index) {
+    return Smi::cast((*this)[index])->value();
+  }
+
+  double number_at(int index) {
+    return (*this)[index]->Number();
+  }
+
   // Get the total number of arguments including the receiver.
   int length() const { return length_; }
 
   Object** arguments() { return arguments_; }
+
  private:
   int length_;
   Object** arguments_;

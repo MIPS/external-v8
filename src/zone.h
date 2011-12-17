@@ -28,6 +28,8 @@
 #ifndef V8_ZONE_H_
 #define V8_ZONE_H_
 
+#include "allocation.h"
+
 namespace v8 {
 namespace internal {
 
@@ -63,14 +65,20 @@ class Zone {
   template <typename T>
   inline T* NewArray(int length);
 
-  // Delete all objects and free all memory allocated in the Zone.
+  // Deletes all objects and free all memory allocated in the Zone. Keeps one
+  // small (size <= kMaximumKeptSegmentSize) segment around if it finds one.
   void DeleteAll();
+
+  // Deletes the last small segment kept around by DeleteAll().
+  void DeleteKeptSegment();
 
   // Returns true if more memory has been allocated in zones than
   // the limit allows.
   inline bool excess_allocation();
 
   inline void adjust_segment_bytes_allocated(int delta);
+
+  inline Isolate* isolate() { return isolate_; }
 
   static unsigned allocation_size_;
 
@@ -79,7 +87,11 @@ class Zone {
   friend class ZoneScope;
 
   // All pointers returned from New() have this alignment.
+#if defined(V8_TARGET_ARCH_ARM) || defined(V8_TARGET_ARCH_MIPS)
+  static const int kAlignment = 2 * kPointerSize;
+#else
   static const int kAlignment = kPointerSize;
+#endif
 
   // Never allocate segments smaller than this size in bytes.
   static const int kMinimumSegmentSize = 8 * KB;
@@ -132,8 +144,8 @@ class Zone {
 class ZoneObject {
  public:
   // Allocate a new ZoneObject of 'size' bytes in the Zone.
-  inline void* operator new(size_t size);
-  inline void* operator new(size_t size, Zone* zone);
+  INLINE(void* operator new(size_t size));
+  INLINE(void* operator new(size_t size, Zone* zone));
 
   // Ideally, the delete operator should be private instead of
   // public, but unfortunately the compiler sometimes synthesizes
@@ -144,6 +156,7 @@ class ZoneObject {
   // ZoneObjects should never be deleted individually; use
   // Zone::DeleteAll() to delete all zone objects in one go.
   void operator delete(void*, size_t) { UNREACHABLE(); }
+  void operator delete(void* pointer, Zone* zone) { UNREACHABLE(); }
 };
 
 
@@ -162,7 +175,7 @@ class AssertNoZoneAllocation {
 class ZoneListAllocationPolicy {
  public:
   // Allocate 'size' bytes of memory in the zone.
-  static inline void* New(int size);
+  static void* New(int size);
 
   // De-allocation attempts are silently ignored.
   static void Delete(void* p) { }
@@ -176,6 +189,9 @@ class ZoneListAllocationPolicy {
 template<typename T>
 class ZoneList: public List<T, ZoneListAllocationPolicy> {
  public:
+  INLINE(void* operator new(size_t size));
+  INLINE(void* operator new(size_t size, Zone* zone));
+
   // Construct a new ZoneList with the given capacity; the length is
   // always zero. The capacity must be non-negative.
   explicit ZoneList(int capacity)
@@ -186,11 +202,10 @@ class ZoneList: public List<T, ZoneListAllocationPolicy> {
       : List<T, ZoneListAllocationPolicy>(other.length()) {
     AddAll(other);
   }
+
+  void operator delete(void* pointer) { UNREACHABLE(); }
+  void operator delete(void* pointer, Zone* zone) { UNREACHABLE(); }
 };
-
-
-// Introduce a convenience type for zone lists of map handles.
-typedef ZoneList<Handle<Map> > ZoneMapList;
 
 
 // ZoneScopes keep track of the current parsing and compilation
@@ -198,8 +213,7 @@ typedef ZoneList<Handle<Map> > ZoneMapList;
 // outer-most scope.
 class ZoneScope BASE_EMBEDDED {
  public:
-  // TODO(isolates): pass isolate pointer here.
-  inline explicit ZoneScope(ZoneScopeMode mode);
+  INLINE(ZoneScope(Isolate* isolate, ZoneScopeMode mode));
 
   virtual ~ZoneScope();
 
