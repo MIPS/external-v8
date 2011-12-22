@@ -18,6 +18,7 @@ V8_LOCAL_SRC_FILES += \
   src/mksnapshot.cc \
   src/snapshot-empty.cc
 ifeq ($(TARGET_ARCH),arm)
+V8_LOCAL_SRC_FILES += \
   src/arm/simulator-arm.cc
 endif
 ifeq ($(TARGET_ARCH),mips)
