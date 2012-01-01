@@ -67,8 +67,7 @@ void CPU::FlushICache(void* start, size_t size) {
   // solution is to run valgrind with --smc-check=all, but this comes at a big
   // performance cost.  We can notify valgrind to invalidate its cache.
 #ifdef VALGRIND_DISCARD_TRANSLATIONS
-  unsigned res = VALGRIND_DISCARD_TRANSLATIONS(start, size);
-  USE(res);
+  VALGRIND_DISCARD_TRANSLATIONS(start, size);
 #endif
 }
 

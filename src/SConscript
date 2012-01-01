@@ -32,7 +32,6 @@ sys.path.append(join(root_dir, 'tools'))
 import js2c
 Import('context')
 Import('tools')
-Import('d8_env')
 
 
 SOURCES = {
@@ -66,10 +65,10 @@ SOURCES = {
     disassembler.cc
     diy-fp.cc
     dtoa.cc
-    elements.cc
     execution.cc
     factory.cc
     flags.cc
+    frame-element.cc
     frames.cc
     full-codegen.cc
     func-name-inferrer.cc
@@ -111,8 +110,8 @@ SOURCES = {
     runtime.cc
     runtime-profiler.cc
     safepoint-table.cc
+    scanner-base.cc
     scanner.cc
-    scanner-character-streams.cc
     scopeinfo.cc
     scopes.cc
     serialize.cc
@@ -123,14 +122,13 @@ SOURCES = {
     strtod.cc
     stub-cache.cc
     token.cc
+    top.cc
     type-info.cc
     unicode.cc
     utils.cc
     v8-counters.cc
     v8.cc
-    v8conversions.cc
     v8threads.cc
-    v8utils.cc
     variables.cc
     version.cc
     zone.cc
@@ -170,9 +168,6 @@ SOURCES = {
     mips/frames-mips.cc
     mips/full-codegen-mips.cc
     mips/ic-mips.cc
-    mips/lithium-mips.cc
-    mips/lithium-codegen-mips.cc
-    mips/lithium-gap-resolver-mips.cc
     mips/macro-assembler-mips.cc
     mips/regexp-macro-assembler-mips.cc
     mips/stub-cache-mips.cc
@@ -225,7 +220,7 @@ SOURCES = {
   'os:solaris': ['platform-solaris.cc', 'platform-posix.cc'],
   'os:cygwin':  ['platform-cygwin.cc', 'platform-posix.cc'],
   'os:nullos':  ['platform-nullos.cc'],
-  'os:win32':   ['platform-win32.cc', 'win32-math.cc'],
+  'os:win32':   ['platform-win32.cc'],
   'mode:release': [],
   'mode:debug': [
     'objects-debug.cc', 'prettyprinter.cc', 'regexp-macro-assembler-tracer.cc'
@@ -236,36 +231,18 @@ SOURCES = {
 PREPARSER_SOURCES = {
   'all': Split("""
     allocation.cc
-    bignum.cc
-    bignum-dtoa.cc
-    cached-powers.cc
-    conversions.cc
-    diy-fp.cc
-    dtoa.cc
-    fast-dtoa.cc
-    fixed-dtoa.cc
     hashmap.cc
     preparse-data.cc
     preparser.cc
     preparser-api.cc
-    scanner.cc
-    strtod.cc
+    scanner-base.cc
     token.cc
     unicode.cc
-    utils.cc
-    """),
-  'os:win32': ['win32-math.cc']
+    """)
 }
 
 
-D8_LIGHT_FILES = {
-  'all': [
-    'd8.cc'
-  ]
-}
-
-
-D8_FULL_FILES = {
+D8_FILES = {
   'all': [
     'd8.cc', 'd8-debug.cc'
   ],
@@ -320,12 +297,6 @@ debug-debugger.js
 '''.split()
 
 
-EXPERIMENTAL_LIBRARY_FILES = '''
-proxy.js
-weakmap.js
-'''.split()
-
-
 def Abort(message):
   print message
   sys.exit(1)
@@ -338,40 +309,20 @@ def ConfigureObjectFiles():
   env['BUILDERS']['JS2C'] = Builder(action=js2c.JS2C)
   env['BUILDERS']['Snapshot'] = Builder(action='$SOURCE $TARGET --logfile "$LOGFILE" --log-snapshot-positions')
 
-  def BuildJS2CEnv(type):
-    js2c_env = { 'TYPE': type, 'COMPRESSION': 'off' }
-    if 'COMPRESS_STARTUP_DATA_BZ2' in env['CPPDEFINES']:
-      js2c_env['COMPRESSION'] = 'bz2'
-    return js2c_env
-
   # Build the standard platform-independent source files.
   source_files = context.GetRelevantSources(SOURCES)
-  d8_js = env.JS2C('d8-js.cc', 'd8.js', **{'TYPE': 'D8', 'COMPRESSION': 'off'})
+
+  d8_files = context.GetRelevantSources(D8_FILES)
+  d8_js = env.JS2C('d8-js.cc', 'd8.js', TYPE='D8')
   d8_js_obj = context.ConfigureObject(env, d8_js, CPPPATH=['.'])
-  if context.options['library'] == 'shared':
-    d8_files = context.GetRelevantSources(D8_LIGHT_FILES)
-    d8_objs = []
-  else:
-    d8_files = context.GetRelevantSources(D8_FULL_FILES)
-    d8_objs = [d8_js_obj]
-  d8_objs.append(context.ConfigureObject(d8_env, [d8_files]))
+  d8_objs = [context.ConfigureObject(env, [d8_files]), d8_js_obj]
 
   # Combine the JavaScript library files into a single C++ file and
   # compile it.
   library_files = [s for s in LIBRARY_FILES]
   library_files.append('macros.py')
-  libraries_src = env.JS2C(
-    ['libraries.cc'], library_files, **BuildJS2CEnv('CORE'))
+  libraries_src, libraries_empty_src = env.JS2C(['libraries.cc', 'libraries-empty.cc'], library_files, TYPE='CORE')
   libraries_obj = context.ConfigureObject(env, libraries_src, CPPPATH=['.'])
-
-  # Combine the experimental JavaScript library files into a C++ file
-  # and compile it.
-  experimental_library_files = [ s for s in EXPERIMENTAL_LIBRARY_FILES ]
-  experimental_library_files.append('macros.py')
-  experimental_libraries_src = env.JS2C(['experimental-libraries.cc'],
-                                        experimental_library_files,
-                                        **BuildJS2CEnv('EXPERIMENTAL'))
-  experimental_libraries_obj = context.ConfigureObject(env, experimental_libraries_src, CPPPATH=['.'])
 
   source_objs = context.ConfigureObject(env, source_files)
   non_snapshot_files = [source_objs]
@@ -389,7 +340,7 @@ def ConfigureObjectFiles():
   mksnapshot_env = env.Copy()
   mksnapshot_env.Replace(**context.flags['mksnapshot'])
   mksnapshot_src = 'mksnapshot.cc'
-  mksnapshot = mksnapshot_env.Program('mksnapshot', [mksnapshot_src, libraries_obj, experimental_libraries_obj,  non_snapshot_files, empty_snapshot_obj], PDB='mksnapshot.exe.pdb')
+  mksnapshot = mksnapshot_env.Program('mksnapshot', [mksnapshot_src, libraries_obj, non_snapshot_files, empty_snapshot_obj], PDB='mksnapshot.exe.pdb')
   if context.use_snapshot:
     if context.build_snapshot:
       snapshot_cc = env.Snapshot('snapshot.cc', mksnapshot, LOGFILE=File('snapshot.log').abspath)
@@ -398,7 +349,7 @@ def ConfigureObjectFiles():
     snapshot_obj = context.ConfigureObject(env, snapshot_cc, CPPPATH=['.'])
   else:
     snapshot_obj = empty_snapshot_obj
-  library_objs = [non_snapshot_files, libraries_obj, experimental_libraries_obj, snapshot_obj]
+  library_objs = [non_snapshot_files, libraries_obj, snapshot_obj]
   return (library_objs, d8_objs, [mksnapshot], preparser_objs)
 
 

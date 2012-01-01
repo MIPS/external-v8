@@ -33,7 +33,7 @@
 namespace v8 {
 namespace internal {
 
-class Snapshot {
+STATIC_CLASS Snapshot {
  public:
   // Initialize the VM from the given snapshot file. If snapshot_file is
   // NULL, use the internal snapshot instead. Returns false if no snapshot
@@ -50,25 +50,9 @@ class Snapshot {
   // successfully.
   static bool WriteToFile(const char* snapshot_file);
 
-  static const byte* data() { return data_; }
-  static int size() { return size_; }
-  static int raw_size() { return raw_size_; }
-  static void set_raw_data(const byte* raw_data) {
-    raw_data_ = raw_data;
-  }
-  static const byte* context_data() { return context_data_; }
-  static int context_size() { return context_size_; }
-  static int context_raw_size() { return context_raw_size_; }
-  static void set_context_raw_data(
-      const byte* context_raw_data) {
-    context_raw_data_ = context_raw_data;
-  }
-
  private:
   static const byte data_[];
-  static const byte* raw_data_;
   static const byte context_data_[];
-  static const byte* context_raw_data_;
   static const int new_space_used_;
   static const int pointer_space_used_;
   static const int data_space_used_;
@@ -77,9 +61,7 @@ class Snapshot {
   static const int cell_space_used_;
   static const int large_space_used_;
   static const int size_;
-  static const int raw_size_;
   static const int context_size_;
-  static const int context_raw_size_;
 
   static bool Deserialize(const byte* content, int len);
 

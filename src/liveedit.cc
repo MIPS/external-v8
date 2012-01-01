@@ -1,4 +1,4 @@
-// Copyright 2011 the V8 project authors. All rights reserved.
+// Copyright 2010 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -30,8 +30,8 @@
 
 #include "liveedit.h"
 
-#include "compilation-cache.h"
 #include "compiler.h"
+#include "compilation-cache.h"
 #include "debug.h"
 #include "deoptimizer.h"
 #include "global-handles.h"
@@ -66,7 +66,7 @@ void SetElementNonStrict(Handle<JSObject> object,
 class Differencer {
  public:
   explicit Differencer(Comparator::Input* input)
-      : input_(input), len1_(input->GetLength1()), len2_(input->GetLength2()) {
+      : input_(input), len1_(input->getLength1()), len2_(input->getLength2()) {
     buffer_ = NewArray<int>(len1_ * len2_);
   }
   ~Differencer() {
@@ -151,7 +151,7 @@ class Differencer {
         if (cached_res == kEmptyCellValue) {
           Direction dir;
           int res;
-          if (input_->Equals(pos1, pos2)) {
+          if (input_->equals(pos1, pos2)) {
             res = CompareUpToTail(pos1 + 1, pos2 + 1);
             dir = EQ;
           } else {
@@ -268,78 +268,21 @@ void Comparator::CalculateDifference(Comparator::Input* input,
 }
 
 
-static bool CompareSubstrings(Handle<String> s1, int pos1,
+static bool CompareSubstrings(Isolate* isolate, Handle<String> s1, int pos1,
                               Handle<String> s2, int pos2, int len) {
+  StringInputBuffer& buf1 = *isolate->liveedit_compare_substrings_buf1();
+  StringInputBuffer& buf2 = *isolate->liveedit_compare_substrings_buf2();
+  buf1.Reset(*s1);
+  buf1.Seek(pos1);
+  buf2.Reset(*s2);
+  buf2.Seek(pos2);
   for (int i = 0; i < len; i++) {
-    if (s1->Get(i + pos1) != s2->Get(i + pos2)) {
+    ASSERT(buf1.has_more() && buf2.has_more());
+    if (buf1.GetNext() != buf2.GetNext()) {
       return false;
     }
   }
   return true;
-}
-
-
-// Additional to Input interface. Lets switch Input range to subrange.
-// More elegant way would be to wrap one Input as another Input object
-// and translate positions there, but that would cost us additional virtual
-// call per comparison.
-class SubrangableInput : public Comparator::Input {
- public:
-  virtual void SetSubrange1(int offset, int len) = 0;
-  virtual void SetSubrange2(int offset, int len) = 0;
-};
-
-
-class SubrangableOutput : public Comparator::Output {
- public:
-  virtual void SetSubrange1(int offset, int len) = 0;
-  virtual void SetSubrange2(int offset, int len) = 0;
-};
-
-
-static int min(int a, int b) {
-  return a < b ? a : b;
-}
-
-
-// Finds common prefix and suffix in input. This parts shouldn't take space in
-// linear programming table. Enable subranging in input and output.
-static void NarrowDownInput(SubrangableInput* input,
-    SubrangableOutput* output) {
-  const int len1 = input->GetLength1();
-  const int len2 = input->GetLength2();
-
-  int common_prefix_len;
-  int common_suffix_len;
-
-  {
-    common_prefix_len = 0;
-    int prefix_limit = min(len1, len2);
-    while (common_prefix_len < prefix_limit &&
-        input->Equals(common_prefix_len, common_prefix_len)) {
-      common_prefix_len++;
-    }
-
-    common_suffix_len = 0;
-    int suffix_limit = min(len1 - common_prefix_len, len2 - common_prefix_len);
-
-    while (common_suffix_len < suffix_limit &&
-        input->Equals(len1 - common_suffix_len - 1,
-        len2 - common_suffix_len - 1)) {
-      common_suffix_len++;
-    }
-  }
-
-  if (common_prefix_len > 0 || common_suffix_len > 0) {
-    int new_len1 = len1 - common_suffix_len - common_prefix_len;
-    int new_len2 = len2 - common_suffix_len - common_prefix_len;
-
-    input->SetSubrange1(common_prefix_len, new_len1);
-    input->SetSubrange2(common_prefix_len, new_len2);
-
-    output->SetSubrange1(common_prefix_len, new_len1);
-    output->SetSubrange2(common_prefix_len, new_len2);
-  }
 }
 
 
@@ -383,13 +326,13 @@ class TokensCompareInput : public Comparator::Input {
       : s1_(s1), offset1_(offset1), len1_(len1),
         s2_(s2), offset2_(offset2), len2_(len2) {
   }
-  virtual int GetLength1() {
+  virtual int getLength1() {
     return len1_;
   }
-  virtual int GetLength2() {
+  virtual int getLength2() {
     return len2_;
   }
-  bool Equals(int index1, int index2) {
+  bool equals(int index1, int index2) {
     return s1_->Get(offset1_ + index1) == s2_->Get(offset2_ + index2);
   }
 
@@ -465,26 +408,20 @@ class LineEndsWrapper {
 
 
 // Represents 2 strings as 2 arrays of lines.
-class LineArrayCompareInput : public SubrangableInput {
+class LineArrayCompareInput : public Comparator::Input {
  public:
-  LineArrayCompareInput(Handle<String> s1, Handle<String> s2,
+  LineArrayCompareInput(Isolate* isolate, Handle<String> s1, Handle<String> s2,
                         LineEndsWrapper line_ends1, LineEndsWrapper line_ends2)
-      : s1_(s1), s2_(s2), line_ends1_(line_ends1),
-        line_ends2_(line_ends2),
-        subrange_offset1_(0), subrange_offset2_(0),
-        subrange_len1_(line_ends1_.length()),
-        subrange_len2_(line_ends2_.length()) {
+      : isolate_(isolate), s1_(s1), s2_(s2), line_ends1_(line_ends1),
+        line_ends2_(line_ends2) {
   }
-  int GetLength1() {
-    return subrange_len1_;
+  int getLength1() {
+    return line_ends1_.length();
   }
-  int GetLength2() {
-    return subrange_len2_;
+  int getLength2() {
+    return line_ends2_.length();
   }
-  bool Equals(int index1, int index2) {
-    index1 += subrange_offset1_;
-    index2 += subrange_offset2_;
-
+  bool equals(int index1, int index2) {
     int line_start1 = line_ends1_.GetLineStart(index1);
     int line_start2 = line_ends2_.GetLineStart(index2);
     int line_end1 = line_ends1_.GetLineEnd(index1);
@@ -494,45 +431,30 @@ class LineArrayCompareInput : public SubrangableInput {
     if (len1 != len2) {
       return false;
     }
-    return CompareSubstrings(s1_, line_start1, s2_, line_start2,
+    return CompareSubstrings(isolate_, s1_, line_start1, s2_, line_start2,
                              len1);
-  }
-  void SetSubrange1(int offset, int len) {
-    subrange_offset1_ = offset;
-    subrange_len1_ = len;
-  }
-  void SetSubrange2(int offset, int len) {
-    subrange_offset2_ = offset;
-    subrange_len2_ = len;
   }
 
  private:
+  Isolate* isolate_;
   Handle<String> s1_;
   Handle<String> s2_;
   LineEndsWrapper line_ends1_;
   LineEndsWrapper line_ends2_;
-  int subrange_offset1_;
-  int subrange_offset2_;
-  int subrange_len1_;
-  int subrange_len2_;
 };
 
 
 // Stores compare result in JSArray. For each chunk tries to conduct
 // a fine-grained nested diff token-wise.
-class TokenizingLineArrayCompareOutput : public SubrangableOutput {
+class TokenizingLineArrayCompareOutput : public Comparator::Output {
  public:
   TokenizingLineArrayCompareOutput(LineEndsWrapper line_ends1,
                                    LineEndsWrapper line_ends2,
                                    Handle<String> s1, Handle<String> s2)
-      : line_ends1_(line_ends1), line_ends2_(line_ends2), s1_(s1), s2_(s2),
-        subrange_offset1_(0), subrange_offset2_(0) {
+      : line_ends1_(line_ends1), line_ends2_(line_ends2), s1_(s1), s2_(s2) {
   }
 
   void AddChunk(int line_pos1, int line_pos2, int line_len1, int line_len2) {
-    line_pos1 += subrange_offset1_;
-    line_pos2 += subrange_offset2_;
-
     int char_pos1 = line_ends1_.GetLineStart(line_pos1);
     int char_pos2 = line_ends2_.GetLineStart(line_pos2);
     int char_len1 = line_ends1_.GetLineStart(line_pos1 + line_len1) - char_pos1;
@@ -552,12 +474,6 @@ class TokenizingLineArrayCompareOutput : public SubrangableOutput {
       array_writer_.WriteChunk(char_pos1, char_pos2, char_len1, char_len2);
     }
   }
-  void SetSubrange1(int offset, int len) {
-    subrange_offset1_ = offset;
-  }
-  void SetSubrange2(int offset, int len) {
-    subrange_offset2_ = offset;
-  }
 
   Handle<JSArray> GetResult() {
     return array_writer_.GetResult();
@@ -571,23 +487,17 @@ class TokenizingLineArrayCompareOutput : public SubrangableOutput {
   LineEndsWrapper line_ends2_;
   Handle<String> s1_;
   Handle<String> s2_;
-  int subrange_offset1_;
-  int subrange_offset2_;
 };
 
 
 Handle<JSArray> LiveEdit::CompareStrings(Handle<String> s1,
                                          Handle<String> s2) {
-  s1 = FlattenGetString(s1);
-  s2 = FlattenGetString(s2);
-
   LineEndsWrapper line_ends1(s1);
   LineEndsWrapper line_ends2(s2);
 
-  LineArrayCompareInput input(s1, s2, line_ends1, line_ends2);
+  LineArrayCompareInput
+      input(Isolate::Current(), s1, s2, line_ends1, line_ends2);
   TokenizingLineArrayCompareOutput output(line_ends1, line_ends2, s1, s2);
-
-  NarrowDownInput(&input, &output);
 
   Comparator::CalculateDifference(&input, &output);
 
@@ -623,12 +533,12 @@ static Handle<Object> UnwrapJSValue(Handle<JSValue> jsValue) {
 
 // Wraps any object into a OpaqueReference, that will hide the object
 // from JavaScript.
-static Handle<JSValue> WrapInJSValue(Handle<Object> object) {
+static Handle<JSValue> WrapInJSValue(Object* object) {
   Handle<JSFunction> constructor =
       Isolate::Current()->opaque_reference_function();
   Handle<JSValue> result =
       Handle<JSValue>::cast(FACTORY->NewJSObject(constructor));
-  result->set_value(*object);
+  result->set_value(object);
   return result;
 }
 
@@ -695,17 +605,17 @@ class FunctionInfoWrapper : public JSArrayBasedStruct<FunctionInfoWrapper> {
   }
   void SetFunctionCode(Handle<Code> function_code,
       Handle<Object> code_scope_info) {
-    Handle<JSValue> code_wrapper = WrapInJSValue(function_code);
+    Handle<JSValue> code_wrapper = WrapInJSValue(*function_code);
     this->SetField(kCodeOffset_, code_wrapper);
 
-    Handle<JSValue> scope_wrapper = WrapInJSValue(code_scope_info);
+    Handle<JSValue> scope_wrapper = WrapInJSValue(*code_scope_info);
     this->SetField(kCodeScopeInfoOffset_, scope_wrapper);
   }
   void SetOuterScopeInfo(Handle<Object> scope_info_array) {
     this->SetField(kOuterScopeInfoOffset_, scope_info_array);
   }
   void SetSharedFunctionInfo(Handle<SharedFunctionInfo> info) {
-    Handle<JSValue> info_holder = WrapInJSValue(info);
+    Handle<JSValue> info_holder = WrapInJSValue(*info);
     this->SetField(kSharedFunctionInfoOffset_, info_holder);
   }
   int GetParentIndex() {
@@ -762,7 +672,7 @@ class SharedInfoWrapper : public JSArrayBasedStruct<SharedInfoWrapper> {
                      Handle<SharedFunctionInfo> info) {
     HandleScope scope;
     this->SetField(kFunctionNameOffset_, name);
-    Handle<JSValue> info_holder = WrapInJSValue(info);
+    Handle<JSValue> info_holder = WrapInJSValue(*info);
     this->SetField(kSharedInfoOffset_, info_holder);
     this->SetSmiValueField(kStartPositionOffset_, start_position);
     this->SetSmiValueField(kEndPositionOffset_, end_position);
@@ -860,7 +770,8 @@ class FunctionInfoListener {
       int j = 0;
       for (int i = 0; i < list.length(); i++) {
         Variable* var1 = list[i];
-        if (var1->IsContextSlot()) {
+        Slot* slot = var1->AsSlot();
+        if (slot != NULL && slot->type() == Slot::CONTEXT) {
           if (j != i) {
             list[j] = var1;
           }
@@ -872,7 +783,7 @@ class FunctionInfoListener {
       for (int k = 1; k < j; k++) {
         int l = k;
         for (int m = k + 1; m < j; m++) {
-          if (list[l]->index() > list[m]->index()) {
+          if (list[l]->AsSlot()->index() > list[m]->AsSlot()->index()) {
             l = m;
           }
         }
@@ -886,7 +797,7 @@ class FunctionInfoListener {
         SetElementNonStrict(
             scope_info_list,
             scope_info_length,
-            Handle<Smi>(Smi::FromInt(list[i]->index())));
+            Handle<Smi>(Smi::FromInt(list[i]->AsSlot()->index())));
         scope_info_length++;
       }
       SetElementNonStrict(scope_info_list,
@@ -909,7 +820,7 @@ class FunctionInfoListener {
 JSArray* LiveEdit::GatherCompileInfo(Handle<Script> script,
                                      Handle<String> source) {
   Isolate* isolate = Isolate::Current();
-  ZoneScope zone_scope(isolate, DELETE_ON_EXIT);
+  CompilationZoneScope zone_scope(DELETE_ON_EXIT);
 
   FunctionInfoListener listener;
   Handle<Object> original_source = Handle<Object>(script->source());
@@ -1003,7 +914,7 @@ static void ReplaceCodeObject(Code* original, Code* substitution) {
   AssertNoAllocation no_allocations_please;
 
   // A zone scope for ReferenceCollectorVisitor.
-  ZoneScope scope(Isolate::Current(), DELETE_ON_EXIT);
+  ZoneScope scope(DELETE_ON_EXIT);
 
   ReferenceCollectorVisitor visitor(original);
 
@@ -1450,7 +1361,7 @@ static bool FixTryCatchHandler(StackFrame* top_frame,
                                StackFrame* bottom_frame) {
   Address* pointer_address =
       &Memory::Address_at(Isolate::Current()->get_address_from_id(
-          Isolate::kHandlerAddress));
+          Isolate::k_handler_address));
 
   while (*pointer_address < top_frame->sp()) {
     pointer_address = &Memory::Address_at(*pointer_address);
@@ -1500,9 +1411,6 @@ static const char* DropFrames(Vector<StackFrame*> frames,
           Builtins::kFrameDropper_LiveEdit)) {
     // OK, we can drop our own code.
     *mode = Debug::FRAME_DROPPED_IN_DIRECT_CALL;
-  } else if (pre_top_frame_code ==
-      isolate->builtins()->builtin(Builtins::kReturn_DebugBreak)) {
-    *mode = Debug::FRAME_DROPPED_IN_RETURN_CALL;
   } else if (pre_top_frame_code->kind() == Code::STUB &&
       pre_top_frame_code->major_key()) {
     // Entry from our unit tests, it's fine, we support this case.
@@ -1553,9 +1461,8 @@ static bool IsDropableFrame(StackFrame* frame) {
 // removing all listed function if possible and if do_drop is true.
 static const char* DropActivationsInActiveThread(
     Handle<JSArray> shared_info_array, Handle<JSArray> result, bool do_drop) {
-  Isolate* isolate = Isolate::Current();
-  Debug* debug = isolate->debug();
-  ZoneScope scope(isolate, DELETE_ON_EXIT);
+  Debug* debug = Isolate::Current()->debug();
+  ZoneScope scope(DELETE_ON_EXIT);
   Vector<StackFrame*> frames = CreateStackMap();
 
   int array_len = Smi::cast(shared_info_array->length())->value();
@@ -1775,7 +1682,7 @@ void LiveEditFunctionTracker::RecordRootFunctionInfo(Handle<Code> code) {
 }
 
 
-bool LiveEditFunctionTracker::IsActive(Isolate* isolate) {
+bool LiveEditFunctionTracker::IsActive() {
   return false;
 }
 

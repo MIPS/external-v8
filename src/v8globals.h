@@ -1,4 +1,4 @@
-// Copyright 2011 the V8 project authors. All rights reserved.
+// Copyright 2010 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -88,15 +88,9 @@ const uint32_t kDebugZapValue = 0xbadbaddb;
 #endif
 
 
-#if defined(V8_TARGET_ARCH_MIPS)
-// Number of bits to represent the page size for paged spaces. For MIPS we need
-// the value of 14, which gives 16K bytes per page.
-const int kPageSizeBits = 14;
-#else
 // Number of bits to represent the page size for paged spaces. The value of 13
 // gives 8K bytes per page.
 const int kPageSizeBits = 13;
-#endif  // V8_TARGET_ARCH_MIPS
 
 // On Intel architecture, cache line size is 64 bytes.
 // On ARM it may be less (32 bytes), but as far this constant is
@@ -160,7 +154,7 @@ class Object;
 class MaybeObject;
 class OldSpace;
 class Property;
-class Foreign;
+class Proxy;
 class RegExpNode;
 struct RegExpCompileData;
 class RegExpTree;
@@ -190,8 +184,6 @@ class VirtualMemory;
 class Mutex;
 
 typedef bool (*WeakSlotCallback)(Object** pointer);
-
-typedef bool (*WeakSlotCallbackWithHeap)(Heap* heap, Object** pointer);
 
 // -----------------------------------------------------------------------------
 // Miscellaneous
@@ -226,12 +218,7 @@ enum GarbageCollector { SCAVENGER, MARK_COMPACTOR };
 
 enum Executability { NOT_EXECUTABLE, EXECUTABLE };
 
-enum VisitMode {
-  VISIT_ALL,
-  VISIT_ALL_IN_SCAVENGE,
-  VISIT_ALL_IN_SWEEP_NEWSPACE,
-  VISIT_ONLY_STRONG
-};
+enum VisitMode { VISIT_ALL, VISIT_ALL_IN_SCAVENGE, VISIT_ONLY_STRONG };
 
 // Flag indicating whether code is built into the VM (one of the natives files).
 enum NativesFlag { NOT_NATIVES_CODE, NATIVES_CODE };
@@ -316,9 +303,7 @@ enum InLoopFlag {
 
 enum CallFunctionFlags {
   NO_CALL_FUNCTION_FLAGS = 0,
-  // Receiver might implicitly be the global objects. If it is, the
-  // hole is passed to the call function stub.
-  RECEIVER_MIGHT_BE_IMPLICIT = 1 << 0
+  RECEIVER_MIGHT_BE_VALUE = 1 << 0  // Receiver might not be a JSObject.
 };
 
 
@@ -337,12 +322,11 @@ enum PropertyType {
   FIELD                     = 1,  // only in fast mode
   CONSTANT_FUNCTION         = 2,  // only in fast mode
   CALLBACKS                 = 3,
-  HANDLER                   = 4,  // only in lookup results, not in descriptors
-  INTERCEPTOR               = 5,  // only in lookup results, not in descriptors
-  MAP_TRANSITION            = 6,  // only in fast mode
-  ELEMENTS_TRANSITION       = 7,
-  CONSTANT_TRANSITION       = 8,  // only in fast mode
-  NULL_DESCRIPTOR           = 9,  // only in fast mode
+  INTERCEPTOR               = 4,  // only in lookup results, not in descriptors.
+  MAP_TRANSITION            = 5,  // only in fast mode
+  EXTERNAL_ARRAY_TRANSITION = 6,
+  CONSTANT_TRANSITION       = 7,  // only in fast mode
+  NULL_DESCRIPTOR           = 8,  // only in fast mode
   // All properties before MAP_TRANSITION are real.
   FIRST_PHANTOM_PROPERTY_TYPE = MAP_TRANSITION,
   // There are no IC stubs for NULL_DESCRIPTORS. Therefore,
@@ -401,11 +385,12 @@ struct AccessorDescriptor {
 };
 
 
-// Logging and profiling.  A StateTag represents a possible state of
-// the VM. The logger maintains a stack of these. Creating a VMState
-// object enters a state by pushing on the stack, and destroying a
-// VMState object leaves a state by popping the current state from the
-// stack.
+// Logging and profiling.
+// A StateTag represents a possible state of the VM.  When compiled with
+// ENABLE_VMSTATE_TRACKING, the logger maintains a stack of these.
+// Creating a VMState object enters a state by pushing on the stack, and
+// destroying a VMState object leaves a state by popping the current state
+// from the stack.
 
 #define STATE_TAG_LIST(V) \
   V(JS)                   \
@@ -495,32 +480,6 @@ enum StrictModeFlag {
   // kStrictMode.
   kInvalidStrictFlag
 };
-
-
-// Used to specify if a macro instruction must perform a smi check on tagged
-// values.
-enum SmiCheckType {
-  DONT_DO_SMI_CHECK = 0,
-  DO_SMI_CHECK
-};
-
-
-// Used to specify whether a receiver is implicitly or explicitly
-// provided to a call.
-enum CallKind {
-  CALL_AS_METHOD = 0,
-  CALL_AS_FUNCTION
-};
-
-
-static const uint32_t kHoleNanUpper32 = 0x7FFFFFFF;
-static const uint32_t kHoleNanLower32 = 0xFFFFFFFF;
-static const uint32_t kNaNOrInfinityLowerBoundUpper32 = 0x7FF00000;
-
-const uint64_t kHoleNanInt64 =
-    (static_cast<uint64_t>(kHoleNanUpper32) << 32) | kHoleNanLower32;
-const uint64_t kLastNonNaNInt64 =
-    (static_cast<uint64_t>(kNaNOrInfinityLowerBoundUpper32) << 32);
 
 } }  // namespace v8::internal
 

@@ -1,4 +1,4 @@
-// Copyright 2011 the V8 project authors. All rights reserved.
+// Copyright 2006-2008 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -35,7 +35,75 @@
 #include "platform.h"
 #include "vm-state-inl.h"
 
+// Extra POSIX/ANSI routines for Win32 when when using Visual Studio C++. Please
+// refer to The Open Group Base Specification for specification of the correct
+// semantics for these functions.
+// (http://www.opengroup.org/onlinepubs/000095399/)
 #ifdef _MSC_VER
+
+namespace v8 {
+namespace internal {
+
+// Test for finite value - usually defined in math.h
+int isfinite(double x) {
+  return _finite(x);
+}
+
+}  // namespace v8
+}  // namespace internal
+
+// Test for a NaN (not a number) value - usually defined in math.h
+int isnan(double x) {
+  return _isnan(x);
+}
+
+
+// Test for infinity - usually defined in math.h
+int isinf(double x) {
+  return (_fpclass(x) & (_FPCLASS_PINF | _FPCLASS_NINF)) != 0;
+}
+
+
+// Test if x is less than y and both nominal - usually defined in math.h
+int isless(double x, double y) {
+  return isnan(x) || isnan(y) ? 0 : x < y;
+}
+
+
+// Test if x is greater than y and both nominal - usually defined in math.h
+int isgreater(double x, double y) {
+  return isnan(x) || isnan(y) ? 0 : x > y;
+}
+
+
+// Classify floating point number - usually defined in math.h
+int fpclassify(double x) {
+  // Use the MS-specific _fpclass() for classification.
+  int flags = _fpclass(x);
+
+  // Determine class. We cannot use a switch statement because
+  // the _FPCLASS_ constants are defined as flags.
+  if (flags & (_FPCLASS_PN | _FPCLASS_NN)) return FP_NORMAL;
+  if (flags & (_FPCLASS_PZ | _FPCLASS_NZ)) return FP_ZERO;
+  if (flags & (_FPCLASS_PD | _FPCLASS_ND)) return FP_SUBNORMAL;
+  if (flags & (_FPCLASS_PINF | _FPCLASS_NINF)) return FP_INFINITE;
+
+  // All cases should be covered by the code above.
+  ASSERT(flags & (_FPCLASS_SNAN | _FPCLASS_QNAN));
+  return FP_NAN;
+}
+
+
+// Test sign - usually defined in math.h
+int signbit(double x) {
+  // We need to take care of the special case of both positive
+  // and negative versions of zero.
+  if (x == 0)
+    return _fpclass(x) & _FPCLASS_NZ;
+  else
+    return x < 0;
+}
+
 
 // Case-insensitive bounded string comparisons. Use stricmp() on Win32. Usually
 // defined in strings.h.
@@ -70,39 +138,16 @@ int fopen_s(FILE** pFile, const char* filename, const char* mode) {
 }
 
 
-#define _TRUNCATE 0
-#define STRUNCATE 80
-
 int _vsnprintf_s(char* buffer, size_t sizeOfBuffer, size_t count,
                  const char* format, va_list argptr) {
-  ASSERT(count == _TRUNCATE);
   return _vsnprintf(buffer, sizeOfBuffer, format, argptr);
 }
+#define _TRUNCATE 0
 
 
-int strncpy_s(char* dest, size_t dest_size, const char* source, size_t count) {
-  CHECK(source != NULL);
-  CHECK(dest != NULL);
-  CHECK_GT(dest_size, 0);
-
-  if (count == _TRUNCATE) {
-    while (dest_size > 0 && *source != 0) {
-      *(dest++) = *(source++);
-      --dest_size;
-    }
-    if (dest_size == 0) {
-      *(dest - 1) = 0;
-      return STRUNCATE;
-    }
-  } else {
-    while (dest_size > 0 && count > 0 && *source != 0) {
-      *(dest++) = *(source++);
-      --dest_size;
-      --count;
-    }
-  }
-  CHECK_GT(dest_size, 0);
-  *dest = 0;
+int strncpy_s(char* strDest, size_t numberOfElements,
+              const char* strSource, size_t count) {
+  strncpy(strDest, strSource, count);
   return 0;
 }
 
@@ -123,11 +168,6 @@ int random() {
 
 namespace v8 {
 namespace internal {
-
-intptr_t OS::MaxVirtualMemory() {
-  return 0;
-}
-
 
 double ceiling(double x) {
   return ceil(x);
@@ -367,11 +407,13 @@ void Time::TzSet() {
   }
 
   // Make standard and DST timezone names.
-  WideCharToMultiByte(CP_UTF8, 0, tzinfo_.StandardName, -1,
-                      std_tz_name_, kTzNameSize, NULL, NULL);
+  OS::SNPrintF(Vector<char>(std_tz_name_, kTzNameSize),
+               "%S",
+               tzinfo_.StandardName);
   std_tz_name_[kTzNameSize - 1] = '\0';
-  WideCharToMultiByte(CP_UTF8, 0, tzinfo_.DaylightName, -1,
-                      dst_tz_name_, kTzNameSize, NULL, NULL);
+  OS::SNPrintF(Vector<char>(dst_tz_name_, kTzNameSize),
+               "%S",
+               tzinfo_.DaylightName);
   dst_tz_name_[kTzNameSize - 1] = '\0';
 
   // If OS returned empty string or resource id (like "@tzres.dll,-211")
@@ -672,24 +714,6 @@ bool OS::Remove(const char* path) {
 }
 
 
-FILE* OS::OpenTemporaryFile() {
-  // tmpfile_s tries to use the root dir, don't use it.
-  char tempPathBuffer[MAX_PATH];
-  DWORD path_result = 0;
-  path_result = GetTempPathA(MAX_PATH, tempPathBuffer);
-  if (path_result > MAX_PATH || path_result == 0) return NULL;
-  UINT name_result = 0;
-  char tempNameBuffer[MAX_PATH];
-  name_result = GetTempFileNameA(tempPathBuffer, "", 0, tempNameBuffer);
-  if (name_result == 0) return NULL;
-  FILE* result = FOpen(tempNameBuffer, "w+");  // Same mode as tmpfile uses.
-  if (result != NULL) {
-    Remove(tempNameBuffer);  // Delete on close.
-  }
-  return result;
-}
-
-
 // Open log file in binary mode to avoid /n -> /r/n conversion.
 const char* const OS::LogFileOpenMode = "wb";
 
@@ -889,16 +913,23 @@ void OS::Free(void* address, const size_t size) {
 }
 
 
-void OS::ProtectCode(void* address, const size_t size) {
+#ifdef ENABLE_HEAP_PROTECTION
+
+void OS::Protect(void* address, size_t size) {
+  // TODO(1240712): VirtualProtect has a return value which is ignored here.
   DWORD old_protect;
-  VirtualProtect(address, size, PAGE_EXECUTE_READ, &old_protect);
+  VirtualProtect(address, size, PAGE_READONLY, &old_protect);
 }
 
 
-void OS::Guard(void* address, const size_t size) {
-  DWORD oldprotect;
-  VirtualProtect(address, size, PAGE_READONLY | PAGE_GUARD, &oldprotect);
+void OS::Unprotect(void* address, size_t size, bool is_executable) {
+  // TODO(1240712): VirtualProtect has a return value which is ignored here.
+  DWORD new_protect = is_executable ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE;
+  DWORD old_protect;
+  VirtualProtect(address, size, new_protect, &old_protect);
 }
+
+#endif
 
 
 void OS::Sleep(int milliseconds) {
@@ -1299,7 +1330,7 @@ int OS::StackWalk(Vector<OS::StackFrame> frames) {
 
     // Try to locate a symbol for this frame.
     DWORD64 symbol_displacement;
-    SmartArrayPointer<IMAGEHLP_SYMBOL64> symbol(
+    SmartPointer<IMAGEHLP_SYMBOL64> symbol(
         NewArray<IMAGEHLP_SYMBOL64>(kStackWalkMaxNameLen));
     if (symbol.is_empty()) return kStackWalkError;  // Out of memory.
     memset(*symbol, 0, sizeof(IMAGEHLP_SYMBOL64) + kStackWalkMaxNameLen);
@@ -1444,6 +1475,10 @@ static const HANDLE kNoThread = INVALID_HANDLE_VALUE;
 // convention.
 static unsigned int __stdcall ThreadEntry(void* arg) {
   Thread* thread = reinterpret_cast<Thread*>(arg);
+  // This is also initialized by the last parameter to _beginthreadex() but we
+  // don't know which thread will run first (the original thread or the new
+  // one) so we initialize it here too.
+  Thread::SetThreadLocal(Isolate::isolate_key(), thread->isolate());
   thread->Run();
   return 0;
 }
@@ -1459,15 +1494,17 @@ class Thread::PlatformData : public Malloced {
 // Initialize a Win32 thread object. The thread has an invalid thread
 // handle until it is started.
 
-Thread::Thread(const Options& options)
-    : stack_size_(options.stack_size) {
+Thread::Thread(Isolate* isolate, const Options& options)
+    : isolate_(isolate),
+      stack_size_(options.stack_size) {
   data_ = new PlatformData(kNoThread);
   set_name(options.name);
 }
 
 
-Thread::Thread(const char* name)
-    : stack_size_(0) {
+Thread::Thread(Isolate* isolate, const char* name)
+    : isolate_(isolate),
+      stack_size_(0) {
   data_ = new PlatformData(kNoThread);
   set_name(name);
 }
@@ -1548,6 +1585,7 @@ void Thread::YieldCPU() {
 
 class Win32Mutex : public Mutex {
  public:
+
   Win32Mutex() { InitializeCriticalSection(&cs_); }
 
   virtual ~Win32Mutex() { DeleteCriticalSection(&cs_); }
@@ -1801,6 +1839,8 @@ Socket* OS::CreateSocket() {
 }
 
 
+#ifdef ENABLE_LOGGING_AND_PROFILING
+
 // ----------------------------------------------------------------------------
 // Win32 profiler support.
 
@@ -1834,7 +1874,7 @@ class Sampler::PlatformData : public Malloced {
 class SamplerThread : public Thread {
  public:
   explicit SamplerThread(int interval)
-      : Thread("SamplerThread"),
+      : Thread(NULL, "SamplerThread"),
         interval_(interval) {}
 
   static void AddActiveSampler(Sampler* sampler) {
@@ -1852,7 +1892,8 @@ class SamplerThread : public Thread {
     ScopedLock lock(mutex_);
     SamplerRegistry::RemoveActiveSampler(sampler);
     if (SamplerRegistry::GetState() == SamplerRegistry::HAS_NO_SAMPLERS) {
-      RuntimeProfiler::StopRuntimeProfilerThreadBeforeShutdown(instance_);
+      RuntimeProfiler::WakeUpRuntimeProfilerThreadBeforeShutdown();
+      instance_->Join();
       delete instance_;
       instance_ = NULL;
     }
@@ -1975,5 +2016,6 @@ void Sampler::Stop() {
   SetActive(false);
 }
 
+#endif  // ENABLE_LOGGING_AND_PROFILING
 
 } }  // namespace v8::internal

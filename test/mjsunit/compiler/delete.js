@@ -1,4 +1,4 @@
-// Copyright 2011 the V8 project authors. All rights reserved.
+// Copyright 2010 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -66,7 +66,6 @@ assertEquals(2, ((delete 0) || 2) + 1);
 assertEquals(3, (function (x) { return ((delete x) || 2) + 1; })(0));
 
 
-// 'this' is not a Reference so delete returns true (see section 11.4.1,
-// step 2 of ES 5.1).
+// 'this' at toplevel is different from all other global variables---not
+// deletable.
 assertEquals(true, delete this);
-assertEquals(true, (function () { return delete this; })());

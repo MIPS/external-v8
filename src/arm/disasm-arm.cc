@@ -200,7 +200,7 @@ void Decoder::PrintDRegister(int reg) {
 
 // These shift names are defined in a way to match the native disassembler
 // formatting. See for example the command "objdump -d <binary file>".
-static const char* const shift_names[kNumberOfShifts] = {
+static const char* shift_names[kNumberOfShifts] = {
   "lsl", "lsr", "asr", "ror"
 };
 
@@ -502,16 +502,13 @@ int Decoder::FormatOption(Instruction* instr, const char* format) {
         ASSERT(STRING_STARTS_WITH(format, "memop"));
         if (instr->HasL()) {
           Print("ldr");
-        } else {
-          if ((instr->Bits(27, 25) == 0) && (instr->Bit(20) == 0) &&
-              (instr->Bits(7, 6) == 3) && (instr->Bit(4) == 1)) {
-            if (instr->Bit(5) == 1) {
-              Print("strd");
-            } else {
-              Print("ldrd");
-            }
-            return 5;
+        } else if ((instr->Bits(27, 25) == 0) && (instr->Bit(20) == 0)) {
+          if (instr->Bits(7, 4) == 0xf) {
+            Print("strd");
+          } else {
+            Print("ldrd");
           }
+        } else {
           Print("str");
         }
         return 5;
@@ -1089,10 +1086,10 @@ void Decoder::DecodeTypeVFP(Instruction* instr) {
         }
       } else if ((instr->Opc2Value() == 0x0) && (instr->Opc3Value() == 0x3)) {
         // vabs
-        Format(instr, "vabs.f64'cond 'Dd, 'Dm");
+        Format(instr, "vabs'cond 'Dd, 'Dm");
       } else if ((instr->Opc2Value() == 0x1) && (instr->Opc3Value() == 0x1)) {
         // vneg
-        Format(instr, "vneg.f64'cond 'Dd, 'Dm");
+        Format(instr, "vneg'cond 'Dd, 'Dm");
       } else if ((instr->Opc2Value() == 0x7) && (instr->Opc3Value() == 0x3)) {
         DecodeVCVTBetweenDoubleAndSingle(instr);
       } else if ((instr->Opc2Value() == 0x8) && (instr->Opc3Value() & 0x1)) {

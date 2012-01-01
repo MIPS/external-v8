@@ -37,6 +37,7 @@ namespace internal {
 class Isolate;
 class JSFunction;
 class Object;
+class PendingListNode;
 class Semaphore;
 
 class RuntimeProfiler {
@@ -51,6 +52,7 @@ class RuntimeProfiler {
   }
 
   void OptimizeNow();
+  void OptimizeSoon(JSFunction* function);
 
   void NotifyTick();
 
@@ -84,9 +86,10 @@ class RuntimeProfiler {
   static bool IsSomeIsolateInJS();
   static bool WaitForSomeIsolateToEnterJS();
 
-  // Stops the runtime profiler thread when profiling support is being
-  // turned off.
-  static void StopRuntimeProfilerThreadBeforeShutdown(Thread* thread);
+  // When shutting down we join the profiler thread. Doing so while
+  // it's waiting on a semaphore will cause a deadlock, so we have to
+  // wake it up first.
+  static void WakeUpRuntimeProfilerThreadBeforeShutdown();
 
   void UpdateSamplesAfterScavenge();
   void RemoveDeadSamples();
@@ -94,10 +97,16 @@ class RuntimeProfiler {
 
  private:
   static const int kSamplerWindowSize = 16;
+  static const int kStateWindowSize = 128;
+
+  enum SamplerState {
+    IN_NON_JS_STATE = 0,
+    IN_JS_STATE = 1
+  };
 
   static void HandleWakeUp(Isolate* isolate);
 
-  void Optimize(JSFunction* function);
+  void Optimize(JSFunction* function, bool eager, int delay);
 
   void AttemptOnStackReplacement(JSFunction* function);
 
@@ -109,15 +118,30 @@ class RuntimeProfiler {
 
   void AddSample(JSFunction* function, int weight);
 
+#ifdef ENABLE_LOGGING_AND_PROFILING
+  void UpdateStateRatio(SamplerState current_state);
+#endif
+
   Isolate* isolate_;
 
   int sampler_threshold_;
   int sampler_threshold_size_factor_;
   int sampler_ticks_until_threshold_adjustment_;
 
+  // The ratio of ticks spent in JS code in percent.
+  Atomic32 js_ratio_;
+
   Object* sampler_window_[kSamplerWindowSize];
   int sampler_window_position_;
   int sampler_window_weight_[kSamplerWindowSize];
+
+  // Support for pending 'optimize soon' requests.
+  PendingListNode* optimize_soon_list_;
+
+  SamplerState state_window_[kStateWindowSize];
+  int state_window_position_;
+  int state_window_ticks_;
+  int state_counts_[2];
 
   // Possible state values:
   //   -1            => the profiler thread is waiting on the semaphore
@@ -135,7 +159,7 @@ class RuntimeProfiler {
 // Rate limiter intended to be used in the profiler thread.
 class RuntimeProfilerRateLimiter BASE_EMBEDDED {
  public:
-  RuntimeProfilerRateLimiter() {}
+  RuntimeProfilerRateLimiter() : non_js_ticks_(0) { }
 
   // Suspends the current thread (which must be the profiler thread)
   // when not executing JavaScript to minimize CPU usage. Returns
@@ -146,6 +170,8 @@ class RuntimeProfilerRateLimiter BASE_EMBEDDED {
   bool SuspendIfNecessary();
 
  private:
+  int non_js_ticks_;
+
   DISALLOW_COPY_AND_ASSIGN(RuntimeProfilerRateLimiter);
 };
 

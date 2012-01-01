@@ -51,7 +51,6 @@ class LCodeGen BASE_EMBEDDED {
         current_instruction_(-1),
         instructions_(chunk->instructions()),
         deoptimizations_(4),
-        deopt_jump_table_(4),
         deoptimization_literals_(8),
         inlined_function_count_(0),
         scope_(info->scope()),
@@ -108,7 +107,7 @@ class LCodeGen BASE_EMBEDDED {
   void DoDeferredNumberTagI(LNumberTagI* instr);
   void DoDeferredTaggedToI(LTaggedToI* instr);
   void DoDeferredMathAbsTaggedHeapNumber(LUnaryMathOperation* instr);
-  void DoDeferredStackCheck(LStackCheck* instr);
+  void DoDeferredStackCheck(LGoto* instr);
   void DoDeferredStringCharCodeAt(LStringCharCodeAt* instr);
   void DoDeferredStringCharFromCode(LStringCharFromCode* instr);
   void DoDeferredLInstanceOfKnownGlobal(LInstanceOfKnownGlobal* instr,
@@ -116,7 +115,6 @@ class LCodeGen BASE_EMBEDDED {
 
   // Parallel move support.
   void DoParallelMove(LParallelMove* move);
-  void DoGap(LGap* instr);
 
   // Emit frame translation commands for an environment.
   void WriteTranslation(LEnvironment* environment, Translation* translation);
@@ -148,7 +146,7 @@ class LCodeGen BASE_EMBEDDED {
   HGraph* graph() const { return chunk_->graph(); }
 
   Register scratch0() { return r9; }
-  DwVfpRegister double_scratch0() { return d15; }
+  DwVfpRegister double_scratch0() { return d0; }
 
   int GetNextEmittedBlock(int block);
   LInstruction* GetNextInstruction();
@@ -160,8 +158,8 @@ class LCodeGen BASE_EMBEDDED {
                        Register temporary,
                        Register temporary2);
 
-  int GetStackSlotCount() const { return chunk()->spill_slot_count(); }
-  int GetParameterCount() const { return scope()->num_parameters(); }
+  int StackSlotCount() const { return chunk()->spill_slot_count(); }
+  int ParameterCount() const { return scope()->num_parameters(); }
 
   void Abort(const char* format, ...);
   void Comment(const char* format, ...);
@@ -173,7 +171,6 @@ class LCodeGen BASE_EMBEDDED {
   bool GeneratePrologue();
   bool GenerateBody();
   bool GenerateDeferredCode();
-  bool GenerateDeoptJumpTable();
   bool GenerateSafepointTable();
 
   enum SafepointMode {
@@ -209,8 +206,7 @@ class LCodeGen BASE_EMBEDDED {
   // to be in edi.
   void CallKnownFunction(Handle<JSFunction> function,
                          int arity,
-                         LInstruction* instr,
-                         CallKind call_kind);
+                         LInstruction* instr);
 
   void LoadHeapObject(Register result, Handle<HeapObject> object);
 
@@ -261,7 +257,7 @@ class LCodeGen BASE_EMBEDDED {
   }
 
   static Condition TokenToCondition(Token::Value op, bool is_unsigned);
-  void EmitGoto(int block);
+  void EmitGoto(int block, LDeferredCode* deferred_stack_check = NULL);
   void EmitBranch(int left_block, int right_block, Condition cc);
   void EmitCmpI(LOperand* left, LOperand* right);
   void EmitNumberUntagD(Register input,
@@ -280,6 +276,7 @@ class LCodeGen BASE_EMBEDDED {
   // true and false label should be made, to optimize fallthrough.
   Condition EmitIsObject(Register input,
                          Register temp1,
+                         Register temp2,
                          Label* is_not_object,
                          Label* is_object);
 
@@ -287,18 +284,10 @@ class LCodeGen BASE_EMBEDDED {
   // Caller should branch on equal condition.
   void EmitIsConstructCall(Register temp1, Register temp2);
 
-  void EmitLoadFieldOrConstantFunction(Register result,
-                                       Register object,
-                                       Handle<Map> type,
-                                       Handle<String> name);
-
-  struct JumpTableEntry {
-    explicit inline JumpTableEntry(Address entry)
-        : label(),
-          address(entry) { }
-    Label label;
-    Address address;
-  };
+  void EmitLoadField(Register result,
+                     Register object,
+                     Handle<Map> type,
+                     Handle<String> name);
 
   LChunk* const chunk_;
   MacroAssembler* const masm_;
@@ -308,7 +297,6 @@ class LCodeGen BASE_EMBEDDED {
   int current_instruction_;
   const ZoneList<LInstruction*>* instructions_;
   ZoneList<LEnvironment*> deoptimizations_;
-  ZoneList<JumpTableEntry> deopt_jump_table_;
   ZoneList<Handle<Object> > deoptimization_literals_;
   int inlined_function_count_;
   Scope* const scope_;

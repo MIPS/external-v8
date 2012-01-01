@@ -67,9 +67,6 @@ function CheckFunctionConstructorStrictMode() {
   with ({}) {};
 })();
 
-// Incorrectly place 'use strict' directive.
-assertThrows("function foo (x) 'use strict'; {}", SyntaxError);
-
 // 'use strict' in non-directive position.
 (function UseStrictNonDirective() {
   void(0);
@@ -322,8 +319,14 @@ CheckStrictMode("var variable; delete variable;", SyntaxError);
            +arguments, -arguments, ~arguments, !arguments];
 })();
 
-// 7.6.1.2 Future Reserved Words in strict mode
-var future_strict_reserved_words = [
+// 7.6.1.2 Future Reserved Words
+var future_reserved_words = [
+  "class",
+  "enum",
+  "export",
+  "extends",
+  "import",
+  "super",
   "implements",
   "interface",
   "let",
@@ -334,17 +337,14 @@ var future_strict_reserved_words = [
   "static",
   "yield" ];
 
-function testFutureStrictReservedWord(word) {
+function testFutureReservedWord(word) {
   // Simple use of each reserved word
   CheckStrictMode("var " + word + " = 1;", SyntaxError);
-  CheckStrictMode("typeof (" + word + ");", SyntaxError);
 
   // object literal properties
   eval("var x = { " + word + " : 42 };");
   eval("var x = { get " + word + " () {} };");
   eval("var x = { set " + word + " (value) {} };");
-  eval("var x = { get " + word + " () { 'use strict'; } };");
-  eval("var x = { set " + word + " (value) { 'use strict'; } };");
 
   // object literal with string literal property names
   eval("var x = { '" + word + "' : 42 };");
@@ -364,6 +364,7 @@ function testFutureStrictReservedWord(word) {
 
   // Function names and arguments when the body is strict
   assertThrows("function " + word + " () { 'use strict'; }", SyntaxError);
+  assertThrows("function foo (" + word + ")  'use strict'; {}", SyntaxError);
   assertThrows("function foo (" + word + ", " + word + ") { 'use strict'; }",
                SyntaxError);
   assertThrows("function foo (a, " + word + ") { 'use strict'; }", SyntaxError);
@@ -373,14 +374,17 @@ function testFutureStrictReservedWord(word) {
   assertThrows("var foo = function (" + word + ") { 'use strict'; }",
                SyntaxError);
 
-  // setter parameter when the body is strict
-  CheckStrictMode("var x = { set foo(" + word + ") {} };", SyntaxError);
+  // get/set when the body is strict
+  eval("var x = { get " + word + " () { 'use strict'; } };");
+  eval("var x = { set " + word + " (value) { 'use strict'; } };");
+  assertThrows("var x = { get foo(" + word + ") { 'use strict'; } };",
+               SyntaxError);
   assertThrows("var x = { set foo(" + word + ") { 'use strict'; } };",
                SyntaxError);
 }
 
-for (var i = 0; i < future_strict_reserved_words.length; i++) {
-  testFutureStrictReservedWord(future_strict_reserved_words[i]);
+for (var i = 0; i < future_reserved_words.length; i++) {
+  testFutureReservedWord(future_reserved_words[i]);
 }
 
 function testAssignToUndefined(test, should_throw) {
@@ -838,14 +842,12 @@ repeat(10, function() {
   }
 
   for (var i = 0; i < 10; i ++) {
-    var exception = false;
     try {
       strict(o, name);
+      assertUnreachable();
     } catch(e) {
-      exception = true;
       assertInstanceof(e, TypeError);
     }
-    assertTrue(exception);
   }
 })();
 
@@ -1176,11 +1178,4 @@ function CheckPillDescriptor(func, name) {
   for (var i = 0; i < 10; i ++) {
     assertEquals(test(i), true);
   }
-})();
-
-
-(function TestStrictModeEval() {
-  "use strict";
-  eval("var eval_local = 10;");
-  assertThrows(function() { return eval_local; }, ReferenceError);
 })();

@@ -30,9 +30,9 @@
 
 #include "allocation.h"
 #include "ast.h"
-#include "preparse-data-format.h"
-#include "preparse-data.h"
+#include "scanner.h"
 #include "scopes.h"
+#include "preparse-data.h"
 
 namespace v8 {
 namespace internal {
@@ -71,14 +71,22 @@ class FunctionEntry BASE_EMBEDDED {
   FunctionEntry() : backing_(Vector<unsigned>::empty()) { }
 
   int start_pos() { return backing_[kStartPosOffset]; }
+  void set_start_pos(int value) { backing_[kStartPosOffset] = value; }
+
   int end_pos() { return backing_[kEndPosOffset]; }
+  void set_end_pos(int value) { backing_[kEndPosOffset] = value; }
+
   int literal_count() { return backing_[kLiteralCountOffset]; }
+  void set_literal_count(int value) { backing_[kLiteralCountOffset] = value; }
+
   int property_count() { return backing_[kPropertyCountOffset]; }
-  bool strict_mode() { return backing_[kStrictModeOffset] != 0; }
+  void set_property_count(int value) {
+    backing_[kPropertyCountOffset] = value;
+  }
 
   bool is_valid() { return backing_.length() > 0; }
 
-  static const int kSize = 5;
+  static const int kSize = 4;
 
  private:
   Vector<unsigned> backing_;
@@ -86,7 +94,6 @@ class FunctionEntry BASE_EMBEDDED {
   static const int kEndPosOffset = 1;
   static const int kLiteralCountOffset = 2;
   static const int kPropertyCountOffset = 3;
-  static const int kStrictModeOffset = 4;
 };
 
 
@@ -163,14 +170,12 @@ class ParserApi {
 
   // Generic preparser generating full preparse data.
   static ScriptDataImpl* PreParse(UC16CharacterStream* source,
-                                  v8::Extension* extension,
-                                  bool harmony_block_scoping);
+                                  v8::Extension* extension);
 
   // Preparser that only does preprocessing that makes sense if only used
   // immediately after.
   static ScriptDataImpl* PartialPreParse(UC16CharacterStream* source,
-                                         v8::Extension* extension,
-                                         bool harmony_block_scoping);
+                                         v8::Extension* extension);
 };
 
 // ----------------------------------------------------------------------------
@@ -436,9 +441,8 @@ class Parser {
   void ReportMessageAt(Scanner::Location loc,
                        const char* message,
                        Vector<Handle<String> > args);
-  void SetHarmonyBlockScoping(bool block_scoping);
 
- private:
+ protected:
   // Limit on number of function parameters is chosen arbitrarily.
   // Code::Flags uses only the low 17 bits of num-parameters to
   // construct a hashable id, so if more than 2^17 are allowed, this
@@ -451,12 +455,6 @@ class Parser {
   enum Mode {
     PARSE_LAZILY,
     PARSE_EAGERLY
-  };
-
-  enum VariableDeclarationContext {
-    kSourceElement,
-    kStatement,
-    kForStatement
   };
 
   Isolate* isolate() { return isolate_; }
@@ -474,7 +472,7 @@ class Parser {
   void ReportMessage(const char* message, Vector<const char*> args);
 
   bool inside_with() const { return with_nesting_level_ > 0; }
-  JavaScriptScanner& scanner()  { return scanner_; }
+  V8JavaScriptScanner& scanner()  { return scanner_; }
   Mode mode() const { return mode_; }
   ScriptDataImpl* pre_data() const { return pre_data_; }
 
@@ -487,23 +485,22 @@ class Parser {
   // for failure at the call sites.
   void* ParseSourceElements(ZoneList<Statement*>* processor,
                             int end_token, bool* ok);
-  Statement* ParseSourceElement(ZoneStringList* labels, bool* ok);
   Statement* ParseStatement(ZoneStringList* labels, bool* ok);
   Statement* ParseFunctionDeclaration(bool* ok);
   Statement* ParseNativeDeclaration(bool* ok);
   Block* ParseBlock(ZoneStringList* labels, bool* ok);
-  Block* ParseScopedBlock(ZoneStringList* labels, bool* ok);
-  Block* ParseVariableStatement(VariableDeclarationContext var_context,
-                                bool* ok);
-  Block* ParseVariableDeclarations(VariableDeclarationContext var_context,
-                                   Handle<String>* out,
-                                   bool* ok);
+  Block* ParseVariableStatement(bool* ok);
+  Block* ParseVariableDeclarations(bool accept_IN, Expression** var, bool* ok);
   Statement* ParseExpressionOrLabelledStatement(ZoneStringList* labels,
                                                 bool* ok);
   IfStatement* ParseIfStatement(ZoneStringList* labels, bool* ok);
   Statement* ParseContinueStatement(bool* ok);
   Statement* ParseBreakStatement(ZoneStringList* labels, bool* ok);
   Statement* ParseReturnStatement(bool* ok);
+  Block* WithHelper(Expression* obj,
+                    ZoneStringList* labels,
+                    bool is_catch_block,
+                    bool* ok);
   Statement* ParseWithStatement(ZoneStringList* labels, bool* ok);
   CaseClause* ParseCaseClause(bool* default_seen_ptr, bool* ok);
   SwitchStatement* ParseSwitchStatement(ZoneStringList* labels, bool* ok);
@@ -562,11 +559,17 @@ class Parser {
   // in the object literal boilerplate.
   Handle<Object> GetBoilerplateValue(Expression* expression);
 
+  enum FunctionLiteralType {
+    EXPRESSION,
+    DECLARATION,
+    NESTED
+  };
+
   ZoneList<Expression*>* ParseArguments(bool* ok);
   FunctionLiteral* ParseFunctionLiteral(Handle<String> var_name,
                                         bool name_is_reserved,
                                         int function_token_position,
-                                        FunctionLiteral::Type type,
+                                        FunctionLiteralType type,
                                         bool* ok);
 
 
@@ -629,12 +632,11 @@ class Parser {
   Literal* GetLiteralNumber(double value);
 
   Handle<String> ParseIdentifier(bool* ok);
-  Handle<String> ParseIdentifierOrStrictReservedWord(
-      bool* is_strict_reserved, bool* ok);
+  Handle<String> ParseIdentifierOrReservedWord(bool* is_reserved, bool* ok);
   Handle<String> ParseIdentifierName(bool* ok);
-  Handle<String> ParseIdentifierNameOrGetOrSet(bool* is_get,
-                                               bool* is_set,
-                                               bool* ok);
+  Handle<String> ParseIdentifierOrGetOrSet(bool* is_get,
+                                           bool* is_set,
+                                           bool* ok);
 
   // Strict mode validation of LValue expressions
   void CheckStrictModeLValue(Expression* expression,
@@ -643,17 +645,6 @@ class Parser {
 
   // Strict mode octal literal validation.
   void CheckOctalLiteral(int beg_pos, int end_pos, bool* ok);
-
-  // For harmony block scoping mode: Check if the scope has conflicting var/let
-  // declarations from different scopes. It covers for example
-  //
-  // function f() { { { var x; } let x; } }
-  // function g() { { var x; let x; } }
-  //
-  // The var declarations are hoisted to the function scope, but originate from
-  // a scope where the name has also been let bound or the var declaration is
-  // hoisted over such a scope.
-  void CheckConflictingVarDeclarations(Scope* scope, bool* ok);
 
   // Parser support
   VariableProxy* Declare(Handle<String> name, Variable::Mode mode,
@@ -683,12 +674,9 @@ class Parser {
   Expression* NewCall(Expression* expression,
                       ZoneList<Expression*>* arguments,
                       int pos) {
-    return new(zone()) Call(isolate(), expression, arguments, pos);
+    return new Call(expression, arguments, pos);
   }
 
-  inline Literal* NewLiteral(Handle<Object> handle) {
-    return new(zone()) Literal(isolate(), handle);
-  }
 
   // Create a number literal.
   Literal* NewNumberLiteral(double value);
@@ -716,7 +704,7 @@ class Parser {
   ZoneList<Handle<String> > symbol_cache_;
 
   Handle<Script> script_;
-  JavaScriptScanner scanner_;
+  V8JavaScriptScanner scanner_;
 
   Scope* top_scope_;
   int with_nesting_level_;
@@ -736,7 +724,6 @@ class Parser {
   // Heuristically that means that the function will be called immediately,
   // so never lazily compile it.
   bool parenthesized_function_;
-  bool harmony_block_scoping_;
 
   friend class LexicalScope;
 };
@@ -772,6 +759,66 @@ class CompileTimeValue: public AllStatic {
   DISALLOW_IMPLICIT_CONSTRUCTORS(CompileTimeValue);
 };
 
+
+// ----------------------------------------------------------------------------
+// JSON PARSING
+
+// JSON is a subset of JavaScript, as specified in, e.g., the ECMAScript 5
+// specification section 15.12.1 (and appendix A.8).
+// The grammar is given section 15.12.1.2 (and appendix A.8.2).
+class JsonParser BASE_EMBEDDED {
+ public:
+  // Parse JSON input as a single JSON value.
+  // Returns null handle and sets exception if parsing failed.
+  static Handle<Object> Parse(Handle<String> source) {
+    if (source->IsExternalTwoByteString()) {
+      ExternalTwoByteStringUC16CharacterStream stream(
+          Handle<ExternalTwoByteString>::cast(source), 0, source->length());
+      return JsonParser().ParseJson(source, &stream);
+    } else {
+      GenericStringUC16CharacterStream stream(source, 0, source->length());
+      return JsonParser().ParseJson(source, &stream);
+    }
+  }
+
+ private:
+  JsonParser()
+      : isolate_(Isolate::Current()),
+        scanner_(isolate_->unicode_cache()) { }
+  ~JsonParser() { }
+
+  Isolate* isolate() { return isolate_; }
+
+  // Parse a string containing a single JSON value.
+  Handle<Object> ParseJson(Handle<String> script, UC16CharacterStream* source);
+  // Parse a single JSON value from input (grammar production JSONValue).
+  // A JSON value is either a (double-quoted) string literal, a number literal,
+  // one of "true", "false", or "null", or an object or array literal.
+  Handle<Object> ParseJsonValue();
+  // Parse a JSON object literal (grammar production JSONObject).
+  // An object literal is a squiggly-braced and comma separated sequence
+  // (possibly empty) of key/value pairs, where the key is a JSON string
+  // literal, the value is a JSON value, and the two are separated by a colon.
+  // A JSON array dosn't allow numbers and identifiers as keys, like a
+  // JavaScript array.
+  Handle<Object> ParseJsonObject();
+  // Parses a JSON array literal (grammar production JSONArray). An array
+  // literal is a square-bracketed and comma separated sequence (possibly empty)
+  // of JSON values.
+  // A JSON array doesn't allow leaving out values from the sequence, nor does
+  // it allow a terminal comma, like a JavaScript array does.
+  Handle<Object> ParseJsonArray();
+
+  // Mark that a parsing error has happened at the current token, and
+  // return a null handle. Primarily for readability.
+  Handle<Object> ReportUnexpectedToken() { return Handle<Object>::null(); }
+  // Converts the currently parsed literal to a JavaScript String.
+  Handle<String> GetString();
+
+  Isolate* isolate_;
+  JsonScanner scanner_;
+  bool stack_overflow_;
+};
 } }  // namespace v8::internal
 
 #endif  // V8_PARSER_H_

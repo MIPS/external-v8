@@ -34,6 +34,8 @@
 namespace v8 {
 namespace internal {
 
+#ifdef ENABLE_LOGGING_AND_PROFILING
+
 Logger::LogEventsAndTags Logger::ToNativeByScript(Logger::LogEventsAndTags tag,
                                                   Script* script) {
   if ((tag == FUNCTION_TAG || tag == LAZY_COMPILE_TAG || tag == SCRIPT_TAG)
@@ -48,6 +50,8 @@ Logger::LogEventsAndTags Logger::ToNativeByScript(Logger::LogEventsAndTags tag,
     return tag;
   }
 }
+
+#endif  // ENABLE_LOGGING_AND_PROFILING
 
 
 } }  // namespace v8::internal

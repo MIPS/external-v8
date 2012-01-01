@@ -114,6 +114,7 @@ class LiveObjectList {
   static Object* PrintObj(int obj_id);
 
  private:
+
   struct Element {
     int id_;
     HeapObject* obj_;
@@ -223,6 +224,7 @@ class LiveObjectList {
 // Helper class for updating the LiveObjectList HeapObject pointers.
 class UpdateLiveObjectListVisitor: public ObjectVisitor {
  public:
+
   void VisitPointer(Object** p) { UpdatePointer(p); }
 
   void VisitPointers(Object** start, Object** end) {
@@ -235,10 +237,10 @@ class UpdateLiveObjectListVisitor: public ObjectVisitor {
   // to live new space objects, and not actually keep them alive.
   void UpdatePointer(Object** p) {
     Object* object = *p;
-    if (!HEAP->InNewSpace(object)) return;
+    if (!Heap::InNewSpace(object)) return;
 
     HeapObject* heap_obj = HeapObject::cast(object);
-    ASSERT(HEAP->InFromSpace(heap_obj));
+    ASSERT(Heap::InFromSpace(heap_obj));
 
     // We use the first word (where the map pointer usually is) of a heap
     // object to record the forwarding pointer.  A forwarding pointer can
@@ -317,3 +319,4 @@ class LiveObjectList {
 } }  // namespace v8::internal
 
 #endif  // V8_LIVEOBJECTLIST_H_
+

@@ -191,17 +191,6 @@ SplayTree.prototype.findGreatestLessThan = function(key) {
 
 
 /**
- * @return {Array<*>} An array containing all the values of tree's nodes paired
- *     with keys.
- */
-SplayTree.prototype.exportKeysAndValues = function() {
-  var result = [];
-  this.traverse_(function(node) { result.push([node.key, node.value]); });
-  return result;
-};
-
-
-/**
  * @return {Array<*>} An array containing all the values of tree's nodes.
  */
 SplayTree.prototype.exportValues = function() {

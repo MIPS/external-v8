@@ -38,7 +38,7 @@ const $abs = MathAbs;
 function MathConstructor() {}
 %FunctionSetInstanceClassName(MathConstructor, 'Math');
 const $Math = new MathConstructor();
-$Math.__proto__ = $Object.prototype;
+$Math.__proto__ = global.Object.prototype;
 %SetProperty(global, "Math", $Math, DONT_ENUM);
 
 // ECMA 262 - 15.8.2.1
@@ -195,9 +195,8 @@ function MathTan(x) {
 
 // -------------------------------------------------------------------
 
-function SetUpMath() {
-  %CheckIsBootstrapping();
-  // Set up math constants.
+function SetupMath() {
+  // Setup math constants.
   // ECMA-262, section 15.8.1.1.
   %OptimizeObjectForAddingMultipleProperties($Math, 8);
   %SetProperty($Math,
@@ -237,7 +236,7 @@ function SetUpMath() {
                DONT_ENUM |  DONT_DELETE | READ_ONLY);
   %ToFastProperties($Math);
 
-  // Set up non-enumerable functions of the Math object and
+  // Setup non-enumerable functions of the Math object and
   // set their names.
   InstallFunctionsOnHiddenPrototype($Math, DONT_ENUM, $Array(
     "random", MathRandom,
@@ -259,6 +258,7 @@ function SetUpMath() {
     "max", MathMax,
     "min", MathMin
   ));
-}
+};
 
-SetUpMath();
+
+SetupMath();

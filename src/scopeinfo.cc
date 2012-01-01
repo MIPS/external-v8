@@ -1,4 +1,4 @@
-// Copyright 2011 the V8 project authors. All rights reserved.
+// Copyright 2006-2008 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -32,15 +32,17 @@
 #include "scopeinfo.h"
 #include "scopes.h"
 
-#include "allocation-inl.h"
-
 namespace v8 {
 namespace internal {
 
 
 static int CompareLocal(Variable* const* v, Variable* const* w) {
-  int x = (*v)->index();
-  int y = (*w)->index();
+  Slot* s = (*v)->AsSlot();
+  Slot* t = (*w)->AsSlot();
+  // We may have rewritten parameters (that are in the arguments object)
+  // and which may have a NULL slot... - find a better solution...
+  int x = (s != NULL ? s->index() : 0);
+  int y = (t != NULL ? t->index() : 0);
   // Consider sorting them according to type as well?
   return x - y;
 }
@@ -50,7 +52,6 @@ template<class Allocator>
 ScopeInfo<Allocator>::ScopeInfo(Scope* scope)
     : function_name_(FACTORY->empty_symbol()),
       calls_eval_(scope->calls_eval()),
-      is_strict_mode_(scope->is_strict_mode()),
       parameters_(scope->num_parameters()),
       stack_slots_(scope->num_stack_slots()),
       context_slots_(scope->num_heap_slots()),
@@ -82,24 +83,27 @@ ScopeInfo<Allocator>::ScopeInfo(Scope* scope)
   for (int i = 0; i < locals.length(); i++) {
     Variable* var = locals[i];
     if (var->is_used()) {
-      switch (var->location()) {
-        case Variable::UNALLOCATED:
-        case Variable::PARAMETER:
-          break;
+      Slot* slot = var->AsSlot();
+      if (slot != NULL) {
+        switch (slot->type()) {
+          case Slot::PARAMETER:
+            // explicitly added to parameters_ above - ignore
+            break;
 
-        case Variable::LOCAL:
-          ASSERT(stack_slots_.length() == var->index());
-          stack_slots_.Add(var->name());
-          break;
+          case Slot::LOCAL:
+            ASSERT(stack_slots_.length() == slot->index());
+            stack_slots_.Add(var->name());
+            break;
 
-        case Variable::CONTEXT:
-          heap_locals.Add(var);
-          break;
+          case Slot::CONTEXT:
+            heap_locals.Add(var);
+            break;
 
-        case Variable::LOOKUP:
-          // We don't expect lookup variables in the locals list.
-          UNREACHABLE();
-          break;
+          case Slot::LOOKUP:
+            // This is currently not used.
+            UNREACHABLE();
+            break;
+        }
       }
     }
   }
@@ -108,9 +112,9 @@ ScopeInfo<Allocator>::ScopeInfo(Scope* scope)
   if (scope->num_heap_slots() > 0) {
     // Add user-defined slots.
     for (int i = 0; i < heap_locals.length(); i++) {
-      ASSERT(heap_locals[i]->index() - Context::MIN_CONTEXT_SLOTS ==
+      ASSERT(heap_locals[i]->AsSlot()->index() - Context::MIN_CONTEXT_SLOTS ==
              context_slots_.length());
-      ASSERT(heap_locals[i]->index() - Context::MIN_CONTEXT_SLOTS ==
+      ASSERT(heap_locals[i]->AsSlot()->index() - Context::MIN_CONTEXT_SLOTS ==
              context_modes_.length());
       context_slots_.Add(heap_locals[i]->name());
       context_modes_.Add(heap_locals[i]->mode());
@@ -124,18 +128,18 @@ ScopeInfo<Allocator>::ScopeInfo(Scope* scope)
   // For now, this must happen at the very end because of the
   // ordering of the scope info slots and the respective slot indices.
   if (scope->is_function_scope()) {
-    VariableProxy* proxy = scope->function();
-    if (proxy != NULL &&
-        proxy->var()->is_used() &&
-        proxy->var()->IsContextSlot()) {
-      function_name_ = proxy->name();
+    Variable* var = scope->function();
+    if (var != NULL &&
+        var->is_used() &&
+        var->AsSlot()->type() == Slot::CONTEXT) {
+      function_name_ = var->name();
       // Note that we must not find the function name in the context slot
       // list - instead it must be handled separately in the
       // Contexts::Lookup() function. Thus record an empty symbol here so we
       // get the correct number of context slots.
-      ASSERT(proxy->var()->index() - Context::MIN_CONTEXT_SLOTS ==
+      ASSERT(var->AsSlot()->index() - Context::MIN_CONTEXT_SLOTS ==
              context_slots_.length());
-      ASSERT(proxy->var()->index() - Context::MIN_CONTEXT_SLOTS ==
+      ASSERT(var->AsSlot()->index() - Context::MIN_CONTEXT_SLOTS ==
              context_modes_.length());
       context_slots_.Add(FACTORY->empty_symbol());
       context_modes_.Add(Variable::INTERNAL);
@@ -244,7 +248,6 @@ ScopeInfo<Allocator>::ScopeInfo(SerializedScopeInfo* data)
     Object** p = p0;
     p = ReadSymbol(p, &function_name_);
     p = ReadBool(p, &calls_eval_);
-    p = ReadBool(p, &is_strict_mode_);
     p = ReadList<Allocator>(p, &context_slots_, &context_modes_);
     p = ReadList<Allocator>(p, &parameters_);
     p = ReadList<Allocator>(p, &stack_slots_);
@@ -298,22 +301,21 @@ static Object** WriteList(Object** p,
 
 template<class Allocator>
 Handle<SerializedScopeInfo> ScopeInfo<Allocator>::Serialize() {
-  // function name, calls eval, is_strict_mode, length for 3 tables:
-  const int extra_slots = 1 + 1 + 1 + 3;
+  // function name, calls eval, length for 3 tables:
+  const int extra_slots = 1 + 1 + 3;
   int length = extra_slots +
                context_slots_.length() * 2 +
                parameters_.length() +
                stack_slots_.length();
 
   Handle<SerializedScopeInfo> data(
-      SerializedScopeInfo::cast(*FACTORY->NewSerializedScopeInfo(length)));
+      SerializedScopeInfo::cast(*FACTORY->NewFixedArray(length, TENURED)));
   AssertNoAllocation nogc;
 
   Object** p0 = data->data_start();
   Object** p = p0;
   p = WriteSymbol(p, function_name_);
   p = WriteBool(p, calls_eval_);
-  p = WriteBool(p, is_strict_mode_);
   p = WriteList(p, &context_slots_, &context_modes_);
   p = WriteList(p, &parameters_);
   p = WriteList(p, &stack_slots_);
@@ -361,8 +363,7 @@ SerializedScopeInfo* SerializedScopeInfo::Empty() {
 
 Object** SerializedScopeInfo::ContextEntriesAddr() {
   ASSERT(length() > 0);
-  // +3 for function name, calls eval, strict mode.
-  return data_start() + 3;
+  return data_start() + 2;  // +2 for function name and calls eval.
 }
 
 
@@ -391,18 +392,7 @@ bool SerializedScopeInfo::CallsEval() {
     p = ReadBool(p, &calls_eval);
     return calls_eval;
   }
-  return false;
-}
-
-
-bool SerializedScopeInfo::IsStrictMode() {
-  if (length() > 0) {
-    Object** p = data_start() + 2;  // +2 for function name, calls eval.
-    bool strict_mode;
-    p = ReadBool(p, &strict_mode);
-    return strict_mode;
-  }
-  return false;
+  return true;
 }
 
 

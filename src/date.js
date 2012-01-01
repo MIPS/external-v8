@@ -684,7 +684,7 @@ function DateGetUTCDate() {
 
 // ECMA 262 - 15.9.5.16
 function DateGetDay() {
-  var t = DATE_VALUE(this);
+  var t = %_ValueOf(this);
   if (NUMBER_IS_NAN(t)) return t;
   return WeekDay(LocalTimeNoCheck(t));
 }
@@ -692,7 +692,7 @@ function DateGetDay() {
 
 // ECMA 262 - 15.9.5.17
 function DateGetUTCDay() {
-  var t = DATE_VALUE(this);
+  var t = %_ValueOf(this);
   if (NUMBER_IS_NAN(t)) return t;
   return WeekDay(t);
 }
@@ -981,22 +981,11 @@ function PadInt(n, digits) {
 function DateToISOString() {
   var t = DATE_VALUE(this);
   if (NUMBER_IS_NAN(t)) return kInvalidDate;
-  var year = this.getUTCFullYear();
-  var year_string;
-  if (year >= 0 && year <= 9999) {
-    year_string = PadInt(year, 4);
-  } else {
-    if (year < 0) {
-      year_string = "-" + PadInt(-year, 6);
-    } else {
-      year_string = "+" + PadInt(year, 6);
-    }
-  }
-  return year_string +
+  return this.getUTCFullYear() + 
       '-' + PadInt(this.getUTCMonth() + 1, 2) +
-      '-' + PadInt(this.getUTCDate(), 2) +
+      '-' + PadInt(this.getUTCDate(), 2) + 
       'T' + PadInt(this.getUTCHours(), 2) +
-      ':' + PadInt(this.getUTCMinutes(), 2) +
+      ':' + PadInt(this.getUTCMinutes(), 2) + 
       ':' + PadInt(this.getUTCSeconds(), 2) +
       '.' + PadInt(this.getUTCMilliseconds(), 3) +
       'Z';
@@ -1006,8 +995,8 @@ function DateToISOString() {
 function DateToJSON(key) {
   var o = ToObject(this);
   var tv = DefaultNumber(o);
-  if (IS_NUMBER(tv) && !NUMBER_IS_FINITE(tv)) {
-    return null;
+  if (IS_NUMBER(tv) && !NUMBER_IS_FINITE(tv)) { 
+    return null; 
   }
   return o.toISOString();
 }
@@ -1048,19 +1037,18 @@ function ResetDateCache() {
 
 // -------------------------------------------------------------------
 
-function SetUpDate() {
-  %CheckIsBootstrapping();
-  // Set up non-enumerable properties of the Date object itself.
+function SetupDate() {
+  // Setup non-enumerable properties of the Date object itself.
   InstallFunctions($Date, DONT_ENUM, $Array(
     "UTC", DateUTC,
     "parse", DateParse,
     "now", DateNow
   ));
 
-  // Set up non-enumerable constructor property of the Date prototype object.
+  // Setup non-enumerable constructor property of the Date prototype object.
   %SetProperty($Date.prototype, "constructor", $Date, DONT_ENUM);
 
-  // Set up non-enumerable functions of the Date prototype object and
+  // Setup non-enumerable functions of the Date prototype object and
   // set their names.
   InstallFunctionsOnHiddenPrototype($Date.prototype, DONT_ENUM, $Array(
     "toString", DateToString,
@@ -1112,4 +1100,4 @@ function SetUpDate() {
   ));
 }
 
-SetUpDate();
+SetupDate();

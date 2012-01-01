@@ -30,6 +30,7 @@
 #ifndef V8_MIPS_FRAMES_MIPS_H_
 #define V8_MIPS_FRAMES_MIPS_H_
 
+
 namespace v8 {
 namespace internal {
 
@@ -39,22 +40,13 @@ namespace internal {
 static const int kNumRegs = 32;
 
 static const RegList kJSCallerSaved =
-  1 << 2  |  // v0
-  1 << 3  |  // v1
-  1 << 4  |  // a0
-  1 << 5  |  // a1
-  1 << 6  |  // a2
-  1 << 7  |  // a3
-  1 << 8  |  // t0
-  1 << 9  |  // t1
-  1 << 10 |  // t2
-  1 << 11 |  // t3
-  1 << 12 |  // t4
-  1 << 13 |  // t5
-  1 << 14 |  // t6
-  1 << 15;   // t7
+  1 << 2 |  // v0
+  1 << 4 |  // a0
+  1 << 5 |  // a1
+  1 << 6 |  // a2
+  1 << 7;   // a3
 
-static const int kNumJSCallerSaved = 14;
+static const int kNumJSCallerSaved = 5;
 
 
 // Return the code of the n-th caller-saved register available to JavaScript
@@ -64,30 +56,19 @@ int JSCallerSavedCode(int n);
 
 // Callee-saved registers preserved when switching from C to JavaScript.
 static const RegList kCalleeSaved =
-  1 << 16 |  // s0
-  1 << 17 |  // s1
-  1 << 18 |  // s2
-  1 << 19 |  // s3
-  1 << 20 |  // s4
-  1 << 21 |  // s5
-  1 << 22 |  // s6 (roots in Javascript code)
-  1 << 23 |  // s7 (cp in Javascript code)
-  1 << 30;   // fp/s8
+  // Saved temporaries.
+  1 << 16 | 1 << 17 | 1 << 18 | 1 << 19 |
+  1 << 20 | 1 << 21 | 1 << 22 | 1 << 23 |
+  // gp, sp, fp
+  1 << 28 | 1 << 29 | 1 << 30;
 
-static const int kNumCalleeSaved = 9;
+static const int kNumCalleeSaved = 11;
 
-static const RegList kCalleeSavedFPU =
-  1 << 20 |  // f20
-  1 << 22 |  // f22
-  1 << 24 |  // f24
-  1 << 26 |  // f26
-  1 << 28 |  // f28
-  1 << 30;   // f30
 
-static const int kNumCalleeSavedFPU = 6;
 // Number of registers for which space is reserved in safepoints. Must be a
 // multiple of 8.
-static const int kNumSafepointRegisters = 24;
+// TODO(mips): Only 8 registers may actually be sufficient. Revisit.
+static const int kNumSafepointRegisters = 16;
 
 // Define the list of registers actually saved at safepoints.
 // Note that the number of saved registers may be smaller than the reserved
@@ -98,53 +79,15 @@ static const int kNumSafepointSavedRegisters =
 
 typedef Object* JSCallerSavedBuffer[kNumJSCallerSaved];
 
-static const int kUndefIndex = -1;
-// Map with indexes on stack that corresponds to codes of saved registers.
-static const int kSafepointRegisterStackIndexMap[kNumRegs] = {
-  kUndefIndex,  // zero_reg
-  kUndefIndex,  // at
-  0,   // v0
-  1,   // v1
-  2,   // a0
-  3,   // a1
-  4,   // a2
-  5,   // a3
-  6,   // t0
-  7,   // t1
-  8,   // t2
-  9,   // t3
-  10,  // t4
-  11,  // t5
-  12,  // t6
-  13,  // t7
-  14,  // s0
-  15,  // s1
-  16,  // s2
-  17,  // s3
-  18,  // s4
-  19,  // s5
-  20,  // s6
-  21,  // s7
-  kUndefIndex,  // t8
-  kUndefIndex,  // t9
-  kUndefIndex,  // k0
-  kUndefIndex,  // k1
-  kUndefIndex,  // gp
-  kUndefIndex,  // sp
-  22,  // fp
-  kUndefIndex
-};
-
 
 // ----------------------------------------------------
 
 class StackHandlerConstants : public AllStatic {
  public:
-  static const int kNextOffset    = 0 * kPointerSize;
-  static const int kStateOffset   = 1 * kPointerSize;
-  static const int kContextOffset = 2 * kPointerSize;
-  static const int kFPOffset      = 3 * kPointerSize;
-  static const int kPCOffset      = 4 * kPointerSize;
+  static const int kNextOffset  = 0 * kPointerSize;
+  static const int kStateOffset = 1 * kPointerSize;
+  static const int kFPOffset    = 2 * kPointerSize;
+  static const int kPCOffset    = 3 * kPointerSize;
 
   static const int kSize = kPCOffset + kPointerSize;
 };
@@ -158,24 +101,22 @@ class EntryFrameConstants : public AllStatic {
 
 class ExitFrameConstants : public AllStatic {
  public:
-  // See some explanation in MacroAssembler::EnterExitFrame.
-  // This marks the top of the extra allocated stack space.
-  static const int kStackSpaceOffset = -3 * kPointerSize;
-
-  static const int kCodeOffset = -2 * kPointerSize;
-
+  static const int kDebugMarkOffset = -1 * kPointerSize;
+  // Must be the same as kDebugMarkOffset. Alias introduced when upgrading.
+  static const int kCodeOffset = -1 * kPointerSize;
   static const int kSPOffset = -1 * kPointerSize;
+
+  // TODO(mips): Use a patched sp value on the stack instead.
+  // A marker of 0 indicates that double registers are saved.
+  static const int kMarkerOffset = -2 * kPointerSize;
 
   // The caller fields are below the frame pointer on the stack.
   static const int kCallerFPOffset = +0 * kPointerSize;
   // The calling JS function is between FP and PC.
   static const int kCallerPCOffset = +1 * kPointerSize;
 
-  // MIPS-specific: a pointer to the old sp to avoid unnecessary calculations.
-  static const int kCallerSPOffset = +2 * kPointerSize;
-
   // FP-relative displacement of the caller's SP.
-  static const int kCallerSPDisplacement = +2 * kPointerSize;
+  static const int kCallerSPDisplacement = +3 * kPointerSize;
 };
 
 
@@ -193,6 +134,8 @@ class StandardFrameConstants : public AllStatic {
   static const int kRArgsSlotsSize = 4 * kPointerSize;
   static const int kRegularArgsSlotsSize = kRArgsSlotsSize;
 
+  // C/C++ argument slots size.
+  static const int kCArgsSlotsSize = 4 * kPointerSize;
   // JS argument slots size.
   static const int kJSArgsSlotsSize = 0 * kPointerSize;
   // Assembly builtins argument slots size.

@@ -1,4 +1,4 @@
-// Copyright 2011 the V8 project authors. All rights reserved.
+// Copyright 2006-2008 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -27,8 +27,6 @@
 
 #ifndef V8_PROPERTY_H_
 #define V8_PROPERTY_H_
-
-#include "allocation.h"
 
 namespace v8 {
 namespace internal {
@@ -112,14 +110,14 @@ class MapTransitionDescriptor: public Descriptor {
       : Descriptor(key, map, attributes, MAP_TRANSITION) { }
 };
 
-class ElementsTransitionDescriptor: public Descriptor {
+class ExternalArrayTransitionDescriptor: public Descriptor {
  public:
-  ElementsTransitionDescriptor(String* key,
-                               Map* map,
-                               ElementsKind elements_kind)
+  ExternalArrayTransitionDescriptor(String* key,
+                                    Map* map,
+                                    ExternalArrayType array_type)
       : Descriptor(key, map, PropertyDetails(NONE,
-                                             ELEMENTS_TRANSITION,
-                                             elements_kind)) { }
+                                             EXTERNAL_ARRAY_TRANSITION,
+                                             array_type)) { }
 };
 
 // Marks a field name in a map so that adding the field is guaranteed
@@ -157,15 +155,24 @@ class ConstantFunctionDescriptor: public Descriptor {
 class CallbacksDescriptor:  public Descriptor {
  public:
   CallbacksDescriptor(String* key,
-                      Object* foreign,
+                      Object* proxy,
                       PropertyAttributes attributes,
                       int index = 0)
-      : Descriptor(key, foreign, attributes, CALLBACKS, index) {}
+      : Descriptor(key, proxy, attributes, CALLBACKS, index) {}
 };
 
 
 class LookupResult BASE_EMBEDDED {
  public:
+  // Where did we find the result;
+  enum {
+    NOT_FOUND,
+    DESCRIPTOR_TYPE,
+    DICTIONARY_TYPE,
+    INTERCEPTOR_TYPE,
+    CONSTANT_TYPE
+  } lookup_type_;
+
   LookupResult()
       : lookup_type_(NOT_FOUND),
         cacheable_(true),
@@ -202,13 +209,6 @@ class LookupResult BASE_EMBEDDED {
     number_ = entry;
   }
 
-  void HandlerResult() {
-    lookup_type_ = HANDLER_TYPE;
-    holder_ = NULL;
-    details_ = PropertyDetails(NONE, HANDLER);
-    cacheable_ = false;
-  }
-
   void InterceptorResult(JSObject* holder) {
     lookup_type_ = INTERCEPTOR_TYPE;
     holder_ = holder;
@@ -243,7 +243,6 @@ class LookupResult BASE_EMBEDDED {
   bool IsDontEnum() { return details_.IsDontEnum(); }
   bool IsDeleted() { return details_.IsDeleted(); }
   bool IsFound() { return lookup_type_ != NOT_FOUND; }
-  bool IsHandler() { return lookup_type_ == HANDLER_TYPE; }
 
   // Is the result is a property excluding transitions and the null
   // descriptor?
@@ -281,7 +280,7 @@ class LookupResult BASE_EMBEDDED {
   Map* GetTransitionMap() {
     ASSERT(lookup_type_ == DESCRIPTOR_TYPE);
     ASSERT(type() == MAP_TRANSITION || type() == CONSTANT_TRANSITION ||
-           type() == ELEMENTS_TRANSITION);
+           type() == EXTERNAL_ARRAY_TRANSITION);
     return Map::cast(GetValue());
   }
 
@@ -344,16 +343,6 @@ class LookupResult BASE_EMBEDDED {
   }
 
  private:
-  // Where did we find the result;
-  enum {
-    NOT_FOUND,
-    DESCRIPTOR_TYPE,
-    DICTIONARY_TYPE,
-    HANDLER_TYPE,
-    INTERCEPTOR_TYPE,
-    CONSTANT_TYPE
-  } lookup_type_;
-
   JSObject* holder_;
   int number_;
   bool cacheable_;

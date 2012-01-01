@@ -31,7 +31,6 @@
 import imp
 import optparse
 import os
-import fnmatch
 from os.path import join, dirname, abspath, basename, isdir, exists
 import platform
 import re
@@ -43,15 +42,10 @@ import time
 import threading
 import utils
 from Queue import Queue, Empty
-import tarfile
 
-from unittest_output import UnitTestOutput
-import core_dump
 
 VERBOSE = False
-XMLOUT = None
-XMLTESTSUITE = None
-ANDROID_ADB = False
+
 
 # ---------------------------------------------
 # --- P r o g r e s s   I n d i c a t o r s ---
@@ -72,8 +66,6 @@ class ProgressIndicator(object):
     self.crashed = 0
     self.terminate = False
     self.lock = threading.Lock()
-    if XMLOUT:
-      self.xmlOutputter = UnitTestProgressIndicator()
 
   def PrintFailureHeader(self, test):
     if test.IsNegative():
@@ -88,8 +80,6 @@ class ProgressIndicator(object):
 
   def Run(self, tasks):
     self.Starting()
-    if XMLOUT:
-      self.xmlOutputter.Starting()
     threads = []
     # Spawn N-1 threads and then use this thread as the last one.
     # That way -j1 avoids threading altogether which is a nice fallback
@@ -111,8 +101,6 @@ class ProgressIndicator(object):
       # ...and then reraise the exception to bail out
       raise
     self.Done()
-    if XMLOUT:
-      self.xmlOutputter.Done()
     return not self.failed
 
   def RunSingle(self):
@@ -124,15 +112,11 @@ class ProgressIndicator(object):
       case = test.case
       self.lock.acquire()
       self.AboutToRun(case)
-      if XMLOUT:
-        self.xmlOutputter.AboutToRun(case)
       self.lock.release()
       try:
         start = time.time()
         output = case.Run()
         case.duration = (time.time() - start)
-      except BreakNowException:
-        self.terminate = True
       except IOError, e:
         assert self.terminate
         return
@@ -147,8 +131,6 @@ class ProgressIndicator(object):
         self.succeeded += 1
       self.remaining -= 1
       self.HasRun(output)
-      if XMLOUT:
-        self.xmlOutputter.HasRun(output)
       self.lock.release()
 
 
@@ -323,47 +305,6 @@ class MonochromeProgressIndicator(CompactProgressIndicator):
   def ClearLine(self, last_line_length):
     print ("\r" + (" " * last_line_length) + "\r"),
 
-class UnitTestProgressIndicator(ProgressIndicator):
-
-  def __init__(self):
-    self.outputter = UnitTestOutput(XMLTESTSUITE)
-    if XMLOUT:
-      self.outfile = open(XMLOUT, "w")
-    else:
-      self.outfile = sys.stdout
-
-  def Starting(self):
-    pass
-
-  def AboutToRun(self, case):
-    self.outputter.startNewTest(case.GetName())
-
-  def Done(self):
-    self.outputter.finishAndWrite(self.outfile)
-    if self.outfile != sys.stdout:
-      self.outfile.close()
-
-  def HasRun(self, output):
-    if output.UnexpectedOutput():
-      failtext=""
-      stdout = output.output.stdout.strip()
-      if len(stdout):
-        failtext+="stdout:\n"
-        failtext+=stdout
-        failtext+="\n"
-      stderr = output.output.stderr.strip()
-      if len(stderr):
-        failtext+="stderr:\n"
-        failtext+=stderr
-        failtext+="\n"
-      if output.HasCrashed():
-        failtext+= "--- CRASHED ---"
-      if output.HasTimedOut():
-        failtext+= "--- TIMEOUT ---"
-      self.outputter.finishCurrentTest(True, failtext)
-    else:
-      self.outputter.finishCurrentTest(False)
-
 
 PROGRESS_INDICATORS = {
   'verbose': VerboseProgressIndicator,
@@ -376,12 +317,6 @@ PROGRESS_INDICATORS = {
 # -------------------------
 # --- F r a m e w o r k ---
 # -------------------------
-
-class BreakNowException(Exception):
-  def __init__(self, value):
-    self.value = value
-  def __str__(self):
-    return repr(self.value)
 
 
 class CommandOutput(object):
@@ -444,12 +379,9 @@ class TestCase(object):
 
   def Run(self):
     self.BeforeRun()
-    result = None
+    result = "exception"
     try:
       result = self.RunCommand(self.GetCommand())
-    except:
-      self.terminate = True
-      raise BreakNowException("User pressed CTRL+C or IO went wrong")
     finally:
       self.AfterRun(result)
     return result
@@ -491,7 +423,7 @@ class TestOutput(object):
              self.output.exit_code != -signal.SIGABRT
 
   def HasTimedOut(self):
-    return self.output.timed_out
+    return self.output.timed_out;
 
   def HasFailed(self):
     execution_failed = self.test.DidFail(self.output)
@@ -507,6 +439,7 @@ def KillProcessWithID(pid):
   else:
     os.kill(pid, signal.SIGTERM)
 
+
 MAX_SLEEP_TIME = 0.1
 INITIAL_SLEEP_TIME = 0.0001
 SLEEP_TIME_FACTOR = 1.25
@@ -518,7 +451,7 @@ def Win32SetErrorMode(mode):
   prev_error_mode = SEM_INVALID_VALUE
   try:
     import ctypes
-    prev_error_mode = ctypes.windll.kernel32.SetErrorMode(mode)
+    prev_error_mode = ctypes.windll.kernel32.SetErrorMode(mode);
   except ImportError:
     pass
   return prev_error_mode
@@ -526,16 +459,16 @@ def Win32SetErrorMode(mode):
 def RunProcess(context, timeout, args, **rest):
   if context.verbose: print "#", " ".join(args)
   popen_args = args
-  prev_error_mode = SEM_INVALID_VALUE
+  prev_error_mode = SEM_INVALID_VALUE;
   if utils.IsWindows():
     popen_args = '"' + subprocess.list2cmdline(args) + '"'
     if context.suppress_dialogs:
       # Try to change the error mode to avoid dialogs on fatal errors. Don't
       # touch any existing error mode flags by merging the existing error mode.
       # See http://blogs.msdn.com/oldnewthing/archive/2004/07/27/198410.aspx.
-      error_mode = SEM_NOGPFAULTERRORBOX
-      prev_error_mode = Win32SetErrorMode(error_mode)
-      Win32SetErrorMode(error_mode | prev_error_mode)
+      error_mode = SEM_NOGPFAULTERRORBOX;
+      prev_error_mode = Win32SetErrorMode(error_mode);
+      Win32SetErrorMode(error_mode | prev_error_mode);
   process = subprocess.Popen(
     shell = utils.IsWindows(),
     args = popen_args,
@@ -564,9 +497,6 @@ def RunProcess(context, timeout, args, **rest):
       sleep_time = sleep_time * SLEEP_TIME_FACTOR
       if sleep_time > MAX_SLEEP_TIME:
         sleep_time = MAX_SLEEP_TIME
-
-  name = "_".join(args).replace("/", "_")
-  core_dump.HandleCoreDump(process.pid, name)
   return (process, exit_code, timed_out)
 
 
@@ -586,45 +516,13 @@ def CheckedUnlink(name):
       os.unlink(name)
       return
     except OSError, e:
-      retry_count += 1
+      retry_count += 1;
       time.sleep(retry_count * 0.1)
   PrintError("os.unlink() " + str(e))
-
-
-def ADBPushSingle(context, file, android_push_path):
-  file_relpath = os.path.relpath(file, context.workspace)
-  tar = tarfile.open(name=tempfile.mktemp(suffix=".tar"), mode="w")
-  tar.add(file, file_relpath)
-  tar.close()
-  
-  tar_remote_path = os.path.join(android_push_path, os.path.basename(tar.name))
-  
-  ExecuteNoCapture([ "adb", "push", tar.name, android_push_path ], context)
-  ExecuteNoCapture([ "adb", "shell", "busybox", "tar", "-x", "-f", tar_remote_path, "-C", android_push_path ], context)
-  ExecuteNoCapture([ "adb", "shell", "busybox", "rm", tar_remote_path ], context)
-  
-  context.android_file_mappings[file] = os.path.join(android_push_path, file_relpath)
-  
-  CheckedUnlink(tar.name)
-
 
 def Execute(args, context, timeout=None):
   (fd_out, outname) = tempfile.mkstemp()
   (fd_err, errname) = tempfile.mkstemp()
-  
-  if context.android_push_path is not None:
-    for i in range(len(args)):
-      arg = args[i]
-      if os.path.isfile(arg):
-        if arg not in context.android_file_mappings:
-          # Lazy sending non-sent files
-          ADBPushSingle(context, arg, context.android_push_path)
-        args[i] = context.android_file_mappings[arg]
-  
-  if context.android_adb or context.android_push_path is not None:
-      args.insert(0, "shell");
-      args.insert(0, "adb");
-  
   (process, exit_code, timed_out) = RunProcess(
     context,
     timeout,
@@ -657,13 +555,6 @@ def CarCdr(path):
     return (path[0], path[1:])
 
 
-# Use this to run several variants of the tests, e.g.:
-# VARIANT_FLAGS = [[], ['--always_compact', '--noflush_code']]
-VARIANT_FLAGS = [[],
-                 ['--stress-opt', '--always-opt'],
-                 ['--nocrankshaft']]
-
-
 class TestConfiguration(object):
 
   def __init__(self, context, root):
@@ -681,11 +572,6 @@ class TestConfiguration(object):
   def GetTestStatus(self, sections, defs):
     pass
 
-  def VariantFlags(self):
-    return VARIANT_FLAGS
-
-
-
 
 class TestSuite(object):
 
@@ -694,6 +580,13 @@ class TestSuite(object):
 
   def GetName(self):
     return self.name
+
+
+# Use this to run several variants of the tests, e.g.:
+# VARIANT_FLAGS = [[], ['--always_compact', '--noflush_code']]
+VARIANT_FLAGS = [[],
+                 ['--stress-opt', '--always-opt'],
+                 ['--nocrankshaft']]
 
 
 class TestRepository(TestSuite):
@@ -723,10 +616,11 @@ class TestRepository(TestSuite):
     return self.GetConfiguration(context).GetBuildRequirements()
 
   def AddTestsToList(self, result, current_path, path, context, mode):
-    for v in self.GetConfiguration(context).VariantFlags():
+    for v in VARIANT_FLAGS:
       tests = self.GetConfiguration(context).ListTests(current_path, path, mode, v)
       for t in tests: t.variant_flags = v
       result += tests
+
 
   def GetTestStatus(self, context, sections, defs):
     self.GetConfiguration(context).GetTestStatus(sections, defs)
@@ -774,7 +668,7 @@ TIMEOUT_SCALEFACTOR = {
 
 class Context(object):
 
-  def __init__(self, workspace, buildspace, verbose, vm, timeout, processor, suppress_dialogs, store_unexpected_output, android_adb, android_push_path, android_file_mappings):
+  def __init__(self, workspace, buildspace, verbose, vm, timeout, processor, suppress_dialogs, store_unexpected_output):
     self.workspace = workspace
     self.buildspace = buildspace
     self.verbose = verbose
@@ -783,9 +677,6 @@ class Context(object):
     self.processor = processor
     self.suppress_dialogs = suppress_dialogs
     self.store_unexpected_output = store_unexpected_output
-    self.android_adb = android_adb
-    self.android_push_path = android_push_path
-    self.android_file_mappings = android_file_mappings
 
   def GetVm(self, mode):
     name = self.vm_root + SUFFIX[mode]
@@ -811,12 +702,7 @@ class Context(object):
 
 def RunTestCases(cases_to_run, progress, tasks):
   progress = PROGRESS_INDICATORS[progress](cases_to_run)
-  result = 0
-  try:
-    result = progress.Run(tasks)
-  except Exception, e:
-    print "\n", e
-  return result
+  return progress.Run(tasks)
 
 
 def BuildRequirements(context, requirements, mode, scons_flags):
@@ -1258,7 +1144,6 @@ def ReadConfigurationInto(path, sections, defs):
 
 
 ARCH_GUESS = utils.GuessArchitecture()
-TIMEOUT_DEFAULT = 60;
 
 
 def BuildOptions():
@@ -1276,14 +1161,12 @@ def BuildOptions():
       default=False, action="store_true")
   result.add_option("--build-only", help="Only build requirements, don't run the tests",
       default=False, action="store_true")
-  result.add_option("--build-system", help="Build system in use (scons or gyp)",
-      default='scons')
   result.add_option("--report", help="Print a summary of the tests to be run",
       default=False, action="store_true")
   result.add_option("-s", "--suite", help="A test suite",
       default=[], action="append")
   result.add_option("-t", "--timeout", help="Timeout in seconds",
-      default=-1, type="int")
+      default=60, type="int")
   result.add_option("--arch", help='The architecture to run tests for',
       default='none')
   result.add_option("--snapshot", help="Run the tests with snapshot turned on",
@@ -1305,8 +1188,7 @@ def BuildOptions():
         dest="suppress_dialogs", default=True, action="store_true")
   result.add_option("--no-suppress-dialogs", help="Display Windows dialogs for crashing tests",
         dest="suppress_dialogs", action="store_false")
-  result.add_option("--mips-arch-variant", help="mips architecture variant: mips32r1/mips32r2", default="mips32r2");
-  result.add_option("--shell", help="Path to V8 shell", default="d8")
+  result.add_option("--shell", help="Path to V8 shell", default="shell")
   result.add_option("--isolates", help="Whether to test isolates", default=False, action="store_true")
   result.add_option("--store-unexpected-output",
       help="Store the temporary JS files from tests that fails",
@@ -1314,11 +1196,6 @@ def BuildOptions():
   result.add_option("--no-store-unexpected-output",
       help="Deletes the temporary JS files from tests that fails",
       dest="store_unexpected_output", action="store_false")
-  result.add_option("--xmlout", help="File name of the UnitTest output")
-  result.add_option("--xmltestsuite", help="Name of the testsuite in the UnitTest XML output", default="v8tests")
-  result.add_option("--nocrankshaft-only",
-                    help="Only run tests with nocrankshaft version",
-                    default=False, action="store_true")
   result.add_option("--stress-only",
                     help="Only run tests with --always-opt --stress-opt",
                     default=False, action="store_true")
@@ -1336,14 +1213,6 @@ def BuildOptions():
                     default=1, type="int")
   result.add_option("--noprof", help="Disable profiling support",
                     default=False)
-  result.add_option("--savecore", help="Save core dump files. Linux-only. Requires enabled core dumps (ulimit -c unlimited)" +
-                    " and the following pattern: " + core_dump.CORE_PATTERN + " in " + core_dump.CORE_PATTERN_FILE,
-                    default=False, action="store_true")
-  result.add_option("--core-dir", help="Directory to save core dumps under cores.log/", default="all")
-  result.add_option("--android", help="Run tests using \"adb shell\"",
-                    default=False, action="store_true")
-  result.add_option("--android-push-path", help="Workspace path on Android device (if specified, necessary test files will be pushed to android device, using \"adb push\"",
-                    default=None)
   return result
 
 
@@ -1371,66 +1240,27 @@ def ProcessOptions(options):
     if options.arch == 'none':
       options.arch = ARCH_GUESS
     options.scons_flags.append("arch=" + options.arch)
-  # Simulators are slow, therefore allow a longer default timeout.
-  if options.timeout == -1:
-    if options.arch == 'arm' or options.arch == 'mips':
-      options.timeout = 2 * TIMEOUT_DEFAULT;
-    else:
-      options.timeout = TIMEOUT_DEFAULT;
   if options.snapshot:
     options.scons_flags.append("snapshot=on")
-  if options.mips_arch_variant:
-    options.scons_flags.append("mips_arch_variant=" + options.mips_arch_variant)
-
-  global XMLOUT
-  XMLOUT = options.xmlout
   global VARIANT_FLAGS
-  if options.nocrankshaft_only:
-    VARIANT_FLAGS = [['--nocrankshaft']]
   if options.stress_only:
     VARIANT_FLAGS = [['--stress-opt', '--always-opt']]
   if options.nostress:
     VARIANT_FLAGS = [[],['--nocrankshaft']]
-  global XMLTESTSUITE
-  XMLTESTSUITE = options.xmltestsuite
-
-  if options.savecore:
-      core_dump.init(options.core_dir)
-
   if options.crankshaft:
     if options.special_command:
       options.special_command += " --crankshaft"
     else:
-      options.special_command = "@ --crankshaft"
-  if options.shell.endswith("d8"):
-    if options.special_command:
-      options.special_command += " --test"
-    else:
-      options.special_command = "@ --test"
+      options.special_command = "@--crankshaft"
   if options.noprof:
     options.scons_flags.append("prof=off")
     options.scons_flags.append("profilingsupport=off")
-  if options.build_system == 'gyp':
-    if options.build_only:
-      print "--build-only not supported for gyp, please build manually."
-      options.build_only = False
-  global ANDROID_ADB
-  ANDROID_ADB = options.android
-  if options.android:
-    if options.simulator != 'none':
-      print '--android is not supported on simulator'
-      return False
   return True
-
-
-def DoSkip(case):
-  return (SKIP in case.outcomes) or (SLOW in case.outcomes)
 
 
 REPORT_TEMPLATE = """\
 Total: %(total)i tests
  * %(skipped)4d tests will be skipped
- * %(timeout)4d tests are expected to timeout sometimes
  * %(nocrash)4d tests are expected to be flaky but not crash
  * %(pass)4d tests are expected to pass
  * %(fail_ok)4d tests are expected to fail that we won't fix
@@ -1442,11 +1272,10 @@ def PrintReport(cases):
     return (PASS in o) and (FAIL in o) and (not CRASH in o) and (not OKAY in o)
   def IsFailOk(o):
     return (len(o) == 2) and (FAIL in o) and (OKAY in o)
-  unskipped = [c for c in cases if not DoSkip(c)]
+  unskipped = [c for c in cases if not SKIP in c.outcomes]
   print REPORT_TEMPLATE % {
     'total': len(cases),
     'skipped': len(cases) - len(unskipped),
-    'timeout': len([t for t in unskipped if TIMEOUT in t.outcomes]),
     'nocrash': len([t for t in unskipped if IsFlaky(t.outcomes)]),
     'pass': len([t for t in unskipped if list(t.outcomes) == [PASS]]),
     'fail_ok': len([t for t in unskipped if IsFailOk(t.outcomes)]),
@@ -1510,11 +1339,11 @@ def ShardTests(tests, options):
     print "shard-run not a valid number, should be in [1:shard-count]"
     print "defaulting back to running all tests"
     return tests
-  count = 0
+  count = 0;
   shard = []
   for test in tests:
     if count % options.shard_count == options.shard_run - 1:
-      shard.append(test)
+      shard.append(test);
     count += 1
   return shard
 
@@ -1545,23 +1374,15 @@ def Main():
     run_valgrind = join(workspace, "tools", "run-valgrind.py")
     options.special_command = "python -u " + run_valgrind + " @"
 
-  if options.build_system == 'gyp':
-    SUFFIX['debug'] = ''
-
   shell = abspath(options.shell)
   buildspace = dirname(shell)
-  
-  android_file_mappings = { }
 
   context = Context(workspace, buildspace, VERBOSE,
                     shell,
                     options.timeout,
                     GetSpecialCommandProcessor(options.special_command),
                     options.suppress_dialogs,
-                    options.store_unexpected_output,
-                    ANDROID_ADB,
-                    options.android_push_path,
-                    android_file_mappings)
+                    options.store_unexpected_output)
   # First build the required targets
   if not options.no_build:
     reqs = [ ]
@@ -1577,18 +1398,6 @@ def Main():
   # Just return if we are only building the targets for running the tests.
   if options.build_only:
     return 0
-
-  if options.android_push_path is not None:
-    print("Cleaning up remote android workspace: " + options.android_push_path)
-    ExecuteNoCapture([ "adb", "shell", "busybox", "rm", "-rf", options.android_push_path ], context)
-    ExecuteNoCapture([ "adb", "shell", "busybox", "mkdir", "-p", options.android_push_path ], context)
-    
-    # We have to set a temp dir under workspace, otherwise,
-    # we cannot pack tempfiles
-    new_tmp_path = os.path.join(context.workspace, "tmp")
-    if not os.path.isdir(new_tmp_path):
-      os.mkdir(new_tmp_path)
-    tempfile.tempdir = new_tmp_path
 
   # Get status for tests
   sections = [ ]
@@ -1608,8 +1417,7 @@ def Main():
         'system': utils.GuessOS(),
         'arch': options.arch,
         'simulator': options.simulator,
-        'crankshaft': options.crankshaft,
-        'isolates': options.isolates
+        'crankshaft': options.crankshaft
       }
       test_list = root.ListTests([], path, context, mode, [])
       unclassified_tests += test_list
@@ -1620,27 +1428,6 @@ def Main():
         globally_unused_rules = globally_unused_rules.intersection(unused_rules)
       all_cases += ShardTests(cases, options)
       all_unused.append(unused_rules)
-
-  if options.android_push_path is not None:
-    tar = tarfile.open(name=tempfile.mktemp(suffix=".tar"), mode="w")
-    for test in unclassified_tests:
-      command = test.GetCommand()
-      for cmd in command:
-        if os.path.isfile(cmd):
-          if cmd not in android_file_mappings:
-            file_relpath = os.path.relpath(cmd, context.workspace)
-            tar.add(cmd, file_relpath)
-            print ("Archiving file: " + cmd)
-            android_file_mappings[cmd] = os.path.join(options.android_push_path, file_relpath)
-    tar.close()
-    
-    tar_remote_path = os.path.join(options.android_push_path, os.path.basename(tar.name))
-    
-    ExecuteNoCapture([ "adb", "push", tar.name, options.android_push_path ], context)
-    ExecuteNoCapture([ "adb", "shell", "busybox", "tar", "-x", "-f", tar_remote_path, "-C", options.android_push_path ], context)
-    ExecuteNoCapture([ "adb", "shell", "busybox", "rm", tar_remote_path ], context)
-  
-    CheckedUnlink(tar.name)
 
   if options.cat:
     visited = set()
@@ -1659,14 +1446,15 @@ def Main():
     for rule in globally_unused_rules:
       print "Rule for '%s' was not used." % '/'.join([str(s) for s in rule.path])
 
-  if not options.isolates:
-    all_cases = [c for c in all_cases if not c.TestsIsolates()]
-
   if options.report:
     PrintReport(all_cases)
 
   result = None
+  def DoSkip(case):
+    return SKIP in case.outcomes or SLOW in case.outcomes
   cases_to_run = [ c for c in all_cases if not DoSkip(c) ]
+  if not options.isolates:
+    cases_to_run = [c for c in cases_to_run if not c.TestsIsolates()]
   if len(cases_to_run) == 0:
     print "No tests to run."
     return 0
@@ -1699,5 +1487,4 @@ def Main():
 
 
 if __name__ == '__main__':
-  Main()
-  sys.exit(0)
+  sys.exit(Main())

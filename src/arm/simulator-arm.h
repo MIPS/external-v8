@@ -68,9 +68,7 @@ typedef int (*arm_regexp_matcher)(String*, int, const byte*, const byte*,
 // just use the C stack limit.
 class SimulatorStack : public v8::internal::AllStatic {
  public:
-  static inline uintptr_t JsLimitFromCLimit(v8::internal::Isolate* isolate,
-                                            uintptr_t c_limit) {
-    USE(isolate);
+  static inline uintptr_t JsLimitFromCLimit(uintptr_t c_limit) {
     return c_limit;
   }
 
@@ -145,7 +143,7 @@ class Simulator {
     num_d_registers = 16
   };
 
-  explicit Simulator(Isolate* isolate);
+  Simulator();
   ~Simulator();
 
   // The currently executing Simulator instance. Potentially there can be one
@@ -181,7 +179,7 @@ class Simulator {
   void Execute();
 
   // Call on program start.
-  static void Initialize(Isolate* isolate);
+  static void Initialize();
 
   // V8 generally calls into generated JS code with 5 parameters and into
   // generated RegExp code with 7 parameters. This is a convenience function,
@@ -201,15 +199,6 @@ class Simulator {
   // Returns true if pc register contains one of the 'special_values' defined
   // below (bad_lr, end_sim_pc).
   bool has_bad_pc() const;
-
-  // EABI variant for double arguments in use.
-  bool use_eabi_hardfloat() {
-#if USE_EABI_HARDFLOAT
-    return true;
-#else
-    return false;
-#endif
-  }
 
  private:
   enum special_values {
@@ -234,16 +223,12 @@ class Simulator {
   void SetNZFlags(int32_t val);
   void SetCFlag(bool val);
   void SetVFlag(bool val);
-  bool CarryFrom(int32_t left, int32_t right, int32_t carry = 0);
+  bool CarryFrom(int32_t left, int32_t right);
   bool BorrowFrom(int32_t left, int32_t right);
   bool OverflowFrom(int32_t alu_out,
                     int32_t left,
                     int32_t right,
                     bool addition);
-
-  inline int GetCarry() {
-    return c_flag_ ? 1 : 0;
-  };
 
   // Support for VFP.
   void Compute_FPSCR_Flags(double val1, double val2);
@@ -321,10 +306,9 @@ class Simulator {
       void* external_function,
       v8::internal::ExternalReference::Type type);
 
-  // For use in calls that take double value arguments.
+  // For use in calls that take two double values, constructed from r0, r1, r2
+  // and r3.
   void GetFpArgs(double* x, double* y);
-  void GetFpArgs(double* x);
-  void GetFpArgs(double* x, int32_t* y);
   void SetFpResult(const double& result);
   void TrashCallerSaveRegisters();
 
@@ -410,9 +394,8 @@ class Simulator {
 // trouble down the line.
 class SimulatorStack : public v8::internal::AllStatic {
  public:
-  static inline uintptr_t JsLimitFromCLimit(v8::internal::Isolate* isolate,
-                                            uintptr_t c_limit) {
-    return Simulator::current(isolate)->StackLimit();
+  static inline uintptr_t JsLimitFromCLimit(uintptr_t c_limit) {
+    return Simulator::current(Isolate::Current())->StackLimit();
   }
 
   static inline uintptr_t RegisterCTryCatch(uintptr_t try_catch_address) {

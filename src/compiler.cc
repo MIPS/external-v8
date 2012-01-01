@@ -32,6 +32,7 @@
 #include "bootstrapper.h"
 #include "codegen.h"
 #include "compilation-cache.h"
+#include "data-flow.h"
 #include "debug.h"
 #include "full-codegen.h"
 #include "gdb-jit.h"
@@ -41,7 +42,6 @@
 #include "parser.h"
 #include "rewriter.h"
 #include "runtime-profiler.h"
-#include "scanner-character-streams.h"
 #include "scopeinfo.h"
 #include "scopes.h"
 #include "vm-state-inl.h"
@@ -95,21 +95,22 @@ CompilationInfo::CompilationInfo(Handle<JSFunction> closure)
 }
 
 
-// Disable optimization for the rest of the compilation pipeline.
 void CompilationInfo::DisableOptimization() {
-  bool is_optimizable_closure =
-    FLAG_optimize_closures &&
-    closure_.is_null() &&
-    !scope_->HasTrivialOuterContext() &&
-    !scope_->outer_scope_calls_non_strict_eval() &&
-    !scope_->inside_with();
-  SetMode(is_optimizable_closure ? BASE : NONOPT);
-}
+  if (FLAG_optimize_closures) {
+    // If we allow closures optimizations and it's an optimizable closure
+    // mark it correspondingly.
+    bool is_closure = closure_.is_null() && !scope_->HasTrivialOuterContext();
+    if (is_closure) {
+      bool is_optimizable_closure =
+          !scope_->outer_scope_calls_eval() && !scope_->inside_with();
+      if (is_optimizable_closure) {
+        SetMode(BASE);
+        return;
+      }
+    }
+  }
 
-
-void CompilationInfo::AbortOptimization() {
-  Handle<Code> code(shared_info()->code());
-  SetCode(code);
+  SetMode(NONOPT);
 }
 
 
@@ -121,20 +122,17 @@ void CompilationInfo::AbortOptimization() {
 // all. However crankshaft support recompilation of functions, so in this case
 // the full compiler need not be be used if a debugger is attached, but only if
 // break points has actually been set.
-static bool is_debugging_active() {
+static bool AlwaysFullCompiler() {
 #ifdef ENABLE_DEBUGGER_SUPPORT
   Isolate* isolate = Isolate::Current();
-  return V8::UseCrankshaft() ?
-    isolate->debug()->has_break_points() :
-    isolate->debugger()->IsDebuggerActive();
+  if (V8::UseCrankshaft()) {
+    return FLAG_always_full_compiler || isolate->debug()->has_break_points();
+  } else {
+    return FLAG_always_full_compiler || isolate->debugger()->IsDebuggerActive();
+  }
 #else
-  return false;
+  return FLAG_always_full_compiler;
 #endif
-}
-
-
-static bool AlwaysFullCompiler() {
-  return FLAG_always_full_compiler || is_debugging_active();
 }
 
 
@@ -160,6 +158,31 @@ static void FinishOptimization(Handle<JSFunction> function, int64_t start) {
            compiled_functions,
            code_size,
            compilation_time);
+  }
+}
+
+
+static void AbortAndDisable(CompilationInfo* info) {
+  // Disable optimization for the shared function info and mark the
+  // code as non-optimizable. The marker on the shared function info
+  // is there because we flush non-optimized code thereby loosing the
+  // non-optimizable information for the code. When the code is
+  // regenerated and set on the shared function info it is marked as
+  // non-optimizable if optimization is disabled for the shared
+  // function info.
+  Handle<SharedFunctionInfo> shared = info->shared_info();
+  shared->set_optimization_disabled(true);
+  Handle<Code> code = Handle<Code>(shared->code());
+  ASSERT(code->kind() == Code::FUNCTION);
+  code->set_optimizable(false);
+  info->SetCode(code);
+  Isolate* isolate = code->GetIsolate();
+  isolate->compilation_cache()->MarkForLazyOptimizing(info->closure());
+  if (FLAG_trace_opt) {
+    PrintF("[disabled optimization for: ");
+    info->closure()->PrintName();
+    PrintF(" / %" V8PRIxPTR "]\n",
+           reinterpret_cast<intptr_t>(*info->closure()));
   }
 }
 
@@ -197,9 +220,7 @@ static bool MakeCrankshaftCode(CompilationInfo* info) {
   const int kMaxOptCount =
       FLAG_deopt_every_n_times == 0 ? Compiler::kDefaultMaxOptCount : 1000;
   if (info->shared_info()->opt_count() > kMaxOptCount) {
-    info->AbortOptimization();
-    Handle<JSFunction> closure = info->closure();
-    info->shared_info()->DisableOptimization(*closure);
+    AbortAndDisable(info);
     // True indicates the compilation pipeline is still going, not
     // necessarily that we optimized the code.
     return true;
@@ -218,9 +239,7 @@ static bool MakeCrankshaftCode(CompilationInfo* info) {
   if ((scope->num_parameters() + 1) > parameter_limit ||
       (info->osr_ast_id() != AstNode::kNoNumber &&
        scope->num_parameters() + 1 + scope->num_stack_slots() > locals_limit)) {
-    info->AbortOptimization();
-    Handle<JSFunction> closure = info->closure();
-    info->shared_info()->DisableOptimization(*closure);
+    AbortAndDisable(info);
     // True indicates the compilation pipeline is still going, not
     // necessarily that we optimized the code.
     return true;
@@ -293,24 +312,12 @@ static bool MakeCrankshaftCode(CompilationInfo* info) {
     }
   }
 
-  // Keep using the shared code.
-  info->AbortOptimization();
-  if (!builder.inline_bailout()) {
-    // Mark the shared code as unoptimizable unless it was an inlined
-    // function that bailed out.
-    Handle<JSFunction> closure = info->closure();
-    info->shared_info()->DisableOptimization(*closure);
-  }
+  // Compilation with the Hydrogen compiler failed. Keep using the
+  // shared code but mark it as unoptimizable.
+  AbortAndDisable(info);
   // True indicates the compilation pipeline is still going, not necessarily
   // that we optimized the code.
   return true;
-}
-
-
-static bool GenerateCode(CompilationInfo* info) {
-  return V8::UseCrankshaft() ?
-    MakeCrankshaftCode(info) :
-    FullCodeGenerator::MakeCode(info);
 }
 
 
@@ -318,7 +325,15 @@ static bool MakeCode(CompilationInfo* info) {
   // Precondition: code has been parsed.  Postcondition: the code field in
   // the compilation info is set if compilation succeeded.
   ASSERT(info->function() != NULL);
-  return Rewriter::Rewrite(info) && Scope::Analyze(info) && GenerateCode(info);
+
+  if (Rewriter::Rewrite(info) && Scope::Analyze(info)) {
+    if (V8::UseCrankshaft()) return MakeCrankshaftCode(info);
+    // If crankshaft is not supported fall back to full code generator
+    // for all compilation.
+    return FullCodeGenerator::MakeCode(info);
+  }
+
+  return false;
 }
 
 
@@ -338,8 +353,9 @@ bool Compiler::MakeCodeForLiveEdit(CompilationInfo* info) {
 
 
 static Handle<SharedFunctionInfo> MakeFunctionInfo(CompilationInfo* info) {
+  CompilationZoneScope zone_scope(DELETE_ON_EXIT);
+
   Isolate* isolate = info->isolate();
-  ZoneScope zone_scope(isolate, DELETE_ON_EXIT);
   PostponeInterruptsScope postpone(isolate);
 
   ASSERT(!isolate->global_context().is_null());
@@ -412,8 +428,7 @@ static Handle<SharedFunctionInfo> MakeFunctionInfo(CompilationInfo* info) {
         String::cast(script->name())));
     GDBJIT(AddCode(Handle<String>(String::cast(script->name())),
                    script,
-                   info->code(),
-                   info));
+                   info->code()));
   } else {
     PROFILE(isolate, CodeCreateEvent(
         info->is_eval()
@@ -422,7 +437,7 @@ static Handle<SharedFunctionInfo> MakeFunctionInfo(CompilationInfo* info) {
         *info->code(),
         *result,
         isolate->heap()->empty_string()));
-    GDBJIT(AddCode(Handle<String>(), script, info->code(), info));
+    GDBJIT(AddCode(Handle<String>(), script, info->code()));
   }
 
   // Hint to the runtime system used when allocating space for initial
@@ -479,21 +494,15 @@ Handle<SharedFunctionInfo> Compiler::Compile(Handle<String> source,
     // that would be compiled lazily anyway, so we skip the preparse step
     // in that case too.
     ScriptDataImpl* pre_data = input_pre_data;
-    bool harmony_block_scoping = natives != NATIVES_CODE &&
-                                 FLAG_harmony_block_scoping;
     if (pre_data == NULL
         && source_length >= FLAG_min_preparse_length) {
       if (source->IsExternalTwoByteString()) {
         ExternalTwoByteStringUC16CharacterStream stream(
             Handle<ExternalTwoByteString>::cast(source), 0, source->length());
-        pre_data = ParserApi::PartialPreParse(&stream,
-                                              extension,
-                                              harmony_block_scoping);
+        pre_data = ParserApi::PartialPreParse(&stream, extension);
       } else {
         GenericStringUC16CharacterStream stream(source, 0, source->length());
-        pre_data = ParserApi::PartialPreParse(&stream,
-                                              extension,
-                                              harmony_block_scoping);
+        pre_data = ParserApi::PartialPreParse(&stream, extension);
       }
     }
 
@@ -516,9 +525,6 @@ Handle<SharedFunctionInfo> Compiler::Compile(Handle<String> source,
     info.MarkAsGlobal();
     info.SetExtension(extension);
     info.SetPreParseData(pre_data);
-    if (natives == NATIVES_CODE) {
-      info.MarkAsAllowingNativesSyntax();
-    }
     result = MakeFunctionInfo(&info);
     if (extension == NULL && !result.is_null()) {
       compilation_cache->PutScript(source, result);
@@ -580,13 +586,12 @@ Handle<SharedFunctionInfo> Compiler::CompileEval(Handle<String> source,
 
 
 bool Compiler::CompileLazy(CompilationInfo* info) {
-  Isolate* isolate = info->isolate();
-
-  ZoneScope zone_scope(isolate, DELETE_ON_EXIT);
+  CompilationZoneScope zone_scope(DELETE_ON_EXIT);
 
   // The VM is in the COMPILER state until exiting this function.
-  VMState state(isolate, COMPILER);
+  VMState state(info->isolate(), COMPILER);
 
+  Isolate* isolate = info->isolate();
   PostponeInterruptsScope postpone(isolate);
 
   Handle<SharedFunctionInfo> shared = info->shared_info();
@@ -623,7 +628,6 @@ bool Compiler::CompileLazy(CompilationInfo* info) {
       RecordFunctionCompilation(Logger::LAZY_COMPILE_TAG, info, shared);
 
       if (info->IsOptimizing()) {
-        ASSERT(shared->scope_info() != SerializedScopeInfo::Empty());
         function->ReplaceCode(*code);
       } else {
         // Update the shared function info with the compiled code and the
@@ -661,10 +665,13 @@ bool Compiler::CompileLazy(CompilationInfo* info) {
           // version of the function right away - unless the debugger is
           // active as it makes no sense to compile optimized code then.
           if (FLAG_always_opt &&
-              !Isolate::Current()->DebuggerHasBreakPoints()) {
+              !Isolate::Current()->debug()->has_break_points()) {
             CompilationInfo optimized(function);
             optimized.SetOptimizing(AstNode::kNoNumber);
             return CompileLazy(&optimized);
+          } else if (isolate->compilation_cache()->ShouldOptimizeEagerly(
+              function)) {
+            isolate->runtime_profiler()->OptimizeSoon(*function);
           }
         }
       }
@@ -684,7 +691,6 @@ Handle<SharedFunctionInfo> Compiler::BuildFunctionInfo(FunctionLiteral* literal,
   CompilationInfo info(script);
   info.SetFunction(literal);
   info.SetScope(literal->scope());
-  if (literal->scope()->is_strict_mode()) info.MarkAsStrictMode();
 
   LiveEditFunctionTracker live_edit_tracker(info.isolate(), literal);
   // Determine if the function can be lazily compiled. This is necessary to
@@ -743,7 +749,6 @@ void Compiler::SetFunctionInfo(Handle<SharedFunctionInfo> function_info,
   function_info->set_start_position(lit->start_position());
   function_info->set_end_position(lit->end_position());
   function_info->set_is_expression(lit->is_expression());
-  function_info->set_is_anonymous(lit->is_anonymous());
   function_info->set_is_toplevel(is_toplevel);
   function_info->set_inferred_name(*lit->inferred_name());
   function_info->SetThisPropertyAssignmentsInfo(
@@ -751,8 +756,6 @@ void Compiler::SetFunctionInfo(Handle<SharedFunctionInfo> function_info,
       *lit->this_property_assignments());
   function_info->set_allows_lazy_compilation(lit->AllowsLazyCompilation());
   function_info->set_strict_mode(lit->strict_mode());
-  function_info->set_uses_arguments(lit->scope()->arguments() != NULL);
-  function_info->set_has_duplicate_parameters(lit->has_duplicate_parameters());
 }
 
 
@@ -765,8 +768,7 @@ void Compiler::RecordFunctionCompilation(Logger::LogEventsAndTags tag,
   // Log the code generation. If source information is available include
   // script name and line number. Check explicitly whether logging is
   // enabled as finding the line number is not free.
-  if (info->isolate()->logger()->is_logging() ||
-      CpuProfiler::is_profiling(info->isolate())) {
+  if (info->isolate()->logger()->is_logging() || CpuProfiler::is_profiling()) {
     Handle<Script> script = info->script();
     Handle<Code> code = info->code();
     if (*code == info->isolate()->builtins()->builtin(Builtins::kLazyCompile))
@@ -791,8 +793,7 @@ void Compiler::RecordFunctionCompilation(Logger::LogEventsAndTags tag,
 
   GDBJIT(AddCode(Handle<String>(shared->DebugName()),
                  Handle<Script>(info->script()),
-                 Handle<Code>(info->code()),
-                 info));
+                 Handle<Code>(info->code())));
 }
 
 } }  // namespace v8::internal

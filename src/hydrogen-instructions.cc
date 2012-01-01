@@ -60,20 +60,12 @@ const char* Representation::Mnemonic() const {
     case kDouble: return "d";
     case kInteger32: return "i";
     case kExternal: return "x";
-    default:
+    case kNumRepresentations:
       UNREACHABLE();
       return NULL;
   }
-}
-
-
-void HValue::AssumeRepresentation(Representation r) {
-  if (CheckFlag(kFlexibleRepresentation)) {
-    ChangeRepresentation(r);
-    // The representation of the value is dictated by type feedback and
-    // will not be changed later.
-    ClearFlag(kFlexibleRepresentation);
-  }
+  UNREACHABLE();
+  return NULL;
 }
 
 
@@ -272,60 +264,31 @@ HType HType::TypeFromValue(Handle<Object> value) {
 }
 
 
+int HValue::LookupOperandIndex(int occurrence_index, HValue* op) {
+  for (int i = 0; i < OperandCount(); ++i) {
+    if (OperandAt(i) == op) {
+      if (occurrence_index == 0) return i;
+      --occurrence_index;
+    }
+  }
+  return -1;
+}
+
+
 bool HValue::IsDefinedAfter(HBasicBlock* other) const {
   return block()->block_id() > other->block_id();
 }
 
 
-HUseIterator::HUseIterator(HUseListNode* head) : next_(head) {
-  Advance();
-}
-
-
-void HUseIterator::Advance() {
-  current_ = next_;
-  if (current_ != NULL) {
-    next_ = current_->tail();
-    value_ = current_->value();
-    index_ = current_->index();
-  }
-}
-
-
-int HValue::UseCount() const {
-  int count = 0;
-  for (HUseIterator it(uses()); !it.Done(); it.Advance()) ++count;
-  return count;
-}
-
-
-HUseListNode* HValue::RemoveUse(HValue* value, int index) {
-  HUseListNode* previous = NULL;
-  HUseListNode* current = use_list_;
-  while (current != NULL) {
-    if (current->value() == value && current->index() == index) {
-      if (previous == NULL) {
-        use_list_ = current->tail();
-      } else {
-        previous->set_tail(current->tail());
-      }
-      break;
+bool HValue::UsesMultipleTimes(HValue* op) {
+  bool seen = false;
+  for (int i = 0; i < OperandCount(); ++i) {
+    if (OperandAt(i) == op) {
+      if (seen) return true;
+      seen = true;
     }
-
-    previous = current;
-    current = current->tail();
   }
-
-#ifdef DEBUG
-  // Do not reuse use list nodes in debug mode, zap them.
-  if (current != NULL) {
-    HUseListNode* temp =
-        new HUseListNode(current->value(), current->index(), NULL);
-    current->Zap();
-    current = temp;
-  }
-#endif
-  return current;
+  return false;
 }
 
 
@@ -354,48 +317,71 @@ intptr_t HValue::Hashcode() {
 }
 
 
-const char* HValue::Mnemonic() const {
-  switch (opcode()) {
-#define MAKE_CASE(type) case k##type: return #type;
-    HYDROGEN_CONCRETE_INSTRUCTION_LIST(MAKE_CASE)
-#undef MAKE_CASE
-    case kPhi: return "Phi";
-    default: return "";
-  }
-}
-
-
 void HValue::SetOperandAt(int index, HValue* value) {
+  ASSERT(value == NULL || !value->representation().IsNone());
   RegisterUse(index, value);
   InternalSetOperandAt(index, value);
 }
 
 
-void HValue::DeleteAndReplaceWith(HValue* other) {
-  // We replace all uses first, so Delete can assert that there are none.
-  if (other != NULL) ReplaceAllUsesWith(other);
-  ASSERT(HasNoUses());
-  ClearOperands();
-  DeleteFromGraph();
+void HValue::ReplaceAndDelete(HValue* other) {
+  if (other != NULL) ReplaceValue(other);
+  Delete();
 }
 
 
-void HValue::ReplaceAllUsesWith(HValue* other) {
-  while (use_list_ != NULL) {
-    HUseListNode* list_node = use_list_;
-    HValue* value = list_node->value();
-    ASSERT(!value->block()->IsStartBlock());
-    value->InternalSetOperandAt(list_node->index(), other);
-    use_list_ = list_node->tail();
-    list_node->set_tail(other->use_list_);
-    other->use_list_ = list_node;
+void HValue::ReplaceValue(HValue* other) {
+  for (int i = 0; i < uses_.length(); ++i) {
+    HValue* use = uses_[i];
+    ASSERT(!use->block()->IsStartBlock());
+    InternalReplaceAtUse(use, other);
+    other->uses_.Add(use);
   }
+  uses_.Rewind(0);
 }
 
 
 void HValue::ClearOperands() {
   for (int i = 0; i < OperandCount(); ++i) {
     SetOperandAt(i, NULL);
+  }
+}
+
+
+void HValue::Delete() {
+  ASSERT(HasNoUses());
+  ClearOperands();
+  DeleteFromGraph();
+}
+
+
+void HValue::ReplaceAtUse(HValue* use, HValue* other) {
+  for (int i = 0; i < use->OperandCount(); ++i) {
+    if (use->OperandAt(i) == this) {
+      use->SetOperandAt(i, other);
+    }
+  }
+}
+
+
+void HValue::ReplaceFirstAtUse(HValue* use, HValue* other, Representation r) {
+  for (int i = 0; i < use->OperandCount(); ++i) {
+    if (use->RequiredInputRepresentation(i).Equals(r) &&
+        use->OperandAt(i) == this) {
+      use->SetOperandAt(i, other);
+      return;
+    }
+  }
+}
+
+
+void HValue::InternalReplaceAtUse(HValue* use, HValue* other) {
+  for (int i = 0; i < use->OperandCount(); ++i) {
+    if (use->OperandAt(i) == this) {
+      // Call internal method that does not update use lists. The caller is
+      // responsible for doing so.
+      use->InternalSetOperandAt(i, other);
+    }
   }
 }
 
@@ -409,39 +395,8 @@ void HValue::SetBlock(HBasicBlock* block) {
 }
 
 
-void HValue::PrintTypeTo(StringStream* stream) {
-  if (!representation().IsTagged() || type().Equals(HType::Tagged())) return;
-  stream->Add(" type[%s]", type().ToString());
-}
-
-
-void HValue::PrintRangeTo(StringStream* stream) {
-  if (range() == NULL || range()->IsMostGeneric()) return;
-  stream->Add(" range[%d,%d,m0=%d]",
-              range()->lower(),
-              range()->upper(),
-              static_cast<int>(range()->CanBeMinusZero()));
-}
-
-
-void HValue::PrintChangesTo(StringStream* stream) {
-  int changes_flags = ChangesFlags();
-  if (changes_flags == 0) return;
-  stream->Add(" changes[");
-  if (changes_flags == AllSideEffects()) {
-    stream->Add("*");
-  } else {
-    bool add_comma = false;
-#define PRINT_DO(type)                         \
-    if (changes_flags & (1 << kChanges##type)) { \
-      if (add_comma) stream->Add(",");           \
-      add_comma = true;                          \
-      stream->Add(#type);                        \
-    }
-    GVN_FLAG_LIST(PRINT_DO);
-#undef PRINT_DO
-  }
-  stream->Add("]");
+void HValue::PrintTypeTo(HType type, StringStream* stream) {
+  stream->Add(type.ToShortString());
 }
 
 
@@ -461,20 +416,9 @@ bool HValue::UpdateInferredType() {
 void HValue::RegisterUse(int index, HValue* new_value) {
   HValue* old_value = OperandAt(index);
   if (old_value == new_value) return;
-
-  HUseListNode* removed = NULL;
-  if (old_value != NULL) {
-    removed = old_value->RemoveUse(this, index);
-  }
-
+  if (old_value != NULL) old_value->uses_.RemoveElement(this);
   if (new_value != NULL) {
-    if (removed == NULL) {
-      new_value->use_list_ =
-          new HUseListNode(this, index, new_value->use_list_);
-    } else {
-      removed->set_tail(new_value->use_list_);
-      new_value->use_list_ = removed;
-    }
+    new_value->uses_.Add(this);
   }
 }
 
@@ -503,16 +447,28 @@ void HValue::ComputeInitialRange() {
 
 
 void HInstruction::PrintTo(StringStream* stream) {
-  PrintMnemonicTo(stream);
+  stream->Add("%s", Mnemonic());
+  if (HasSideEffects()) stream->Add("*");
+  stream->Add(" ");
   PrintDataTo(stream);
-  PrintRangeTo(stream);
-  PrintChangesTo(stream);
-  PrintTypeTo(stream);
-}
 
+  if (range() != NULL &&
+      !range()->IsMostGeneric() &&
+      !range()->CanBeMinusZero()) {
+    stream->Add(" range[%d,%d,m0=%d]",
+                range()->lower(),
+                range()->upper(),
+                static_cast<int>(range()->CanBeMinusZero()));
+  }
 
-void HInstruction::PrintMnemonicTo(StringStream* stream) {
-  stream->Add("%s ", Mnemonic());
+  int changes_flags = (flags() & HValue::ChangesFlagsMask());
+  if (changes_flags != 0) {
+    stream->Add(" changes[0x%x]", changes_flags);
+  }
+
+  if (representation().IsTagged() && !type().Equals(HType::Tagged())) {
+    stream->Add(" type[%s]", type().ToString());
+  }
 }
 
 
@@ -597,8 +553,6 @@ void HInstruction::Verify() {
         ASSERT(cur == other_operand);
       }
     } else {
-      // If the following assert fires, you may have forgotten an
-      // AddInstruction.
       ASSERT(other_block->Dominates(cur_block));
     }
   }
@@ -630,13 +584,6 @@ void HBinaryCall::PrintDataTo(StringStream* stream) {
   second()->PrintNameTo(stream);
   stream->Add(" ");
   stream->Add("#%d", argument_count());
-}
-
-
-void HBoundsCheck::PrintDataTo(StringStream* stream) {
-  index()->PrintNameTo(stream);
-  stream->Add(" ");
-  length()->PrintNameTo(stream);
 }
 
 
@@ -674,7 +621,7 @@ void HCallRuntime::PrintDataTo(StringStream* stream) {
 }
 
 
-void HClassOfTestAndBranch::PrintDataTo(StringStream* stream) {
+void HClassOfTest::PrintDataTo(StringStream* stream) {
   stream->Add("class_of_test(");
   value()->PrintNameTo(stream);
   stream->Add(", \"%o\")", *class_name());
@@ -691,24 +638,21 @@ void HAccessArgumentsAt::PrintDataTo(StringStream* stream) {
 
 
 void HControlInstruction::PrintDataTo(StringStream* stream) {
-  stream->Add(" goto (");
-  bool first_block = true;
-  for (HSuccessorIterator it(this); !it.Done(); it.Advance()) {
-    stream->Add(first_block ? "B%d" : ", B%d", it.Current()->block_id());
-    first_block = false;
+  if (FirstSuccessor() != NULL) {
+    int first_id = FirstSuccessor()->block_id();
+    if (SecondSuccessor() == NULL) {
+      stream->Add(" B%d", first_id);
+    } else {
+      int second_id = SecondSuccessor()->block_id();
+      stream->Add(" goto (B%d, B%d)", first_id, second_id);
+    }
   }
-  stream->Add(")");
 }
 
 
 void HUnaryControlInstruction::PrintDataTo(StringStream* stream) {
   value()->PrintNameTo(stream);
   HControlInstruction::PrintDataTo(stream);
-}
-
-
-void HReturn::PrintDataTo(StringStream* stream) {
-  value()->PrintNameTo(stream);
 }
 
 
@@ -752,10 +696,10 @@ void HUnaryOperation::PrintDataTo(StringStream* stream) {
 }
 
 
-void HHasInstanceTypeAndBranch::PrintDataTo(StringStream* stream) {
+void HHasInstanceType::PrintDataTo(StringStream* stream) {
   value()->PrintNameTo(stream);
   switch (from_) {
-    case FIRST_JS_RECEIVER_TYPE:
+    case FIRST_JS_OBJECT_TYPE:
       if (to_ == LAST_TYPE) stream->Add(" spec_object");
       break;
     case JS_REGEXP_TYPE:
@@ -773,10 +717,10 @@ void HHasInstanceTypeAndBranch::PrintDataTo(StringStream* stream) {
 }
 
 
-void HTypeofIsAndBranch::PrintDataTo(StringStream* stream) {
+void HTypeofIs::PrintDataTo(StringStream* stream) {
   value()->PrintNameTo(stream);
   stream->Add(" == ");
-  stream->Add(type_literal_->GetFlatContent().ToAsciiVector());
+  stream->Add(type_literal_->ToAsciiVector());
 }
 
 
@@ -789,59 +733,10 @@ void HChange::PrintDataTo(StringStream* stream) {
 }
 
 
-void HJSArrayLength::PrintDataTo(StringStream* stream) {
-  value()->PrintNameTo(stream);
-  stream->Add(" ");
-  typecheck()->PrintNameTo(stream);
-}
-
-
-HValue* HCheckInstanceType::Canonicalize() {
-  if (check_ == IS_STRING &&
-      !value()->type().IsUninitialized() &&
-      value()->type().IsString()) {
-    return NULL;
-  }
-  if (check_ == IS_SYMBOL &&
-      value()->IsConstant() &&
-      HConstant::cast(value())->handle()->IsSymbol()) {
-    return NULL;
-  }
-  return this;
-}
-
-
-void HCheckInstanceType::GetCheckInterval(InstanceType* first,
-                                          InstanceType* last) {
-  ASSERT(is_interval_check());
-  switch (check_) {
-    case IS_SPEC_OBJECT:
-      *first = FIRST_SPEC_OBJECT_TYPE;
-      *last = LAST_SPEC_OBJECT_TYPE;
-      return;
-    case IS_JS_ARRAY:
-      *first = *last = JS_ARRAY_TYPE;
-      return;
-    default:
-      UNREACHABLE();
-  }
-}
-
-
-void HCheckInstanceType::GetCheckMaskAndTag(uint8_t* mask, uint8_t* tag) {
-  ASSERT(!is_interval_check());
-  switch (check_) {
-    case IS_STRING:
-      *mask = kIsNotStringMask;
-      *tag = kStringTag;
-      return;
-    case IS_SYMBOL:
-      *mask = kIsSymbolMask;
-      *tag = kSymbolTag;
-      return;
-    default:
-      UNREACHABLE();
-  }
+HCheckInstanceType* HCheckInstanceType::NewIsJSObjectOrJSFunction(
+    HValue* value)  {
+  STATIC_ASSERT((LAST_JS_OBJECT_TYPE + 1) == JS_FUNCTION_TYPE);
+  return new HCheckInstanceType(value, FIRST_JS_OBJECT_TYPE, JS_FUNCTION_TYPE);
 }
 
 
@@ -874,25 +769,19 @@ void HInstanceOf::PrintDataTo(StringStream* stream) {
 
 
 Range* HValue::InferRange() {
-  // Untagged integer32 cannot be -0, all other representations can.
-  Range* result = new Range();
-  result->set_can_be_minus_zero(!representation().IsInteger32());
-  return result;
-}
-
-
-Range* HChange::InferRange() {
-  Range* input_range = value()->range();
-  if (from().IsInteger32() &&
-      to().IsTagged() &&
-      input_range != NULL && input_range->IsInSmiRange()) {
-    set_type(HType::Smi());
+  if (representation().IsTagged()) {
+    // Tagged values are always in int32 range when converted to integer,
+    // but they can contain -0.
+    Range* result = new Range();
+    result->set_can_be_minus_zero(true);
+    return result;
+  } else if (representation().IsNone()) {
+    return NULL;
+  } else {
+    // Untagged integer32 cannot be -0 and we don't compute ranges for
+    // untagged doubles.
+    return new Range();
   }
-  Range* result = (input_range != NULL)
-      ? input_range->Copy()
-      : HValue::InferRange();
-  if (to().IsInteger32()) result->set_can_be_minus_zero(false);
-  return result;
 }
 
 
@@ -1025,14 +914,11 @@ void HPhi::PrintTo(StringStream* stream) {
     value->PrintNameTo(stream);
     stream->Add(" ");
   }
-  stream->Add(" uses%d_%di_%dd_%dt",
-              UseCount(),
+  stream->Add(" uses%d_%di_%dd_%dt]",
+              uses()->length(),
               int32_non_phi_uses() + int32_indirect_uses(),
               double_non_phi_uses() + double_indirect_uses(),
               tagged_non_phi_uses() + tagged_indirect_uses());
-  stream->Add("%s%s]",
-              is_live() ? "_live" : "",
-              IsConvertibleToInteger() ? "" : "_ncti");
 }
 
 
@@ -1047,8 +933,8 @@ void HPhi::AddInput(HValue* value) {
 
 
 bool HPhi::HasRealUses() {
-  for (HUseIterator it(uses()); !it.Done(); it.Advance()) {
-    if (!it.value()->IsPhi()) return true;
+  for (int i = 0; i < uses()->length(); i++) {
+    if (!uses()->at(i)->IsPhi()) return true;
   }
   return false;
 }
@@ -1081,11 +967,12 @@ void HPhi::DeleteFromGraph() {
 void HPhi::InitRealUses(int phi_id) {
   // Initialize real uses.
   phi_id_ = phi_id;
-  for (HUseIterator it(uses()); !it.Done(); it.Advance()) {
-    HValue* value = it.value();
-    if (!value->IsPhi()) {
-      Representation rep = value->RequiredInputRepresentation(it.index());
-      ++non_phi_uses_[rep.kind()];
+  for (int j = 0; j < uses()->length(); j++) {
+    HValue* use = uses()->at(j);
+    if (!use->IsPhi()) {
+      int index = use->LookupOperandIndex(0, this);
+      Representation req_rep = use->RequiredInputRepresentation(index);
+      non_phi_uses_[req_rep.kind()]++;
     }
   }
 }
@@ -1122,27 +1009,18 @@ void HSimulate::PrintDataTo(StringStream* stream) {
 }
 
 
-void HDeoptimize::PrintDataTo(StringStream* stream) {
-  if (OperandCount() == 0) return;
-  OperandAt(0)->PrintNameTo(stream);
-  for (int i = 1; i < OperandCount(); ++i) {
-    stream->Add(" ");
-    OperandAt(i)->PrintNameTo(stream);
-  }
-}
-
-
 void HEnterInlined::PrintDataTo(StringStream* stream) {
-  SmartArrayPointer<char> name = function()->debug_name()->ToCString();
+  SmartPointer<char> name = function()->debug_name()->ToCString();
   stream->Add("%s, id=%d", *name, function()->id());
 }
 
 
 HConstant::HConstant(Handle<Object> handle, Representation r)
     : handle_(handle),
+      constant_type_(HType::TypeFromValue(handle)),
       has_int32_value_(false),
-      has_double_value_(false),
       int32_value_(0),
+      has_double_value_(false),
       double_value_(0)  {
   set_representation(r);
   SetFlag(kUseGVN);
@@ -1244,33 +1122,7 @@ Range* HSar::InferRange() {
           ? left()->range()->Copy()
           : new Range();
       result->Sar(c->Integer32Value());
-      result->set_can_be_minus_zero(false);
       return result;
-    }
-  }
-  return HValue::InferRange();
-}
-
-
-Range* HShr::InferRange() {
-  if (right()->IsConstant()) {
-    HConstant* c = HConstant::cast(right());
-    if (c->HasInteger32Value()) {
-      int shift_count = c->Integer32Value() & 0x1f;
-      if (left()->range()->CanBeNegative()) {
-        // Only compute bounds if the result always fits into an int32.
-        return (shift_count >= 1)
-            ? new Range(0, static_cast<uint32_t>(0xffffffff) >> shift_count)
-            : new Range();
-      } else {
-        // For positive inputs we can use the >> operator.
-        Range* result = (left()->range() != NULL)
-            ? left()->range()->Copy()
-            : new Range();
-        result->Sar(c->Integer32Value());
-        result->set_can_be_minus_zero(false);
-        return result;
-      }
     }
   }
   return HValue::InferRange();
@@ -1285,7 +1137,6 @@ Range* HShl::InferRange() {
           ? left()->range()->Copy()
           : new Range();
       result->Shl(c->Integer32Value());
-      result->set_can_be_minus_zero(false);
       return result;
     }
   }
@@ -1294,28 +1145,25 @@ Range* HShl::InferRange() {
 
 
 
-void HCompareGeneric::PrintDataTo(StringStream* stream) {
+void HCompare::PrintDataTo(StringStream* stream) {
   stream->Add(Token::Name(token()));
   stream->Add(" ");
   HBinaryOperation::PrintDataTo(stream);
 }
 
 
-void HCompareIDAndBranch::PrintDataTo(StringStream* stream) {
-  stream->Add(Token::Name(token()));
-  stream->Add(" ");
-  left()->PrintNameTo(stream);
-  stream->Add(" ");
-  right()->PrintNameTo(stream);
-}
-
-
-void HCompareIDAndBranch::SetInputRepresentation(Representation r) {
+void HCompare::SetInputRepresentation(Representation r) {
   input_representation_ = r;
-  if (r.IsDouble()) {
+  if (r.IsTagged()) {
+    SetAllSideEffects();
+    ClearFlag(kUseGVN);
+  } else if (r.IsDouble()) {
     SetFlag(kDeoptimizeOnUndefined);
+    ClearAllSideEffects();
+    SetFlag(kUseGVN);
   } else {
-    ASSERT(r.IsInteger32());
+    ClearAllSideEffects();
+    SetFlag(kUseGVN);
   }
 }
 
@@ -1331,15 +1179,13 @@ void HLoadNamedField::PrintDataTo(StringStream* stream) {
 }
 
 
-HLoadNamedFieldPolymorphic::HLoadNamedFieldPolymorphic(HValue* context,
-                                                       HValue* object,
-                                                       SmallMapList* types,
+HLoadNamedFieldPolymorphic::HLoadNamedFieldPolymorphic(HValue* object,
+                                                       ZoneMapList* types,
                                                        Handle<String> name)
-    : types_(Min(types->length(), kMaxLoadPolymorphism)),
+    : HUnaryOperation(object),
+      types_(Min(types->length(), kMaxLoadPolymorphism)),
       name_(name),
       need_generic_(false) {
-  SetOperandAt(0, context);
-  SetOperandAt(1, object);
   set_representation(Representation::Tagged());
   SetFlag(kDependsOnMaps);
   for (int i = 0;
@@ -1348,23 +1194,13 @@ HLoadNamedFieldPolymorphic::HLoadNamedFieldPolymorphic(HValue* context,
     Handle<Map> map = types->at(i);
     LookupResult lookup;
     map->LookupInDescriptors(NULL, *name, &lookup);
-    if (lookup.IsProperty()) {
-      switch (lookup.type()) {
-        case FIELD: {
-          int index = lookup.GetLocalFieldIndexFromMap(*map);
-          if (index < 0) {
-            SetFlag(kDependsOnInobjectFields);
-          } else {
-            SetFlag(kDependsOnBackingStoreFields);
-          }
-          types_.Add(types->at(i));
-          break;
-        }
-        case CONSTANT_FUNCTION:
-          types_.Add(types->at(i));
-          break;
-        default:
-          break;
+    if (lookup.IsProperty() && lookup.type() == FIELD) {
+      types_.Add(types->at(i));
+      int index = lookup.GetLocalFieldIndexFromMap(*map);
+      if (index < 0) {
+        SetFlag(kDependsOnInobjectFields);
+      } else {
+        SetFlag(kDependsOnBackingStoreFields);
       }
     }
   }
@@ -1397,47 +1233,11 @@ bool HLoadNamedFieldPolymorphic::DataEquals(HValue* value) {
 }
 
 
-void HLoadNamedFieldPolymorphic::PrintDataTo(StringStream* stream) {
-  object()->PrintNameTo(stream);
-  stream->Add(" .");
-  stream->Add(*String::cast(*name())->ToCString());
-}
-
-
-void HLoadNamedGeneric::PrintDataTo(StringStream* stream) {
-  object()->PrintNameTo(stream);
-  stream->Add(" .");
-  stream->Add(*String::cast(*name())->ToCString());
-}
-
-
 void HLoadKeyedFastElement::PrintDataTo(StringStream* stream) {
   object()->PrintNameTo(stream);
   stream->Add("[");
   key()->PrintNameTo(stream);
   stream->Add("]");
-}
-
-
-bool HLoadKeyedFastElement::RequiresHoleCheck() const {
-  for (HUseIterator it(uses()); !it.Done(); it.Advance()) {
-    HValue* use = it.value();
-    if (!use->IsChange()) return true;
-  }
-  return false;
-}
-
-
-void HLoadKeyedFastDoubleElement::PrintDataTo(StringStream* stream) {
-  elements()->PrintNameTo(stream);
-  stream->Add("[");
-  key()->PrintNameTo(stream);
-  stream->Add("]");
-}
-
-
-bool HLoadKeyedFastDoubleElement::RequiresHoleCheck() const {
-  return true;
 }
 
 
@@ -1453,39 +1253,30 @@ void HLoadKeyedSpecializedArrayElement::PrintDataTo(
     StringStream* stream) {
   external_pointer()->PrintNameTo(stream);
   stream->Add(".");
-  switch (elements_kind()) {
-    case EXTERNAL_BYTE_ELEMENTS:
+  switch (array_type()) {
+    case kExternalByteArray:
       stream->Add("byte");
       break;
-    case EXTERNAL_UNSIGNED_BYTE_ELEMENTS:
+    case kExternalUnsignedByteArray:
       stream->Add("u_byte");
       break;
-    case EXTERNAL_SHORT_ELEMENTS:
+    case kExternalShortArray:
       stream->Add("short");
       break;
-    case EXTERNAL_UNSIGNED_SHORT_ELEMENTS:
+    case kExternalUnsignedShortArray:
       stream->Add("u_short");
       break;
-    case EXTERNAL_INT_ELEMENTS:
+    case kExternalIntArray:
       stream->Add("int");
       break;
-    case EXTERNAL_UNSIGNED_INT_ELEMENTS:
+    case kExternalUnsignedIntArray:
       stream->Add("u_int");
       break;
-    case EXTERNAL_FLOAT_ELEMENTS:
+    case kExternalFloatArray:
       stream->Add("float");
       break;
-    case EXTERNAL_DOUBLE_ELEMENTS:
-      stream->Add("double");
-      break;
-    case EXTERNAL_PIXEL_ELEMENTS:
+    case kExternalPixelArray:
       stream->Add("pixel");
-      break;
-    case FAST_ELEMENTS:
-    case FAST_DOUBLE_ELEMENTS:
-    case DICTIONARY_ELEMENTS:
-    case NON_STRICT_ARGUMENTS_ELEMENTS:
-      UNREACHABLE();
       break;
   }
   stream->Add("[");
@@ -1526,15 +1317,6 @@ void HStoreKeyedFastElement::PrintDataTo(StringStream* stream) {
 }
 
 
-void HStoreKeyedFastDoubleElement::PrintDataTo(StringStream* stream) {
-  elements()->PrintNameTo(stream);
-  stream->Add("[");
-  key()->PrintNameTo(stream);
-  stream->Add("] = ");
-  value()->PrintNameTo(stream);
-}
-
-
 void HStoreKeyedGeneric::PrintDataTo(StringStream* stream) {
   object()->PrintNameTo(stream);
   stream->Add("[");
@@ -1548,39 +1330,30 @@ void HStoreKeyedSpecializedArrayElement::PrintDataTo(
     StringStream* stream) {
   external_pointer()->PrintNameTo(stream);
   stream->Add(".");
-  switch (elements_kind()) {
-    case EXTERNAL_BYTE_ELEMENTS:
+  switch (array_type()) {
+    case kExternalByteArray:
       stream->Add("byte");
       break;
-    case EXTERNAL_UNSIGNED_BYTE_ELEMENTS:
+    case kExternalUnsignedByteArray:
       stream->Add("u_byte");
       break;
-    case EXTERNAL_SHORT_ELEMENTS:
+    case kExternalShortArray:
       stream->Add("short");
       break;
-    case EXTERNAL_UNSIGNED_SHORT_ELEMENTS:
+    case kExternalUnsignedShortArray:
       stream->Add("u_short");
       break;
-    case EXTERNAL_INT_ELEMENTS:
+    case kExternalIntArray:
       stream->Add("int");
       break;
-    case EXTERNAL_UNSIGNED_INT_ELEMENTS:
+    case kExternalUnsignedIntArray:
       stream->Add("u_int");
       break;
-    case EXTERNAL_FLOAT_ELEMENTS:
+    case kExternalFloatArray:
       stream->Add("float");
       break;
-    case EXTERNAL_DOUBLE_ELEMENTS:
-      stream->Add("double");
-      break;
-    case EXTERNAL_PIXEL_ELEMENTS:
+    case kExternalPixelArray:
       stream->Add("pixel");
-      break;
-    case FAST_ELEMENTS:
-    case FAST_DOUBLE_ELEMENTS:
-    case DICTIONARY_ELEMENTS:
-    case NON_STRICT_ARGUMENTS_ELEMENTS:
-      UNREACHABLE();
       break;
   }
   stream->Add("[");
@@ -1666,26 +1439,21 @@ HType HPhi::CalculateInferredType() {
 
 
 HType HConstant::CalculateInferredType() {
-  return HType::TypeFromValue(handle_);
+  return constant_type_;
 }
 
 
-HType HCompareGeneric::CalculateInferredType() {
+HType HCompare::CalculateInferredType() {
   return HType::Boolean();
 }
 
 
-HType HInstanceOf::CalculateInferredType() {
+HType HCompareJSObjectEq::CalculateInferredType() {
   return HType::Boolean();
 }
 
 
-HType HDeleteProperty::CalculateInferredType() {
-  return HType::Boolean();
-}
-
-
-HType HInstanceOfKnownGlobal::CalculateInferredType() {
+HType HUnaryPredicate::CalculateInferredType() {
   return HType::Boolean();
 }
 
@@ -1775,13 +1543,6 @@ HValue* HChange::EnsureAndPropagateNotMinusZero(BitVector* visited) {
 }
 
 
-HValue* HForceRepresentation::EnsureAndPropagateNotMinusZero(
-    BitVector* visited) {
-  visited->Add(id());
-  return value();
-}
-
-
 HValue* HMod::EnsureAndPropagateNotMinusZero(BitVector* visited) {
   visited->Add(id());
   if (range() == NULL || range()->CanBeMinusZero()) {
@@ -1832,13 +1593,6 @@ HValue* HAdd::EnsureAndPropagateNotMinusZero(BitVector* visited) {
 }
 
 
-void HIn::PrintDataTo(StringStream* stream) {
-  key()->PrintNameTo(stream);
-  stream->Add(" ");
-  object()->PrintNameTo(stream);
-}
-
-
 // Node-specific verification code is only included in debug mode.
 #ifdef DEBUG
 
@@ -1860,6 +1614,11 @@ void HSimulate::Verify() {
 }
 
 
+void HBoundsCheck::Verify() {
+  HInstruction::Verify();
+}
+
+
 void HCheckSmi::Verify() {
   HInstruction::Verify();
   ASSERT(HasNoUses());
@@ -1867,6 +1626,18 @@ void HCheckSmi::Verify() {
 
 
 void HCheckNonSmi::Verify() {
+  HInstruction::Verify();
+  ASSERT(HasNoUses());
+}
+
+
+void HCheckInstanceType::Verify() {
+  HInstruction::Verify();
+  ASSERT(HasNoUses());
+}
+
+
+void HCheckMap::Verify() {
   HInstruction::Verify();
   ASSERT(HasNoUses());
 }

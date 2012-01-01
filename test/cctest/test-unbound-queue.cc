@@ -6,6 +6,8 @@
 #include "unbound-queue-inl.h"
 #include "cctest.h"
 
+namespace i = v8::internal;
+
 using i::UnboundQueue;
 
 

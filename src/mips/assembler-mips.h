@@ -30,7 +30,7 @@
 
 // The original source code covered by the above license above has been
 // modified significantly by Google Inc.
-// Copyright 2011 the V8 project authors. All rights reserved.
+// Copyright 2010 the V8 project authors. All rights reserved.
 
 
 #ifndef V8_MIPS_ASSEMBLER_MIPS_H_
@@ -67,13 +67,12 @@ namespace internal {
 
 
 // -----------------------------------------------------------------------------
-// Implementation of Register and FPURegister.
+// Implementation of Register and FPURegister
 
 // Core register.
 struct Register {
   static const int kNumRegisters = v8::internal::kNumRegisters;
-  static const int kNumAllocatableRegisters = 14;  // v0 through t7.
-  static const int kSizeInBytes = 4;
+  static const int kNumAllocatableRegisters = 14;  // v0 through t7
 
   static int ToAllocationIndex(Register reg) {
     return reg.code() - 2;  // zero_reg and 'at' are skipped.
@@ -127,38 +126,38 @@ struct Register {
 
 const Register no_reg = { -1 };
 
-const Register zero_reg = { 0 };  // Always zero.
-const Register at = { 1 };   // at: Reserved for synthetic instructions.
-const Register v0 = { 2 };   // v0, v1: Used when returning multiple values
-const Register v1 = { 3 };   //   from subroutines.
-const Register a0 = { 4 };   // a0 - a4: Used to pass non-FP parameters.
+const Register zero_reg = { 0 };
+const Register at = { 1 };
+const Register v0 = { 2 };
+const Register v1 = { 3 };
+const Register a0 = { 4 };
 const Register a1 = { 5 };
 const Register a2 = { 6 };
 const Register a3 = { 7 };
-const Register t0 = { 8 };   // t0 - t9: Can be used without reservation, act
-const Register t1 = { 9 };   //   as temporary registers and are allowed to
-const Register t2 = { 10 };  //   be destroyed by subroutines.
+const Register t0 = { 8 };
+const Register t1 = { 9 };
+const Register t2 = { 10 };
 const Register t3 = { 11 };
 const Register t4 = { 12 };
 const Register t5 = { 13 };
 const Register t6 = { 14 };
 const Register t7 = { 15 };
-const Register s0 = { 16 };  // s0 - s7: Subroutine register variables.
-const Register s1 = { 17 };  //   Subroutines that write to these registers
-const Register s2 = { 18 };  //   must restore their values before exiting so
-const Register s3 = { 19 };  //   that the caller can expect the values to be
-const Register s4 = { 20 };  //   preserved.
+const Register s0 = { 16 };
+const Register s1 = { 17 };
+const Register s2 = { 18 };
+const Register s3 = { 19 };
+const Register s4 = { 20 };
 const Register s5 = { 21 };
 const Register s6 = { 22 };
 const Register s7 = { 23 };
 const Register t8 = { 24 };
 const Register t9 = { 25 };
-const Register k0 = { 26 };  // k0, k1: Reserved for system calls and
-const Register k1 = { 27 };  // interrupt handlers.
-const Register gp = { 28 };  // gp: Reserved.
-const Register sp = { 29 };  // sp: Stack pointer.
-const Register s8_fp = { 30 };  // fp: Frame pointer.
-const Register ra = { 31 };  // ra: Return address pointer.
+const Register k0 = { 26 };
+const Register k1 = { 27 };
+const Register gp = { 28 };
+const Register sp = { 29 };
+const Register s8_fp = { 30 };
+const Register ra = { 31 };
 
 
 int ToNumber(Register reg);
@@ -168,36 +167,24 @@ Register ToRegister(int num);
 // Coprocessor register.
 struct FPURegister {
   static const int kNumRegisters = v8::internal::kNumFPURegisters;
-
-  // TODO(plind): Warning, inconsistent numbering here. kNumFPURegisters refers
-  // to number of 32-bit FPU regs, but kNumAllocatableRegisters refers to
-  // number of Double regs (64-bit regs, or FPU-reg-pairs).
-
-  // A few double registers are reserved: one as a scratch register and one to
-  // hold 0.0.
-  //  f28: 0.0
-  //  f30: scratch register.
-  static const int kNumReservedRegisters = 2;
-  static const int kNumAllocatableRegisters = kNumRegisters / 2 -
-      kNumReservedRegisters;
-
+  // f0 has been excluded from allocation. This is following ia32
+  // where xmm0 is excluded.
+  static const int kNumAllocatableRegisters = 15;
 
   static int ToAllocationIndex(FPURegister reg) {
+    ASSERT(reg.code() != 0);
     ASSERT(reg.code() % 2 == 0);
-    ASSERT(reg.code() / 2 < kNumAllocatableRegisters);
-    ASSERT(reg.is_valid());
-    return (reg.code() / 2);
+    return (reg.code() / 2) - 1;
   }
 
   static FPURegister FromAllocationIndex(int index) {
     ASSERT(index >= 0 && index < kNumAllocatableRegisters);
-    return from_code(index * 2);
+    return from_code((index + 1) * 2);
   }
 
   static const char* AllocationIndexToString(int index) {
     ASSERT(index >= 0 && index < kNumAllocatableRegisters);
     const char* const names[] = {
-      "f0",
       "f2",
       "f4",
       "f6",
@@ -210,7 +197,9 @@ struct FPURegister {
       "f20",
       "f22",
       "f24",
-      "f26"
+      "f26",
+      "f28",
+      "f30"
     };
     return names[index];
   }
@@ -222,23 +211,6 @@ struct FPURegister {
 
   bool is_valid() const { return 0 <= code_ && code_ < kNumFPURegisters ; }
   bool is(FPURegister creg) const { return code_ == creg.code_; }
-  FPURegister low() const {
-    // Find low reg of a Double-reg pair, which is the reg itself.
-    ASSERT(code_ % 2 == 0);  // Specified Double reg must be even.
-    FPURegister reg;
-    reg.code_ = code_;
-    ASSERT(reg.is_valid());
-    return reg;
-  }
-  FPURegister high() const {
-    // Find high reg of a Doubel-reg pair, which is reg + 1.
-    ASSERT(code_ % 2 == 0);  // Specified Double reg must be even.
-    FPURegister reg;
-    reg.code_ = code_ + 1;
-    ASSERT(reg.is_valid());
-    return reg;
-  }
-
   int code() const {
     ASSERT(is_valid());
     return code_;
@@ -255,19 +227,9 @@ struct FPURegister {
   int code_;
 };
 
-// V8 now supports the O32 ABI, and the FPU Registers are organized as 32
-// 32-bit registers, f0 through f31. When used as 'double' they are used
-// in pairs, starting with the even numbered register. So a double operation
-// on f0 really uses f0 and f1.
-// (Modern mips hardware also supports 32 64-bit registers, via setting
-// (priviledged) Status Register FR bit to 1. This is used by the N32 ABI,
-// but it is not in common use. Someday we will want to support this in v8.)
-
-// For O32 ABI, Floats and Doubles refer to same set of 32 32-bit registers.
 typedef FPURegister DoubleRegister;
-typedef FPURegister FloatRegister;
 
-const FPURegister no_freg = { -1 };
+const FPURegister no_creg = { -1 };
 
 const FPURegister f0 = { 0 };  // Return value in hard float mode.
 const FPURegister f1 = { 1 };
@@ -302,11 +264,12 @@ const FPURegister f29 = { 29 };
 const FPURegister f30 = { 30 };
 const FPURegister f31 = { 31 };
 
-const FPURegister kDoubleRegZero = f28;
-
 // FPU (coprocessor 1) control registers.
 // Currently only FCSR (#31) is implemented.
 struct FPUControlRegister {
+  static const int kFCSRRegister = 31;
+  static const int kInvalidFPUControlRegister = -1;
+
   bool is_valid() const { return code_ == kFCSRRegister; }
   bool is(FPUControlRegister creg) const { return code_ == creg.code_; }
   int code() const {
@@ -325,7 +288,7 @@ struct FPUControlRegister {
   int code_;
 };
 
-const FPUControlRegister no_fpucreg = { kInvalidFPUControlRegister };
+const FPUControlRegister no_fpucreg = { -1 };
 const FPUControlRegister FCSR = { kFCSRRegister };
 
 
@@ -355,7 +318,7 @@ class Operand BASE_EMBEDDED {
 
  private:
   Register rm_;
-  int32_t imm32_;  // Valid if rm_ == no_reg.
+  int32_t imm32_;  // Valid if rm_ == no_reg
   RelocInfo::Mode rmode_;
 
   friend class Assembler;
@@ -367,12 +330,8 @@ class Operand BASE_EMBEDDED {
 // Class MemOperand represents a memory operand in load and store instructions.
 class MemOperand : public Operand {
  public:
-  explicit MemOperand(Register rn, int32_t offset = 0);
-  int32_t offset() const { return offset_; }
 
-  bool OffsetIsInt16Encodable() const {
-    return is_int16(offset_);
-  }
+  explicit MemOperand(Register rn, int32_t offset = 0);
 
  private:
   int32_t offset_;
@@ -383,101 +342,58 @@ class MemOperand : public Operand {
 
 // CpuFeatures keeps track of which features are supported by the target CPU.
 // Supported features must be enabled by a Scope before use.
-class CpuFeatures : public AllStatic {
+class CpuFeatures {
  public:
   // Detect features of the target CPU. Set safe defaults if the serializer
   // is enabled (snapshots must be portable).
-  static void Probe();
+  void Probe(bool portable);
 
   // Check whether a feature is supported by the target CPU.
-  static bool IsSupported(CpuFeature f) {
-    ASSERT(initialized_);
+  bool IsSupported(CpuFeature f) const {
     if (f == FPU && !FLAG_enable_fpu) return false;
     return (supported_ & (1u << f)) != 0;
   }
 
-
-#ifdef DEBUG
   // Check whether a feature is currently enabled.
-  static bool IsEnabled(CpuFeature f) {
-    ASSERT(initialized_);
-    Isolate* isolate = Isolate::UncheckedCurrent();
-    if (isolate == NULL) {
-      // When no isolate is available, work as if we're running in
-      // release mode.
-      return IsSupported(f);
-    }
-    unsigned enabled = static_cast<unsigned>(isolate->enabled_cpu_features());
-    return (enabled & (1u << f)) != 0;
+  bool IsEnabled(CpuFeature f) const {
+    return (enabled_ & (1u << f)) != 0;
   }
-#endif
 
   // Enable a specified feature within a scope.
   class Scope BASE_EMBEDDED {
 #ifdef DEBUG
-
    public:
-    explicit Scope(CpuFeature f) {
-      unsigned mask = 1u << f;
-      ASSERT(CpuFeatures::IsSupported(f));
+    explicit Scope(CpuFeature f)
+        : cpu_features_(Isolate::Current()->cpu_features()),
+          isolate_(Isolate::Current()) {
+      ASSERT(cpu_features_->IsSupported(f));
       ASSERT(!Serializer::enabled() ||
-             (CpuFeatures::found_by_runtime_probing_ & mask) == 0);
-      isolate_ = Isolate::UncheckedCurrent();
-      old_enabled_ = 0;
-      if (isolate_ != NULL) {
-        old_enabled_ = static_cast<unsigned>(isolate_->enabled_cpu_features());
-        isolate_->set_enabled_cpu_features(old_enabled_ | mask);
-      }
+             (cpu_features_->found_by_runtime_probing_ & (1u << f)) == 0);
+      old_enabled_ = cpu_features_->enabled_;
+      cpu_features_->enabled_ |= 1u << f;
     }
     ~Scope() {
-      ASSERT_EQ(Isolate::UncheckedCurrent(), isolate_);
-      if (isolate_ != NULL) {
-        isolate_->set_enabled_cpu_features(old_enabled_);
-      }
-    }
-
- private:
-    Isolate* isolate_;
+      ASSERT_EQ(Isolate::Current(), isolate_);
+      cpu_features_->enabled_ = old_enabled_;
+     }
+   private:
     unsigned old_enabled_;
+    CpuFeatures* cpu_features_;
+    Isolate* isolate_;
 #else
-
- public:
+   public:
     explicit Scope(CpuFeature f) {}
 #endif
   };
 
-  class TryForceFeatureScope BASE_EMBEDDED {
-   public:
-    explicit TryForceFeatureScope(CpuFeature f)
-        : old_supported_(CpuFeatures::supported_) {
-      if (CanForce()) {
-        CpuFeatures::supported_ |= (1u << f);
-      }
-    }
-
-    ~TryForceFeatureScope() {
-      if (CanForce()) {
-        CpuFeatures::supported_ = old_supported_;
-      }
-    }
-
-   private:
-    static bool CanForce() {
-      // It's only safe to temporarily force support of CPU features
-      // when there's only a single isolate, which is guaranteed when
-      // the serializer is enabled.
-      return Serializer::enabled();
-    }
-
-    const unsigned old_supported_;
-  };
-
  private:
-#ifdef DEBUG
-  static bool initialized_;
-#endif
-  static unsigned supported_;
-  static unsigned found_by_runtime_probing_;
+  CpuFeatures();
+
+  unsigned supported_;
+  unsigned enabled_;
+  unsigned found_by_runtime_probing_;
+
+  friend class Isolate;
 
   DISALLOW_COPY_AND_ASSIGN(CpuFeatures);
 };
@@ -498,7 +414,7 @@ class Assembler : public AssemblerBase {
   // for code generation and assumes its size to be buffer_size. If the buffer
   // is too small, a fatal error occurs. No deallocation of the buffer is done
   // upon destruction of the assembler.
-  Assembler(Isolate* isolate, void* buffer, int buffer_size);
+  Assembler(void* buffer, int buffer_size);
   ~Assembler();
 
   // Overrides the default provided by FLAG_debug_code.
@@ -523,13 +439,10 @@ class Assembler : public AssemblerBase {
   //
   // Note: The same Label can be used for forward and backward branches
   // but it may be bound only once.
-  void bind(Label* L);  // Binds an unbound label L to current code position.
-  // Determines if Label is bound and near enough so that branch instruction
-  // can be used to reach it, instead of jump instruction.
-  bool is_near(Label* L);
+  void bind(Label* L);  // binds an unbound label L to the current code position
 
-  // Returns the branch offset to the given label from the current code
-  // position. Links the label to the current position if it is still unbound.
+  // Returns the branch offset to the given label from the current code position
+  // Links the label to the current position if it is still unbound
   // Manages the jump elimination optimization if the second parameter is true.
   int32_t branch_offset(Label* L, bool jump_elimination_allowed);
   int32_t shifted_branch_offset(Label* L, bool jump_elimination_allowed) {
@@ -537,7 +450,6 @@ class Assembler : public AssemblerBase {
     ASSERT((o & 3) == 0);   // Assert the offset is aligned.
     return o >> 2;
   }
-  uint32_t jump_address(Label* L);
 
   // Puts a labels target address at the given position.
   // The high 8 bits are set to zero.
@@ -546,8 +458,6 @@ class Assembler : public AssemblerBase {
   // Read/Modify the code target address in the branch/call instruction at pc.
   static Address target_address_at(Address pc);
   static void set_target_address_at(Address pc, Address target);
-
-  static void JumpLabelToJumpRegister(Address pc);
 
   // This sets the branch destination (which gets loaded at the call address).
   // This is for calls and branches within generated code.
@@ -579,13 +489,9 @@ class Assembler : public AssemblerBase {
   static const int kExternalTargetSize = 0 * kInstrSize;
 
   // Number of consecutive instructions used to store 32bit constant.
-  // Before jump-optimizations, this constant was used in
-  // RelocInfo::target_address_address() function to tell serializer address of
-  // the instruction that follows LUI/ORI instruction pair. Now, with new jump
-  // optimization, where jump-through-register instruction that usually
-  // follows LUI/ORI pair is substituted with J/JAL, this constant equals
-  // to 3 instructions (LUI+ORI+J/JAL/JR/JALR).
-  static const int kInstructionsFor32BitConstant = 3;
+  // Used in RelocInfo::target_address_address() function to tell serializer
+  // address of the instruction that follows LUI/ORI instruction pair.
+  static const int kInstructionsFor32BitConstant = 2;
 
   // Distance between the instruction referring to the address of the call
   // target and the return address.
@@ -635,14 +541,14 @@ class Assembler : public AssemblerBase {
     FIRST_IC_MARKER = PROPERTY_ACCESS_INLINED
   };
 
-  // Type == 0 is the default non-marking type.
+  // type == 0 is the default non-marking type.
   void nop(unsigned int type = 0) {
     ASSERT(type < 32);
     sll(zero_reg, zero_reg, type, true);
   }
 
 
-  // --------Branch-and-jump-instructions----------
+  //------- Branch and jump  instructions --------
   // We don't use likely variant of instructions.
   void b(int16_t offset);
   void b(Label* L) { b(branch_offset(L, false)>>2); }
@@ -665,15 +571,13 @@ class Assembler : public AssemblerBase {
   }
 
   // Never use the int16_t b(l)cond version with a branch offset
-  // instead of using the Label* version.
+  // instead of using the Label* version. See Twiki for infos.
 
   // Jump targets must be in the current 256 MB-aligned region. ie 28 bits.
   void j(int32_t target);
   void jal(int32_t target);
   void jalr(Register rs, Register rd = ra);
   void jr(Register target);
-  void j_or_jr(int32_t target, Register rs);
-  void jal_or_jalr(int32_t target, Register rs);
 
 
   //-------Data-processing-instructions---------
@@ -733,8 +637,7 @@ class Assembler : public AssemblerBase {
   //-------------Misc-instructions--------------
 
   // Break / Trap instructions.
-  void break_(uint32_t code, bool break_as_stop = false);
-  void stop(const char* msg, uint32_t code = kMaxStopCode);
+  void break_(uint32_t code);
   void tge(Register rs, Register rt, uint16_t code);
   void tgeu(Register rs, Register rt, uint16_t code);
   void tlt(Register rs, Register rt, uint16_t code);
@@ -830,13 +733,8 @@ class Assembler : public AssemblerBase {
   void fcmp(FPURegister src1, const double src2, FPUCondition cond);
 
   // Check the code size generated from label to here.
-  int SizeOfCodeGeneratedSince(Label* label) {
-    return pc_offset() - label->pos();
-  }
-
-  // Check the number of instructions generated from label to here.
-  int InstructionsGeneratedSince(Label* label) {
-    return SizeOfCodeGeneratedSince(label) / kInstrSize;
+  int InstructionsGeneratedSince(Label* l) {
+    return (pc_offset() - l->pos()) / kInstrSize;
   }
 
   // Class for scoping postponing the trampoline pool generation.
@@ -855,25 +753,6 @@ class Assembler : public AssemblerBase {
     DISALLOW_IMPLICIT_CONSTRUCTORS(BlockTrampolinePoolScope);
   };
 
-  // Class for postponing the assembly buffer growth. Typically used for
-  // sequences of instructions that must be emitted as a unit, before
-  // buffer growth (and relocation) can occur.
-  // This blocking scope is not nestable.
-  class BlockGrowBufferScope {
-   public:
-    explicit BlockGrowBufferScope(Assembler* assem) : assem_(assem) {
-      assem_->StartBlockGrowBuffer();
-    }
-    ~BlockGrowBufferScope() {
-      assem_->EndBlockGrowBuffer();
-    }
-
-    private:
-     Assembler* assem_;
-
-     DISALLOW_IMPLICIT_CONSTRUCTORS(BlockGrowBufferScope);
-  };
-
   // Debugging.
 
   // Mark address of the ExitJSFrame code.
@@ -882,25 +761,9 @@ class Assembler : public AssemblerBase {
   // Mark address of a debug break slot.
   void RecordDebugBreakSlot();
 
-  // Record the AST id of the CallIC being compiled, so that it can be placed
-  // in the relocation information.
-  void SetRecordedAstId(unsigned ast_id) {
-    ASSERT(recorded_ast_id_ == kNoASTId);
-    recorded_ast_id_ = ast_id;
-  }
-
-  unsigned RecordedAstId() {
-    ASSERT(recorded_ast_id_ != kNoASTId);
-    return recorded_ast_id_;
-  }
-
-  void ClearRecordedAstId() { recorded_ast_id_ = kNoASTId; }
-
   // Record a comment relocation entry that can be used by a disassembler.
   // Use --code-comments to enable.
   void RecordComment(const char* msg);
-
-  static int RelocateInternalReference(byte* pc, intptr_t pc_delta);
 
   // Writes a single byte or word of data in the code stream.  Used for
   // inline tables, e.g., jump-tables.
@@ -910,6 +773,12 @@ class Assembler : public AssemblerBase {
   int32_t pc_offset() const { return pc_ - buffer_; }
 
   PositionsRecorder* positions_recorder() { return &positions_recorder_; }
+
+  bool can_peephole_optimize(int instructions) {
+    if (!allow_peephole_optimization_) return false;
+    if (last_bound_pos_ > pc_offset() - instructions * kInstrSize) return false;
+    return reloc_info_writer.last_pc() <= pc_ - instructions * kInstrSize;
+  }
 
   // Postpone the generation of the trampoline pool for the specified number of
   // instructions.
@@ -935,17 +804,6 @@ class Assembler : public AssemblerBase {
 
   // Check if an instruction is a branch of some kind.
   static bool IsBranch(Instr instr);
-  static bool IsBeq(Instr instr);
-  static bool IsBne(Instr instr);
-
-  static bool IsJump(Instr instr);
-  static bool IsJ(Instr instr);
-  static bool IsLui(Instr instr);
-  static bool IsOri(Instr instr);
-
-  static bool IsJal(Instr instr);
-  static bool IsJr(Instr instr);
-  static bool IsJalr(Instr instr);
 
   static bool IsNop(Instr instr, unsigned int type);
   static bool IsPop(Instr instr);
@@ -955,23 +813,7 @@ class Assembler : public AssemblerBase {
   static bool IsLwRegFpNegOffset(Instr instr);
   static bool IsSwRegFpNegOffset(Instr instr);
 
-  static Register GetRtReg(Instr instr);
-  static Register GetRsReg(Instr instr);
-  static Register GetRdReg(Instr instr);
-
-  static uint32_t GetRt(Instr instr);
-  static uint32_t GetRtField(Instr instr);
-  static uint32_t GetRs(Instr instr);
-  static uint32_t GetRsField(Instr instr);
-  static uint32_t GetRd(Instr instr);
-  static uint32_t GetRdField(Instr instr);
-  static uint32_t GetSa(Instr instr);
-  static uint32_t GetSaField(Instr instr);
-  static uint32_t GetOpcodeField(Instr instr);
-  static uint32_t GetFunction(Instr instr);
-  static uint32_t GetFunctionField(Instr instr);
-  static uint32_t GetImmediate16(Instr instr);
-  static uint32_t GetLabelConst(Instr instr);
+  static Register GetRt(Instr instr);
 
   static int32_t GetBranchOffset(Instr instr);
   static bool IsLw(Instr instr);
@@ -983,16 +825,9 @@ class Assembler : public AssemblerBase {
   static bool IsAddImmediate(Instr instr);
   static Instr SetAddImmediateOffset(Instr instr, int16_t offset);
 
-  static bool IsAndImmediate(Instr instr);
-
-  void CheckTrampolinePool();
+  void CheckTrampolinePool(bool force_emit = false);
 
  protected:
-  // Relocation for a type-recording IC has the AST id added to it.  This
-  // member variable is a way to pass the information from the call site to
-  // the relocation info.
-  unsigned recorded_ast_id_;
-
   bool emit_debug_code() const { return emit_debug_code_; }
 
   int32_t buffer_space() const { return reloc_info_writer.pos() - pc_; }
@@ -1018,38 +853,12 @@ class Assembler : public AssemblerBase {
   void StartBlockTrampolinePool() {
     trampoline_pool_blocked_nesting_++;
   }
-
   void EndBlockTrampolinePool() {
     trampoline_pool_blocked_nesting_--;
   }
 
   bool is_trampoline_pool_blocked() const {
     return trampoline_pool_blocked_nesting_ > 0;
-  }
-
-  bool has_exception() const {
-    return internal_trampoline_exception_;
-  }
-
-  void DoubleAsTwoUInt32(double d, uint32_t* lo, uint32_t* hi);
-
-  bool is_trampoline_emitted() const {
-    return trampoline_emitted_;
-  }
-
-  // Temporarily block automatic assembly buffer growth.
-  void StartBlockGrowBuffer() {
-    ASSERT(!block_buffer_growth_);
-    block_buffer_growth_ = true;
-  }
-
-  void EndBlockGrowBuffer() {
-    ASSERT(block_buffer_growth_);
-    block_buffer_growth_ = false;
-  }
-
-  bool is_buffer_growth_blocked() const {
-    return block_buffer_growth_;
   }
 
  private:
@@ -1087,9 +896,6 @@ class Assembler : public AssemblerBase {
 
   // Keep track of the last emitted pool to guarantee a maximal distance.
   int last_trampoline_pool_end_;  // pc offset of the end of the last pool.
-
-  // Automatic growth of the assembly buffer may be blocked for some sequences.
-  bool block_buffer_growth_;  // Block growth when true.
 
   // Relocation information generation.
   // Each relocation is encoded as a variable size value.
@@ -1171,6 +977,7 @@ class Assembler : public AssemblerBase {
   // Labels.
   void print(Label* L);
   void bind_to(Label* L, int pos);
+  void link_to(Label* L, Label* appendix);
   void next(Label* L);
 
   // One trampoline consists of:
@@ -1183,17 +990,13 @@ class Assembler : public AssemblerBase {
   // label_count *  kInstrSize.
   class Trampoline {
    public:
-    Trampoline() {
-      start_ = 0;
-      next_slot_ = 0;
-      free_slot_count_ = 0;
-      end_ = 0;
-    }
-    Trampoline(int start, int slot_count) {
+    Trampoline(int start, int slot_count, int label_count) {
       start_ = start;
       next_slot_ = start;
       free_slot_count_ = slot_count;
-      end_ = start + slot_count * kTrampolineSlotsSize;
+      next_label_ = start + slot_count * 2 * kInstrSize;
+      free_label_count_ = label_count;
+      end_ = next_label_ + (label_count - 1) * kInstrSize;
     }
     int start() {
       return start_;
@@ -1202,42 +1005,41 @@ class Assembler : public AssemblerBase {
       return end_;
     }
     int take_slot() {
-      int trampoline_slot = kInvalidSlotPos;
-      if (free_slot_count_ <= 0) {
-        // We have run out of space on trampolines.
-        // Make sure we fail in debug mode, so we become aware of each case
-        // when this happens.
-        ASSERT(0);
-        // Internal exception will be caught.
-      } else {
-        trampoline_slot = next_slot_;
-        free_slot_count_--;
-        next_slot_ += kTrampolineSlotsSize;
-      }
+      int trampoline_slot = next_slot_;
+      ASSERT(free_slot_count_ > 0);
+      free_slot_count_--;
+      next_slot_ += 2 * kInstrSize;
       return trampoline_slot;
     }
-
+    int take_label() {
+      int label_pos = next_label_;
+      ASSERT(free_label_count_ > 0);
+      free_label_count_--;
+      next_label_ += kInstrSize;
+      return label_pos;
+    }
    private:
     int start_;
     int end_;
     int next_slot_;
     int free_slot_count_;
+    int next_label_;
+    int free_label_count_;
   };
 
-  int32_t get_trampoline_entry(int32_t pos);
-  int unbound_labels_count_;
-  // If trampoline is emitted, generated code is becoming large. As this is
-  // already a slow case which can possibly break our code generation for the
-  // extreme case, we use this information to trigger different mode of
-  // branch instruction generation, where we use jump instructions rather
-  // than regular branch instructions.
-  bool trampoline_emitted_;
-  static const int kTrampolineSlotsSize = 4 * kInstrSize;
-  static const int kMaxBranchOffset = (1 << (18 - 1)) - 1;
-  static const int kInvalidSlotPos = -1;
+  int32_t get_label_entry(int32_t pos, bool next_pool = true);
+  int32_t get_trampoline_entry(int32_t pos, bool next_pool = true);
 
-  Trampoline trampoline_;
-  bool internal_trampoline_exception_;
+  static const int kSlotsPerTrampoline = 2304;
+  static const int kLabelsPerTrampoline = 8;
+  static const int kTrampolineInst =
+      2 * kSlotsPerTrampoline + kLabelsPerTrampoline;
+  static const int kTrampolineSize = kTrampolineInst * kInstrSize;
+  static const int kMaxBranchOffset = (1 << (18 - 1)) - 1;
+  static const int kMaxDistBetweenPools =
+      kMaxBranchOffset - 2 * kTrampolineSize;
+
+  List<Trampoline> trampolines_;
 
   friend class RegExpMacroAssemblerMIPS;
   friend class RelocInfo;
@@ -1245,6 +1047,7 @@ class Assembler : public AssemblerBase {
   friend class BlockTrampolinePoolScope;
 
   PositionsRecorder positions_recorder_;
+  bool allow_peephole_optimization_;
   bool emit_debug_code_;
   friend class PositionsRecorder;
   friend class EnsureSpace;

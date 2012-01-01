@@ -87,8 +87,8 @@ class CcTest {
 class ApiTestFuzzer: public v8::internal::Thread {
  public:
   void CallTest();
-  explicit ApiTestFuzzer(int num)
-      : Thread("ApiTestFuzzer"),
+  explicit ApiTestFuzzer(v8::internal::Isolate* isolate, int num)
+      : Thread(isolate, "ApiTestFuzzer"),
         test_number_(num),
         gate_(v8::internal::OS::CreateSemaphore(0)),
         active_(true) {
@@ -98,11 +98,7 @@ class ApiTestFuzzer: public v8::internal::Thread {
   // The ApiTestFuzzer is also a Thread, so it has a Run method.
   virtual void Run();
 
-  enum PartOfTest { FIRST_PART,
-                    SECOND_PART,
-                    THIRD_PART,
-                    FOURTH_PART,
-                    LAST_PART = FOURTH_PART };
+  enum PartOfTest { FIRST_PART, SECOND_PART };
 
   static void Setup(PartOfTest part);
   static void RunAllTests();
@@ -110,7 +106,6 @@ class ApiTestFuzzer: public v8::internal::Thread {
   // This method switches threads if we are running the Threading test.
   // Otherwise it does nothing.
   static void Fuzz();
-
  private:
   static bool fuzzing_;
   static int tests_being_run_;

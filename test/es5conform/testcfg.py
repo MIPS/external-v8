@@ -97,7 +97,7 @@ class ES5ConformTestConfiguration(test.TestConfiguration):
     return tests
 
   def GetBuildRequirements(self):
-    return ['d8']
+    return ['sample', 'sample=shell']
 
   def GetTestStatus(self, sections, defs):
     status_file = join(self.root, 'es5conform.status')

@@ -47,6 +47,7 @@
 namespace v8 {
 namespace internal {
 
+class AstSentinels;
 class Bootstrapper;
 class CodeGenerator;
 class CodeRange;
@@ -68,6 +69,7 @@ class InlineRuntimeFunctionsTable;
 class NoAllocationStringAllocator;
 class PcToCodeCache;
 class PreallocatedMemoryThread;
+class ProducerHeapProfile;
 class RegExpStack;
 class SaveContext;
 class UnicodeCache;
@@ -119,13 +121,19 @@ typedef ZoneList<Handle<Object> > ZoneObjectList;
 #define RETURN_IF_EMPTY_HANDLE(isolate, call)                       \
   RETURN_IF_EMPTY_HANDLE_VALUE(isolate, call, Failure::Exception())
 
-#define FOR_EACH_ISOLATE_ADDRESS_NAME(C)                \
-  C(Handler, handler)                                   \
-  C(CEntryFP, c_entry_fp)                               \
-  C(Context, context)                                   \
-  C(PendingException, pending_exception)                \
-  C(ExternalCaughtException, external_caught_exception) \
-  C(JSEntrySP, js_entry_sp)
+#define ISOLATE_ADDRESS_LIST(C)            \
+  C(handler_address)                       \
+  C(c_entry_fp_address)                    \
+  C(context_address)                       \
+  C(pending_exception_address)             \
+  C(external_caught_exception_address)
+
+#ifdef ENABLE_LOGGING_AND_PROFILING
+#define ISOLATE_ADDRESS_LIST_PROF(C)       \
+  C(js_entry_sp_address)
+#else
+#define ISOLATE_ADDRESS_LIST_PROF(C)
+#endif
 
 
 // Platform-independent, reliable thread identifier.
@@ -216,7 +224,6 @@ class ThreadLocalTop BASE_EMBEDDED {
     ASSERT(try_catch_handler_address_ == NULL);
   }
 
-  Isolate* isolate_;
   // The context where the current execution method is created and for variable
   // lookups.
   Context* context_;
@@ -245,9 +252,14 @@ class ThreadLocalTop BASE_EMBEDDED {
 #endif
 #endif  // USE_SIMULATOR
 
+#ifdef ENABLE_LOGGING_AND_PROFILING
   Address js_entry_sp_;  // the stack pointer of the bottom js entry frame
   Address external_callback_;  // the external callback we're currently in
+#endif
+
+#ifdef ENABLE_VMSTATE_TRACKING
   StateTag current_vm_state_;
+#endif
 
   // Generated code scratch locations.
   int32_t formal_count_;
@@ -285,6 +297,7 @@ class HashMap;
 #ifdef ENABLE_DEBUGGER_SUPPORT
 
 #define ISOLATE_DEBUGGER_INIT_LIST(V)                                          \
+  V(uint64_t, enabled_cpu_features, 0)                                         \
   V(v8::Debug::EventCallback, debug_event_callback, NULL)                      \
   V(DebuggerAgent*, debugger_agent_instance, NULL)
 #else
@@ -304,6 +317,18 @@ class HashMap;
 
 #endif
 
+#ifdef ENABLE_LOGGING_AND_PROFILING
+
+#define ISOLATE_LOGGING_INIT_LIST(V)                                           \
+  V(CpuProfiler*, cpu_profiler, NULL)                                          \
+  V(HeapProfiler*, heap_profiler, NULL)
+
+#else
+
+#define ISOLATE_LOGGING_INIT_LIST(V)
+
+#endif
+
 #define ISOLATE_INIT_ARRAY_LIST(V)                                             \
   /* SerializerDeserializer state. */                                          \
   V(Object*, serialize_partial_snapshot_cache, kPartialSnapshotCacheCapacity)  \
@@ -311,8 +336,6 @@ class HashMap;
   V(int, bad_char_shift_table, kUC16AlphabetSize)                              \
   V(int, good_suffix_shift_table, (kBMMaxShift + 1))                           \
   V(int, suffix_table, (kBMMaxShift + 1))                                      \
-  V(uint32_t, random_seed, 2)                                                  \
-  V(uint32_t, private_random_seed, 2)                                          \
   ISOLATE_INIT_DEBUG_ARRAY_LIST(V)
 
 typedef List<HeapObject*, PreallocatedStorage> DebugObjectCache;
@@ -326,7 +349,6 @@ typedef List<HeapObject*, PreallocatedStorage> DebugObjectCache;
   /* A previously allocated buffer of kMinimalBufferSize bytes, or NULL. */    \
   V(byte*, assembler_spare_buffer, NULL)                                       \
   V(FatalErrorCallback, exception_behavior, NULL)                              \
-  V(AllowCodeGenerationFromStringsCallback, allow_code_gen_callback, NULL)     \
   V(v8::Debug::MessageHandler, message_handler, NULL)                          \
   /* To distinguish the function templates, so that we can find them in the */ \
   /* function cache of the global context. */                                  \
@@ -351,10 +373,8 @@ typedef List<HeapObject*, PreallocatedStorage> DebugObjectCache;
   V(unsigned, ast_node_count, 0)                                               \
   /* SafeStackFrameIterator activations count. */                              \
   V(int, safe_stack_iterator_counter, 0)                                       \
-  V(uint64_t, enabled_cpu_features, 0)                                         \
-  V(CpuProfiler*, cpu_profiler, NULL)                                          \
-  V(HeapProfiler*, heap_profiler, NULL)                                        \
   ISOLATE_PLATFORM_INIT_LIST(V)                                                \
+  ISOLATE_LOGGING_INIT_LIST(V)                                                 \
   ISOLATE_DEBUGGER_INIT_LIST(V)
 
 class Isolate {
@@ -423,10 +443,11 @@ class Isolate {
 
 
   enum AddressId {
-#define DECLARE_ENUM(CamelName, hacker_name) k##CamelName##Address,
-    FOR_EACH_ISOLATE_ADDRESS_NAME(DECLARE_ENUM)
+#define C(name) k_##name,
+    ISOLATE_ADDRESS_LIST(C)
+    ISOLATE_ADDRESS_LIST_PROF(C)
 #undef C
-    kIsolateAddressCount
+    k_isolate_address_count
   };
 
   // Returns the PerIsolateThreadData for the current thread (or NULL if one is
@@ -475,15 +496,9 @@ class Isolate {
   // Safe to call multiple times.
   static void EnsureDefaultIsolate();
 
-  // Find the PerThread for this particular (isolate, thread) combination
-  // If one does not yet exist, return null.
-  PerIsolateThreadData* FindPerThreadDataForThisThread();
-
-#ifdef ENABLE_DEBUGGER_SUPPORT
   // Get the debugger from the default isolate. Preinitializes the
   // default isolate if needed.
   static Debugger* GetDefaultIsolateDebugger();
-#endif
 
   // Get the stack guard from the default isolate. Preinitializes the
   // default isolate if needed.
@@ -518,7 +533,6 @@ class Isolate {
   // Access to top context (where the current function object was created).
   Context* context() { return thread_local_top_.context_; }
   void set_context(Context* context) {
-    ASSERT(context == NULL || context->IsContext());
     thread_local_top_.context_ = context;
   }
   Context** context_address() { return &thread_local_top_.context_; }
@@ -584,7 +598,7 @@ class Isolate {
     return thread_local_top_.scheduled_exception_;
   }
   bool has_scheduled_exception() {
-    return thread_local_top_.scheduled_exception_ != heap_.the_hole_value();
+    return !thread_local_top_.scheduled_exception_->IsTheHole();
   }
   void clear_scheduled_exception() {
     thread_local_top_.scheduled_exception_ = heap_.the_hole_value();
@@ -608,6 +622,7 @@ class Isolate {
   }
   inline Address* handler_address() { return &thread_local_top_.handler_; }
 
+#ifdef ENABLE_LOGGING_AND_PROFILING
   // Bottom JS entry (see StackTracer::Trace in log.cc).
   static Address js_entry_sp(ThreadLocalTop* thread) {
     return thread->js_entry_sp_;
@@ -615,6 +630,7 @@ class Isolate {
   inline Address* js_entry_sp_address() {
     return &thread_local_top_.js_entry_sp_;
   }
+#endif
 
   // Generated code scratch locations.
   void* formal_count_address() { return &thread_local_top_.formal_count_; }
@@ -877,7 +893,17 @@ class Isolate {
     return &objects_string_input_buffer_;
   }
 
+  AstSentinels* ast_sentinels() { return ast_sentinels_; }
+
   RuntimeState* runtime_state() { return &runtime_state_; }
+
+  StringInputBuffer* liveedit_compare_substrings_buf1() {
+    return &liveedit_compare_substrings_buf1_;
+  }
+
+  StringInputBuffer* liveedit_compare_substrings_buf2() {
+    return &liveedit_compare_substrings_buf2_;
+  }
 
   StaticResource<SafeStringInputBuffer>* compiler_safe_string_input_buffer() {
     return &compiler_safe_string_input_buffer_;
@@ -897,6 +923,14 @@ class Isolate {
     return &interp_canonicalize_mapping_;
   }
 
+  ZoneObjectList* frame_element_constant_list() {
+    return &frame_element_constant_list_;
+  }
+
+  ZoneObjectList* result_constant_list() {
+    return &result_constant_list_;
+  }
+
   void* PreallocatedStorageNew(size_t size);
   void PreallocatedStorageDelete(void* p);
   void PreallocatedStorageInit(size_t size);
@@ -912,7 +946,11 @@ class Isolate {
   }
 #endif
 
-  inline bool DebuggerHasBreakPoints();
+#ifdef ENABLE_LOGGING_AND_PROFILING
+  ProducerHeapProfile* producer_heap_profile() {
+    return producer_heap_profile_;
+  }
+#endif
 
 #ifdef DEBUG
   HistogramInfo* heap_histograms() { return heap_histograms_; }
@@ -951,21 +989,22 @@ class Isolate {
 
   static const int kJSRegexpStaticOffsetsVectorSize = 50;
 
+#ifdef ENABLE_LOGGING_AND_PROFILING
   Address external_callback() {
     return thread_local_top_.external_callback_;
   }
   void set_external_callback(Address callback) {
     thread_local_top_.external_callback_ = callback;
   }
+#endif
 
+#ifdef ENABLE_VMSTATE_TRACKING
   StateTag current_vm_state() {
     return thread_local_top_.current_vm_state_;
   }
 
   void SetCurrentVMState(StateTag state) {
     if (RuntimeProfiler::IsEnabled()) {
-      // Make sure thread local top is initialized.
-      ASSERT(thread_local_top_.isolate_ == this);
       StateTag current_state = thread_local_top_.current_vm_state_;
       if (current_state != JS && state == JS) {
         // Non-JS -> JS transition.
@@ -983,9 +1022,9 @@ class Isolate {
     }
     thread_local_top_.current_vm_state_ = state;
   }
+#endif
 
-  void SetData(void* data) { embedder_data_ = data; }
-  void* GetData() { return embedder_data_; }
+  void ResetEagerOptimizingData();
 
  private:
   Isolate();
@@ -1001,7 +1040,6 @@ class Isolate {
     void Insert(PerIsolateThreadData* data);
     void Remove(Isolate* isolate, ThreadId thread_id);
     void Remove(PerIsolateThreadData* data);
-    void RemoveAllThreads(Isolate* isolate);
 
    private:
     PerIsolateThreadData* list_;
@@ -1062,7 +1100,7 @@ class Isolate {
   // If one does not yet exist, allocate a new one.
   PerIsolateThreadData* FindOrAllocatePerThreadDataForThisThread();
 
-// PreInits and returns a default isolate. Needed when a new thread tries
+  // PreInits and returns a default isolate. Needed when a new thread tries
   // to create a Locker for the first time (the lock itself is in the isolate).
   static Isolate* GetDefaultIsolateForLocking();
 
@@ -1097,7 +1135,7 @@ class Isolate {
   StringStream* incomplete_message_;
   // The preallocated memory thread singleton.
   PreallocatedMemoryThread* preallocated_memory_thread_;
-  Address isolate_addresses_[kIsolateAddressCount + 1];  // NOLINT
+  Address isolate_addresses_[k_isolate_address_count + 1];  // NOLINT
   NoAllocationStringAllocator* preallocated_message_space_;
 
   Bootstrapper* bootstrapper_;
@@ -1135,7 +1173,10 @@ class Isolate {
   GlobalHandles* global_handles_;
   ContextSwitcher* context_switcher_;
   ThreadManager* thread_manager_;
+  AstSentinels* ast_sentinels_;
   RuntimeState runtime_state_;
+  StringInputBuffer liveedit_compare_substrings_buf1_;
+  StringInputBuffer liveedit_compare_substrings_buf2_;
   StaticResource<SafeStringInputBuffer> compiler_safe_string_input_buffer_;
   Builtins builtins_;
   StringTracker* string_tracker_;
@@ -1148,7 +1189,8 @@ class Isolate {
       regexp_macro_assembler_canonicalize_;
   RegExpStack* regexp_stack_;
   unibrow::Mapping<unibrow::Ecma262Canonicalize> interp_canonicalize_mapping_;
-  void* embedder_data_;
+  ZoneObjectList frame_element_constant_list_;
+  ZoneObjectList result_constant_list_;
 
 #if defined(V8_TARGET_ARCH_ARM) && !defined(__arm__) || \
     defined(V8_TARGET_ARCH_MIPS) && !defined(__mips__)
@@ -1167,6 +1209,10 @@ class Isolate {
 #ifdef ENABLE_DEBUGGER_SUPPORT
   Debugger* debugger_;
   Debug* debug_;
+#endif
+
+#ifdef ENABLE_LOGGING_AND_PROFILING
+  ProducerHeapProfile* producer_heap_profile_;
 #endif
 
 #define GLOBAL_BACKING_STORE(type, name, initialvalue)                         \
@@ -1192,14 +1238,10 @@ class Isolate {
 
   friend class ExecutionAccess;
   friend class IsolateInitializer;
-  friend class ThreadManager;
-  friend class Simulator;
-  friend class StackGuard;
   friend class ThreadId;
   friend class TestMemoryAllocatorScope;
   friend class v8::Isolate;
   friend class v8::Locker;
-  friend class v8::Unlocker;
 
   DISALLOW_COPY_AND_ASSIGN(Isolate);
 };
@@ -1357,6 +1399,26 @@ inline void Context::mark_out_of_memory() {
 }
 
 
+// Temporary macro to be used to flag definitions that are indeed static
+// and not per-isolate. (It would be great to be able to grep for [static]!)
+#define RLYSTC static
+
+
+// Temporary macro to be used to flag classes that should be static.
+#define STATIC_CLASS class
+
+
+// Temporary macro to be used to flag classes that are completely converted
+// to be isolate-friendly. Their mix of static/nonstatic methods/fields is
+// correct.
+#define ISOLATED_CLASS class
+
 } }  // namespace v8::internal
+
+// TODO(isolates): Get rid of these -inl.h includes and place them only where
+//                 they're needed.
+#include "allocation-inl.h"
+#include "zone-inl.h"
+#include "frames-inl.h"
 
 #endif  // V8_ISOLATE_H_

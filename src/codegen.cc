@@ -34,6 +34,7 @@
 #include "prettyprinter.h"
 #include "rewriter.h"
 #include "runtime.h"
+#include "scopeinfo.h"
 #include "stub-cache.h"
 
 namespace v8 {
@@ -169,20 +170,22 @@ void CodeGenerator::PrintCode(Handle<Code> code, CompilationInfo* info) {
 #endif  // ENABLE_DISASSEMBLER
 }
 
+#ifdef ENABLE_LOGGING_AND_PROFILING
+
+static Vector<const char> kRegexp = CStrVector("regexp");
 
 bool CodeGenerator::ShouldGenerateLog(Expression* type) {
   ASSERT(type != NULL);
-  Isolate* isolate = Isolate::Current();
-  if (!isolate->logger()->is_logging() && !CpuProfiler::is_profiling(isolate)) {
-    return false;
-  }
+  if (!LOGGER->is_logging() && !CpuProfiler::is_profiling()) return false;
   Handle<String> name = Handle<String>::cast(type->AsLiteral()->handle());
   if (FLAG_log_regexp) {
-    if (name->IsEqualTo(CStrVector("regexp")))
+    if (name->IsEqualTo(kRegexp))
       return true;
   }
   return false;
 }
+
+#endif
 
 
 bool CodeGenerator::RecordPositions(MacroAssembler* masm,
@@ -199,19 +202,37 @@ bool CodeGenerator::RecordPositions(MacroAssembler* masm,
 }
 
 
+const char* GenericUnaryOpStub::GetName() {
+  switch (op_) {
+    case Token::SUB:
+      if (negative_zero_ == kStrictNegativeZero) {
+        return overwrite_ == UNARY_OVERWRITE
+            ? "GenericUnaryOpStub_SUB_Overwrite_Strict0"
+            : "GenericUnaryOpStub_SUB_Alloc_Strict0";
+      } else {
+        return overwrite_ == UNARY_OVERWRITE
+            ? "GenericUnaryOpStub_SUB_Overwrite_Ignore0"
+            : "GenericUnaryOpStub_SUB_Alloc_Ignore0";
+      }
+    case Token::BIT_NOT:
+      return overwrite_ == UNARY_OVERWRITE
+          ? "GenericUnaryOpStub_BIT_NOT_Overwrite"
+          : "GenericUnaryOpStub_BIT_NOT_Alloc";
+    default:
+      UNREACHABLE();
+      return "<unknown>";
+  }
+}
+
+
 void ArgumentsAccessStub::Generate(MacroAssembler* masm) {
   switch (type_) {
     case READ_ELEMENT:
       GenerateReadElement(masm);
       break;
-    case NEW_NON_STRICT_FAST:
-      GenerateNewNonStrictFast(masm);
-      break;
-    case NEW_NON_STRICT_SLOW:
-      GenerateNewNonStrictSlow(masm);
-      break;
+    case NEW_NON_STRICT:
     case NEW_STRICT:
-      GenerateNewStrict(masm);
+      GenerateNewObject(masm);
       break;
   }
 }

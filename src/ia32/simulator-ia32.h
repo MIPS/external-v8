@@ -56,9 +56,7 @@ typedef int (*regexp_matcher)(String*, int, const byte*,
 // just use the C stack limit.
 class SimulatorStack : public v8::internal::AllStatic {
  public:
-  static inline uintptr_t JsLimitFromCLimit(Isolate* isolate,
-                                            uintptr_t c_limit) {
-    USE(isolate);
+  static inline uintptr_t JsLimitFromCLimit(uintptr_t c_limit) {
     return c_limit;
   }
 

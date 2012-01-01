@@ -97,16 +97,13 @@ const char* V8NameConverter::NameInCode(byte* addr) const {
 }
 
 
-static void DumpBuffer(FILE* f, StringBuilder* out) {
+static void DumpBuffer(FILE* f, char* buff) {
   if (f == NULL) {
-    PrintF("%s\n", out->Finalize());
+    PrintF("%s", buff);
   } else {
-    fprintf(f, "%s\n", out->Finalize());
+    fprintf(f, "%s", buff);
   }
-  out->Reset();
 }
-
-
 
 static const int kOutBufferSize = 2048 + String::kMaxShortPrintLength;
 static const int kRelocInfoPosition = 57;
@@ -122,7 +119,6 @@ static int DecodeIt(FILE* f,
 
   v8::internal::EmbeddedVector<char, 128> decode_buffer;
   v8::internal::EmbeddedVector<char, kOutBufferSize> out_buffer;
-  StringBuilder out(out_buffer.start(), out_buffer.length());
   byte* pc = begin;
   disasm::Disassembler d(converter);
   RelocIterator* it = NULL;
@@ -185,11 +181,16 @@ static int DecodeIt(FILE* f,
       }
     }
 
+    StringBuilder out(out_buffer.start(), out_buffer.length());
+
     // Comments.
     for (int i = 0; i < comments.length(); i++) {
-      out.AddFormatted("                  %s", comments[i]);
-      DumpBuffer(f, &out);
+      out.AddFormatted("                  %s\n", comments[i]);
     }
+
+    // Write out comments, resets outp so that we can format the next line.
+    DumpBuffer(f, out.Finalize());
+    out.Reset();
 
     // Instruction address and instruction offset.
     out.AddFormatted("%p  %4d  ", prev_pc, prev_pc - begin);
@@ -208,7 +209,7 @@ static int DecodeIt(FILE* f,
         out.AddPadding(' ', kRelocInfoPosition - out.position());
       } else {
         // Additional reloc infos are printed on separate lines.
-        DumpBuffer(f, &out);
+        out.AddFormatted("\n");
         out.AddPadding(' ', kRelocInfoPosition);
       }
 
@@ -223,7 +224,7 @@ static int DecodeIt(FILE* f,
         HeapStringAllocator allocator;
         StringStream accumulator(&allocator);
         relocinfo.target_object()->ShortPrint(&accumulator);
-        SmartArrayPointer<const char> obj_name = accumulator.ToCString();
+        SmartPointer<const char> obj_name = accumulator.ToCString();
         out.AddFormatted("    ;; object: %s", *obj_name);
       } else if (rmode == RelocInfo::EXTERNAL_REFERENCE) {
         const char* reference_name =
@@ -281,9 +282,6 @@ static int DecodeIt(FILE* f,
         } else {
           out.AddFormatted(" %s", Code::Kind2String(kind));
         }
-        if (rmode == RelocInfo::CODE_TARGET_WITH_ID) {
-          out.AddFormatted(" (id = %d)", static_cast<int>(relocinfo.data()));
-        }
       } else if (rmode == RelocInfo::RUNTIME_ENTRY &&
                  Isolate::Current()->deoptimizer_data() != NULL) {
         // A runtime entry reloinfo might be a deoptimization bailout.
@@ -298,18 +296,9 @@ static int DecodeIt(FILE* f,
         out.AddFormatted("    ;; %s", RelocInfo::RelocModeName(rmode));
       }
     }
-    DumpBuffer(f, &out);
-  }
-
-  // Emit comments following the last instruction (if any).
-  if (it != NULL) {
-    for ( ; !it->done(); it->next()) {
-      if (RelocInfo::IsComment(it->rinfo()->rmode())) {
-        out.AddFormatted("                  %s",
-                         reinterpret_cast<const char*>(it->rinfo()->data()));
-        DumpBuffer(f, &out);
-      }
-    }
+    out.AddString("\n");
+    DumpBuffer(f, out.Finalize());
+    out.Reset();
   }
 
   delete it;

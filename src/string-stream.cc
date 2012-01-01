@@ -1,4 +1,4 @@
-// Copyright 2011 the V8 project authors. All rights reserved.
+// Copyright 2006-2008 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -29,8 +29,6 @@
 
 #include "factory.h"
 #include "string-stream.h"
-
-#include "allocation-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -252,11 +250,11 @@ void StringStream::Add(const char* format, FmtElm arg0, FmtElm arg1,
 }
 
 
-SmartArrayPointer<const char> StringStream::ToCString() const {
+SmartPointer<const char> StringStream::ToCString() const {
   char* str = NewArray<char>(length_ + 1);
   memcpy(str, buffer_, length_);
   str[length_] = '\0';
-  return SmartArrayPointer<const char>(str);
+  return SmartPointer<const char>(str);
 }
 
 

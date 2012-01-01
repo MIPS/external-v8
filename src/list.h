@@ -1,4 +1,4 @@
-// Copyright 2011 the V8 project authors. All rights reserved.
+// Copyright 2006-2009 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -28,8 +28,6 @@
 #ifndef V8_LIST_H_
 #define V8_LIST_H_
 
-#include "utils.h"
-
 namespace v8 {
 namespace internal {
 
@@ -49,6 +47,7 @@ namespace internal {
 template <typename T, class P>
 class List {
  public:
+
   List() { Initialize(0); }
   INLINE(explicit List(int capacity)) { Initialize(capacity); }
   INLINE(~List()) { DeleteData(data_); }
@@ -81,7 +80,7 @@ class List {
   INLINE(int length() const) { return length_; }
   INLINE(int capacity() const) { return capacity_; }
 
-  Vector<T> ToVector() const { return Vector<T>(data_, length_); }
+  Vector<T> ToVector() { return Vector<T>(data_, length_); }
 
   Vector<const T> ToConstVector() { return Vector<const T>(data_, length_); }
 
@@ -91,9 +90,6 @@ class List {
 
   // Add all the elements from the argument list to this list.
   void AddAll(const List<T, P>& other);
-
-  // Add all the elements from the vector to this list.
-  void AddAll(const Vector<T>& other);
 
   // Inserts the element at the specific index.
   void InsertAt(int index, const T& element);
@@ -162,11 +158,6 @@ class List {
 
   DISALLOW_COPY_AND_ASSIGN(List);
 };
-
-class Map;
-class Code;
-typedef List<Map*> MapList;
-typedef List<Code*> CodeList;
 
 } }  // namespace v8::internal
 

@@ -55,12 +55,7 @@ inline void* Zone::New(int size) {
 
   // Check if the requested size is available without expanding.
   Address result = position_;
-
-  if (size > limit_ - position_) {
-     result = NewExpand(size);
-  } else {
-     position_ += size;
-  }
+  if ((position_ += size) > limit_) result = NewExpand(size);
 
   // Check that the result has the proper alignment and return it.
   ASSERT(IsAddressAligned(result, kAlignment, 0));
@@ -112,20 +107,9 @@ inline void* ZoneListAllocationPolicy::New(int size) {
 }
 
 
-template <typename T>
-void* ZoneList<T>::operator new(size_t size) {
-  return ZONE->New(static_cast<int>(size));
-}
-
-
-template <typename T>
-void* ZoneList<T>::operator new(size_t size, Zone* zone) {
-  return zone->New(static_cast<int>(size));
-}
-
-
-ZoneScope::ZoneScope(Isolate* isolate, ZoneScopeMode mode)
-    : isolate_(isolate), mode_(mode) {
+ZoneScope::ZoneScope(ZoneScopeMode mode)
+    : isolate_(Isolate::Current()),
+      mode_(mode) {
   isolate_->zone()->scope_nesting_++;
 }
 

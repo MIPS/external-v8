@@ -1,19 +1,5 @@
-MIPS is using a newer version of v8 than was released in ICS by Google.
-
-It is based on v8 revision 3.6.2, however, the code we are using predates
-the submission of MIPS Crankshaft to the v8 project. 
-
-This code is created from the GitHub project crankshaft branch, up to
-and including commit 3fe84db227b829612c9e9d4d677e6bf3871c7513. On top
-of the crankshaft code, more code is added to make it build for Android.
-
-repository url: git://github.com/paul99/v8m-rb.git
-
-
-
-This was the state of Google ICS, prior to mips codedrop::
 We are tracking the V8 3.2 release branch as used by the Chrome 12 release branch.
 
 We have synced V8 past the last revision used in Chrome 12, as we continue to take 3.2 updates.
 
-http://v8.googlecode.com/svn/branches/3.2@9719
+http://v8.googlecode.com/svn/branches/3.2@10110

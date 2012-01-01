@@ -29,6 +29,8 @@
 
 #include "cpu-profiler-inl.h"
 
+#ifdef ENABLE_LOGGING_AND_PROFILING
+
 #include "frames-inl.h"
 #include "hashmap.h"
 #include "log-inl.h"
@@ -44,8 +46,9 @@ static const int kTickSamplesBufferChunkSize = 64*KB;
 static const int kTickSamplesBufferChunksCount = 16;
 
 
-ProfilerEventsProcessor::ProfilerEventsProcessor(ProfileGenerator* generator)
-    : Thread("v8:ProfEvntProc"),
+ProfilerEventsProcessor::ProfilerEventsProcessor(Isolate* isolate,
+                                                 ProfileGenerator* generator)
+    : Thread(isolate, "v8:ProfEvntProc"),
       generator_(generator),
       running_(true),
       ticks_buffer_(sizeof(TickSampleEventRecord),
@@ -179,16 +182,20 @@ void ProfilerEventsProcessor::RegExpCodeCreateEvent(
 
 
 void ProfilerEventsProcessor::AddCurrentStack() {
-  TickSampleEventRecord record(enqueue_order_);
+  TickSampleEventRecord record;
   TickSample* sample = &record.sample;
   Isolate* isolate = Isolate::Current();
   sample->state = isolate->current_vm_state();
   sample->pc = reinterpret_cast<Address>(sample);  // Not NULL.
+  sample->tos = NULL;
+  sample->has_external_callback = false;
+  sample->frames_count = 0;
   for (StackTraceFrameIterator it(isolate);
        !it.done() && sample->frames_count < TickSample::kMaxFramesCount;
        it.Advance()) {
     sample->stack[sample->frames_count++] = it.frame()->pc();
   }
+  record.order = enqueue_order_;
   ticks_from_vm_buffer_.Enqueue(record);
 }
 
@@ -281,16 +288,14 @@ void CpuProfiler::StartProfiling(String* title) {
 
 
 CpuProfile* CpuProfiler::StopProfiling(const char* title) {
-  Isolate* isolate = Isolate::Current();
-  return is_profiling(isolate) ?
-      isolate->cpu_profiler()->StopCollectingProfile(title) : NULL;
+  return is_profiling() ?
+      Isolate::Current()->cpu_profiler()->StopCollectingProfile(title) : NULL;
 }
 
 
 CpuProfile* CpuProfiler::StopProfiling(Object* security_token, String* title) {
-  Isolate* isolate = Isolate::Current();
-  return is_profiling(isolate) ?
-      isolate->cpu_profiler()->StopCollectingProfile(
+  return is_profiling() ?
+      Isolate::Current()->cpu_profiler()->StopCollectingProfile(
           security_token, title) : NULL;
 }
 
@@ -331,9 +336,8 @@ TickSample* CpuProfiler::TickSampleEvent(Isolate* isolate) {
 void CpuProfiler::DeleteAllProfiles() {
   Isolate* isolate = Isolate::Current();
   ASSERT(isolate->cpu_profiler() != NULL);
-  if (is_profiling(isolate)) {
+  if (is_profiling())
     isolate->cpu_profiler()->StopProcessor();
-  }
   isolate->cpu_profiler()->ResetProfiles();
 }
 
@@ -500,7 +504,7 @@ void CpuProfiler::StartProcessorIfNotStarted() {
     saved_logging_nesting_ = isolate->logger()->logging_nesting_;
     isolate->logger()->logging_nesting_ = 0;
     generator_ = new ProfileGenerator(profiles_);
-    processor_ = new ProfilerEventsProcessor(generator_);
+    processor_ = new ProfilerEventsProcessor(isolate, generator_);
     NoBarrier_Store(&is_profiling_, true);
     processor_->Start();
     // Enumerate stuff we already have in the heap.
@@ -572,21 +576,31 @@ void CpuProfiler::StopProcessor() {
   logger->logging_nesting_ = saved_logging_nesting_;
 }
 
+} }  // namespace v8::internal
+
+#endif  // ENABLE_LOGGING_AND_PROFILING
+
+namespace v8 {
+namespace internal {
 
 void CpuProfiler::Setup() {
+#ifdef ENABLE_LOGGING_AND_PROFILING
   Isolate* isolate = Isolate::Current();
   if (isolate->cpu_profiler() == NULL) {
     isolate->set_cpu_profiler(new CpuProfiler());
   }
+#endif
 }
 
 
 void CpuProfiler::TearDown() {
+#ifdef ENABLE_LOGGING_AND_PROFILING
   Isolate* isolate = Isolate::Current();
   if (isolate->cpu_profiler() != NULL) {
     delete isolate->cpu_profiler();
   }
   isolate->set_cpu_profiler(NULL);
+#endif
 }
 
 } }  // namespace v8::internal

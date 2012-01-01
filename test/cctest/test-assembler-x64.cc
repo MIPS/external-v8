@@ -46,7 +46,6 @@ using v8::internal::Operand;
 using v8::internal::byte;
 using v8::internal::greater;
 using v8::internal::less_equal;
-using v8::internal::equal;
 using v8::internal::not_equal;
 using v8::internal::r13;
 using v8::internal::r15;
@@ -344,19 +343,6 @@ TEST(OperandRegisterDependency) {
     CHECK(!Operand(rsp, rbp, times_1, offset).AddressUsesRegister(r15));
     CHECK(!Operand(rsp, rbp, times_1, offset).AddressUsesRegister(r13));
   }
-}
-
-
-TEST(AssemblerX64LabelChaining) {
-  // Test chaining of label usages within instructions (issue 1644).
-  v8::HandleScope scope;
-  Assembler assm(Isolate::Current(), NULL, 0);
-
-  Label target;
-  __ j(equal, &target);
-  __ j(not_equal, &target);
-  __ bind(&target);
-  __ nop();
 }
 
 #undef __

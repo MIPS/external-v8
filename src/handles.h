@@ -1,4 +1,4 @@
-// Copyright 2011 the V8 project authors. All rights reserved.
+// Copyright 2006-2008 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -28,7 +28,6 @@
 #ifndef V8_HANDLES_H_
 #define V8_HANDLES_H_
 
-#include "allocation.h"
 #include "apiutils.h"
 
 namespace v8 {
@@ -170,14 +169,13 @@ class HandleScope {
 void NormalizeProperties(Handle<JSObject> object,
                          PropertyNormalizationMode mode,
                          int expected_additional_properties);
-Handle<NumberDictionary> NormalizeElements(Handle<JSObject> object);
+void NormalizeElements(Handle<JSObject> object);
 void TransformToFastProperties(Handle<JSObject> object,
                                int unused_property_fields);
-MUST_USE_RESULT Handle<NumberDictionary> NumberDictionarySet(
-    Handle<NumberDictionary> dictionary,
-    uint32_t index,
-    Handle<Object> value,
-    PropertyDetails details);
+void NumberDictionarySet(Handle<NumberDictionary> dictionary,
+                         uint32_t index,
+                         Handle<Object> value,
+                         PropertyDetails details);
 
 // Flattens a string.
 void FlattenString(Handle<String> str);
@@ -186,7 +184,7 @@ void FlattenString(Handle<String> str);
 // string.
 Handle<String> FlattenGetString(Handle<String> str);
 
-Handle<Object> SetProperty(Handle<JSReceiver> object,
+Handle<Object> SetProperty(Handle<JSObject> object,
                            Handle<String> key,
                            Handle<Object> value,
                            PropertyAttributes attributes,
@@ -240,13 +238,13 @@ Handle<Object> SetOwnElement(Handle<JSObject> object,
                              Handle<Object> value,
                              StrictModeFlag strict_mode);
 
-Handle<Object> GetProperty(Handle<JSReceiver> obj,
+Handle<Object> GetProperty(Handle<JSObject> obj,
                            const char* name);
 
 Handle<Object> GetProperty(Handle<Object> obj,
                            Handle<Object> key);
 
-Handle<Object> GetProperty(Handle<JSReceiver> obj,
+Handle<Object> GetProperty(Handle<JSObject> obj,
                            Handle<String> name,
                            LookupResult* result);
 
@@ -264,13 +262,9 @@ Handle<Object> GetPrototype(Handle<Object> obj);
 Handle<Object> SetPrototype(Handle<JSObject> obj, Handle<Object> value);
 
 // Return the object's hidden properties object. If the object has no hidden
-// properties and HiddenPropertiesFlag::ALLOW_CREATION is passed, then a new
-// hidden property object will be allocated. Otherwise Heap::undefined_value
-// is returned.
-Handle<Object> GetHiddenProperties(Handle<JSObject> obj,
-                                   JSObject::HiddenPropertiesFlag flag);
-
-int GetIdentityHash(Handle<JSObject> obj);
+// properties and create_if_needed is true, then a new hidden property object
+// will be allocated. Otherwise the Heap::undefined_value is returned.
+Handle<Object> GetHiddenProperties(Handle<JSObject> obj, bool create_if_needed);
 
 Handle<Object> DeleteElement(Handle<JSObject> obj, uint32_t index);
 Handle<Object> DeleteProperty(Handle<JSObject> obj, Handle<String> prop);
@@ -346,10 +340,6 @@ Handle<Object> SetPrototype(Handle<JSFunction> function,
                             Handle<Object> prototype);
 
 Handle<Object> PreventExtensions(Handle<JSObject> object);
-
-Handle<ObjectHashTable> PutIntoObjectHashTable(Handle<ObjectHashTable> table,
-                                               Handle<JSObject> key,
-                                               Handle<Object> value);
 
 // Does lazy compilation of the given function. Returns true on success and
 // false if the compilation resulted in a stack overflow.

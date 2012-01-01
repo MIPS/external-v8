@@ -98,7 +98,6 @@ void Builtins::Generate_JSConstructCall(MacroAssembler* masm) {
   // Set expected number of arguments to zero (not changing rax).
   __ Set(rbx, 0);
   __ GetBuiltinEntry(rdx, Builtins::CALL_NON_FUNCTION_AS_CONSTRUCTOR);
-  __ SetCallKind(rcx, CALL_AS_METHOD);
   __ Jump(masm->isolate()->builtins()->ArgumentsAdaptorTrampoline(),
           RelocInfo::CODE_TARGET);
 }
@@ -139,7 +138,7 @@ static void Generate_JSConstructStubHelper(MacroAssembler* masm,
     // rdi: constructor
     __ movq(rax, FieldOperand(rdi, JSFunction::kPrototypeOrInitialMapOffset));
     // Will both indicate a NULL and a Smi
-    STATIC_ASSERT(kSmiTag == 0);
+    ASSERT(kSmiTag == 0);
     __ JumpIfSmi(rax, &rt_call);
     // rdi: constructor
     // rax: initial map (if proven valid below)
@@ -343,12 +342,11 @@ static void Generate_JSConstructStubHelper(MacroAssembler* masm,
     Handle<Code> code =
         masm->isolate()->builtins()->HandleApiCallConstruct();
     ParameterCount expected(0);
-    __ InvokeCode(code, expected, expected, RelocInfo::CODE_TARGET,
-                  CALL_FUNCTION, NullCallWrapper(), CALL_AS_METHOD);
+    __ InvokeCode(code, expected, expected,
+                  RelocInfo::CODE_TARGET, CALL_FUNCTION);
   } else {
     ParameterCount actual(rax);
-    __ InvokeFunction(rdi, actual, CALL_FUNCTION,
-                      NullCallWrapper(), CALL_AS_METHOD);
+    __ InvokeFunction(rdi, actual, CALL_FUNCTION);
   }
 
   // Restore context from the frame.
@@ -362,9 +360,8 @@ static void Generate_JSConstructStubHelper(MacroAssembler* masm,
   __ JumpIfSmi(rax, &use_receiver);
 
   // If the type of the result (stored in its map) is less than
-  // FIRST_SPEC_OBJECT_TYPE, it is not an object in the ECMA sense.
-  STATIC_ASSERT(LAST_SPEC_OBJECT_TYPE == LAST_TYPE);
-  __ CmpObjectType(rax, FIRST_SPEC_OBJECT_TYPE, rcx);
+  // FIRST_JS_OBJECT_TYPE, it is not an object in the ECMA sense.
+  __ CmpObjectType(rax, FIRST_JS_OBJECT_TYPE, rcx);
   __ j(above_equal, &exit);
 
   // Throw away the result of the constructor invocation and use the
@@ -501,8 +498,7 @@ static void Generate_JSEntryTrampolineHelper(MacroAssembler* masm,
   } else {
     ParameterCount actual(rax);
     // Function must be in rdi.
-    __ InvokeFunction(rdi, actual, CALL_FUNCTION,
-                      NullCallWrapper(), CALL_AS_METHOD);
+    __ InvokeFunction(rdi, actual, CALL_FUNCTION);
   }
 
   // Exit the JS frame. Notice that this also removes the empty
@@ -530,23 +526,17 @@ void Builtins::Generate_LazyCompile(MacroAssembler* masm) {
 
   // Push a copy of the function onto the stack.
   __ push(rdi);
-  // Push call kind information.
-  __ push(rcx);
 
   __ push(rdi);  // Function is also the parameter to the runtime call.
   __ CallRuntime(Runtime::kLazyCompile, 1);
-
-  // Restore call kind information.
-  __ pop(rcx);
-  // Restore receiver.
   __ pop(rdi);
 
   // Tear down temporary frame.
   __ LeaveInternalFrame();
 
   // Do a tail-call of the compiled function.
-  __ lea(rax, FieldOperand(rax, Code::kHeaderSize));
-  __ jmp(rax);
+  __ lea(rcx, FieldOperand(rax, Code::kHeaderSize));
+  __ jmp(rcx);
 }
 
 
@@ -556,23 +546,17 @@ void Builtins::Generate_LazyRecompile(MacroAssembler* masm) {
 
   // Push a copy of the function onto the stack.
   __ push(rdi);
-  // Push call kind information.
-  __ push(rcx);
 
   __ push(rdi);  // Function is also the parameter to the runtime call.
   __ CallRuntime(Runtime::kLazyRecompile, 1);
 
-  // Restore call kind information.
-  __ pop(rcx);
-  // Restore function.
+  // Restore function and tear down temporary frame.
   __ pop(rdi);
-
-  // Tear down temporary frame.
   __ LeaveInternalFrame();
 
   // Do a tail-call of the compiled function.
-  __ lea(rax, FieldOperand(rax, Code::kHeaderSize));
-  __ jmp(rax);
+  __ lea(rcx, FieldOperand(rax, Code::kHeaderSize));
+  __ jmp(rcx);
 }
 
 
@@ -592,15 +576,15 @@ static void Generate_NotifyDeoptimizedHelper(MacroAssembler* masm,
   __ SmiToInteger32(rcx, Operand(rsp, 1 * kPointerSize));
 
   // Switch on the state.
-  Label not_no_registers, not_tos_rax;
+  NearLabel not_no_registers, not_tos_rax;
   __ cmpq(rcx, Immediate(FullCodeGenerator::NO_REGISTERS));
-  __ j(not_equal, &not_no_registers, Label::kNear);
+  __ j(not_equal, &not_no_registers);
   __ ret(1 * kPointerSize);  // Remove state.
 
   __ bind(&not_no_registers);
   __ movq(rax, Operand(rsp, 2 * kPointerSize));
   __ cmpq(rcx, Immediate(FullCodeGenerator::TOS_REG));
-  __ j(not_equal, &not_tos_rax, Label::kNear);
+  __ j(not_equal, &not_tos_rax);
   __ ret(2 * kPointerSize);  // Remove state, rax.
 
   __ bind(&not_tos_rax);
@@ -674,24 +658,19 @@ void Builtins::Generate_FunctionCall(MacroAssembler* masm) {
              Immediate(1 << SharedFunctionInfo::kStrictModeBitWithinByte));
     __ j(not_equal, &shift_arguments);
 
-    // Do not transform the receiver for natives.
-    // SharedFunctionInfo is already loaded into rbx.
-    __ testb(FieldOperand(rbx, SharedFunctionInfo::kNativeByteOffset),
-             Immediate(1 << SharedFunctionInfo::kNativeBitWithinByte));
-    __ j(not_zero, &shift_arguments);
-
     // Compute the receiver in non-strict mode.
     __ movq(rbx, Operand(rsp, rax, times_pointer_size, 0));
-    __ JumpIfSmi(rbx, &convert_to_object, Label::kNear);
+    __ JumpIfSmi(rbx, &convert_to_object);
 
     __ CompareRoot(rbx, Heap::kNullValueRootIndex);
     __ j(equal, &use_global_receiver);
     __ CompareRoot(rbx, Heap::kUndefinedValueRootIndex);
     __ j(equal, &use_global_receiver);
 
-    STATIC_ASSERT(LAST_SPEC_OBJECT_TYPE == LAST_TYPE);
-    __ CmpObjectType(rbx, FIRST_SPEC_OBJECT_TYPE, rcx);
-    __ j(above_equal, &shift_arguments);
+    __ CmpObjectType(rbx, FIRST_JS_OBJECT_TYPE, rcx);
+    __ j(below, &convert_to_object);
+    __ CmpInstanceType(rcx, LAST_JS_OBJECT_TYPE);
+    __ j(below_equal, &shift_arguments);
 
     __ bind(&convert_to_object);
     __ EnterInternalFrame();  // In order to preserve argument count.
@@ -707,7 +686,7 @@ void Builtins::Generate_FunctionCall(MacroAssembler* masm) {
     __ LeaveInternalFrame();
     // Restore the function to rdi.
     __ movq(rdi, Operand(rsp, rax, times_pointer_size, 1 * kPointerSize));
-    __ jmp(&patch_receiver, Label::kNear);
+    __ jmp(&patch_receiver);
 
     // Use the global receiver object from the called function as the
     // receiver.
@@ -755,7 +734,6 @@ void Builtins::Generate_FunctionCall(MacroAssembler* masm) {
     __ j(not_zero, &function);
     __ Set(rbx, 0);
     __ GetBuiltinEntry(rdx, Builtins::CALL_NON_FUNCTION);
-    __ SetCallKind(rcx, CALL_AS_METHOD);
     __ Jump(masm->isolate()->builtins()->ArgumentsAdaptorTrampoline(),
             RelocInfo::CODE_TARGET);
     __ bind(&function);
@@ -769,15 +747,13 @@ void Builtins::Generate_FunctionCall(MacroAssembler* masm) {
              FieldOperand(rdx,
                           SharedFunctionInfo::kFormalParameterCountOffset));
   __ movq(rdx, FieldOperand(rdi, JSFunction::kCodeEntryOffset));
-  __ SetCallKind(rcx, CALL_AS_METHOD);
   __ cmpq(rax, rbx);
   __ j(not_equal,
        masm->isolate()->builtins()->ArgumentsAdaptorTrampoline(),
        RelocInfo::CODE_TARGET);
 
   ParameterCount expected(0);
-  __ InvokeCode(rdx, expected, expected, JUMP_FUNCTION,
-                NullCallWrapper(), CALL_AS_METHOD);
+  __ InvokeCode(rdx, expected, expected, JUMP_FUNCTION);
 }
 
 
@@ -846,13 +822,8 @@ void Builtins::Generate_FunctionApply(MacroAssembler* masm) {
            Immediate(1 << SharedFunctionInfo::kStrictModeBitWithinByte));
   __ j(not_equal, &push_receiver);
 
-  // Do not transform the receiver for natives.
-  __ testb(FieldOperand(rdx, SharedFunctionInfo::kNativeByteOffset),
-           Immediate(1 << SharedFunctionInfo::kNativeBitWithinByte));
-  __ j(not_equal, &push_receiver);
-
   // Compute the receiver in non-strict mode.
-  __ JumpIfSmi(rbx, &call_to_object, Label::kNear);
+  __ JumpIfSmi(rbx, &call_to_object);
   __ CompareRoot(rbx, Heap::kNullValueRootIndex);
   __ j(equal, &use_global_receiver);
   __ CompareRoot(rbx, Heap::kUndefinedValueRootIndex);
@@ -860,16 +831,17 @@ void Builtins::Generate_FunctionApply(MacroAssembler* masm) {
 
   // If given receiver is already a JavaScript object then there's no
   // reason for converting it.
-  STATIC_ASSERT(LAST_SPEC_OBJECT_TYPE == LAST_TYPE);
-  __ CmpObjectType(rbx, FIRST_SPEC_OBJECT_TYPE, rcx);
-  __ j(above_equal, &push_receiver);
+  __ CmpObjectType(rbx, FIRST_JS_OBJECT_TYPE, rcx);
+  __ j(below, &call_to_object);
+  __ CmpInstanceType(rcx, LAST_JS_OBJECT_TYPE);
+  __ j(below_equal, &push_receiver);
 
   // Convert the receiver to an object.
   __ bind(&call_to_object);
   __ push(rbx);
   __ InvokeBuiltin(Builtins::TO_OBJECT, CALL_FUNCTION);
   __ movq(rbx, rax);
-  __ jmp(&push_receiver, Label::kNear);
+  __ jmp(&push_receiver);
 
   // Use the current global receiver object as the receiver.
   __ bind(&use_global_receiver);
@@ -916,8 +888,7 @@ void Builtins::Generate_FunctionApply(MacroAssembler* masm) {
   ParameterCount actual(rax);
   __ SmiToInteger32(rax, rax);
   __ movq(rdi, Operand(rbp, kFunctionOffset));
-  __ InvokeFunction(rdi, actual, CALL_FUNCTION,
-                    NullCallWrapper(), CALL_AS_METHOD);
+  __ InvokeFunction(rdi, actual, CALL_FUNCTION);
 
   __ LeaveInternalFrame();
   __ ret(3 * kPointerSize);  // remove function, receiver, and arguments
@@ -1283,7 +1254,7 @@ void Builtins::Generate_ArrayCode(MacroAssembler* masm) {
     // Initial map for the builtin Array functions should be maps.
     __ movq(rbx, FieldOperand(rdi, JSFunction::kPrototypeOrInitialMapOffset));
     // Will both indicate a NULL and a Smi.
-    STATIC_ASSERT(kSmiTag == 0);
+    ASSERT(kSmiTag == 0);
     Condition not_smi = NegateCondition(masm->CheckSmi(rbx));
     __ Check(not_smi, "Unexpected initial map for Array function");
     __ CmpObjectType(rbx, MAP_TYPE, rcx);
@@ -1317,7 +1288,7 @@ void Builtins::Generate_ArrayConstructCode(MacroAssembler* masm) {
     // Initial map for the builtin Array function should be a map.
     __ movq(rbx, FieldOperand(rdi, JSFunction::kPrototypeOrInitialMapOffset));
     // Will both indicate a NULL and a Smi.
-    STATIC_ASSERT(kSmiTag == 0);
+    ASSERT(kSmiTag == 0);
     Condition not_smi = NegateCondition(masm->CheckSmi(rbx));
     __ Check(not_smi, "Unexpected initial map for Array function");
     __ CmpObjectType(rbx, MAP_TYPE, rcx);
@@ -1353,11 +1324,11 @@ static void EnterArgumentsAdaptorFrame(MacroAssembler* masm) {
   // Push the function on the stack.
   __ push(rdi);
 
-  // Preserve the number of arguments on the stack. Must preserve rax,
-  // rbx and rcx because these registers are used when copying the
+  // Preserve the number of arguments on the stack. Must preserve both
+  // rax and rbx because these registers are used when copying the
   // arguments and the receiver.
-  __ Integer32ToSmi(r8, rax);
-  __ push(r8);
+  __ Integer32ToSmi(rcx, rax);
+  __ push(rcx);
 }
 
 
@@ -1381,7 +1352,6 @@ void Builtins::Generate_ArgumentsAdaptorTrampoline(MacroAssembler* masm) {
   // ----------- S t a t e -------------
   //  -- rax : actual number of arguments
   //  -- rbx : expected number of arguments
-  //  -- rcx : call kind information
   //  -- rdx : code entry to call
   // -----------------------------------
 
@@ -1402,14 +1372,14 @@ void Builtins::Generate_ArgumentsAdaptorTrampoline(MacroAssembler* masm) {
     // Copy receiver and all expected arguments.
     const int offset = StandardFrameConstants::kCallerSPOffset;
     __ lea(rax, Operand(rbp, rax, times_pointer_size, offset));
-    __ Set(r8, -1);  // account for receiver
+    __ Set(rcx, -1);  // account for receiver
 
     Label copy;
     __ bind(&copy);
-    __ incq(r8);
+    __ incq(rcx);
     __ push(Operand(rax, 0));
     __ subq(rax, Immediate(kPointerSize));
-    __ cmpq(r8, rbx);
+    __ cmpq(rcx, rbx);
     __ j(less, &copy);
     __ jmp(&invoke);
   }
@@ -1421,23 +1391,23 @@ void Builtins::Generate_ArgumentsAdaptorTrampoline(MacroAssembler* masm) {
     // Copy receiver and all actual arguments.
     const int offset = StandardFrameConstants::kCallerSPOffset;
     __ lea(rdi, Operand(rbp, rax, times_pointer_size, offset));
-    __ Set(r8, -1);  // account for receiver
+    __ Set(rcx, -1);  // account for receiver
 
     Label copy;
     __ bind(&copy);
-    __ incq(r8);
+    __ incq(rcx);
     __ push(Operand(rdi, 0));
     __ subq(rdi, Immediate(kPointerSize));
-    __ cmpq(r8, rax);
+    __ cmpq(rcx, rax);
     __ j(less, &copy);
 
     // Fill remaining expected arguments with undefined values.
     Label fill;
     __ LoadRoot(kScratchRegister, Heap::kUndefinedValueRootIndex);
     __ bind(&fill);
-    __ incq(r8);
+    __ incq(rcx);
     __ push(kScratchRegister);
-    __ cmpq(r8, rbx);
+    __ cmpq(rcx, rbx);
     __ j(less, &fill);
 
     // Restore function pointer.
@@ -1486,17 +1456,17 @@ void Builtins::Generate_OnStackReplacement(MacroAssembler* masm) {
 
   // If the result was -1 it means that we couldn't optimize the
   // function. Just return and continue in the unoptimized version.
-  Label skip;
+  NearLabel skip;
   __ SmiCompare(rax, Smi::FromInt(-1));
-  __ j(not_equal, &skip, Label::kNear);
+  __ j(not_equal, &skip);
   __ ret(0);
 
   // If we decide not to perform on-stack replacement we perform a
   // stack guard check to enable interrupts.
   __ bind(&stack_check);
-  Label ok;
+  NearLabel ok;
   __ CompareRoot(rsp, Heap::kStackLimitRootIndex);
-  __ j(above_equal, &ok, Label::kNear);
+  __ j(above_equal, &ok);
 
   StackCheckStub stub;
   __ TailCallStub(&stub);

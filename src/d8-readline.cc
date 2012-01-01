@@ -30,8 +30,6 @@
 #include <readline/readline.h> // NOLINT
 #include <readline/history.h> // NOLINT
 
-// The readline includes leaves RETURN defined which breaks V8 compilation.
-#undef RETURN
 
 #include "d8.h"
 
@@ -49,7 +47,7 @@ namespace v8 {
 class ReadLineEditor: public LineEditor {
  public:
   ReadLineEditor() : LineEditor(LineEditor::READLINE, "readline") { }
-  virtual i::SmartArrayPointer<char> Prompt(const char* prompt);
+  virtual i::SmartPointer<char> Prompt(const char* prompt);
   virtual bool Open();
   virtual bool Close();
   virtual void AddHistory(const char* str);
@@ -81,9 +79,9 @@ bool ReadLineEditor::Close() {
 }
 
 
-i::SmartArrayPointer<char> ReadLineEditor::Prompt(const char* prompt) {
+i::SmartPointer<char> ReadLineEditor::Prompt(const char* prompt) {
   char* result = readline(prompt);
-  return i::SmartArrayPointer<char>(result);
+  return i::SmartPointer<char>(result);
 }
 
 
@@ -105,7 +103,7 @@ char* ReadLineEditor::CompletionGenerator(const char* text, int state) {
   static unsigned current_index;
   static Persistent<Array> current_completions;
   if (state == 0) {
-    i::SmartArrayPointer<char> full_text(i::StrNDup(rl_line_buffer, rl_point));
+    i::SmartPointer<char> full_text(i::StrNDup(rl_line_buffer, rl_point));
     HandleScope scope;
     Handle<Array> completions =
       Shell::GetCompletions(String::New(text), String::New(*full_text));

@@ -1,4 +1,4 @@
-// Copyright 2011 the V8 project authors. All rights reserved.
+// Copyright 2007-2009 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -41,7 +41,7 @@ using ::v8::internal::JSFunction;
 using ::v8::internal::Object;
 using ::v8::internal::Runtime;
 using ::v8::internal::Script;
-using ::v8::internal::SmartArrayPointer;
+using ::v8::internal::SmartPointer;
 using ::v8::internal::SharedFunctionInfo;
 using ::v8::internal::String;
 
@@ -96,7 +96,7 @@ static void CheckFunctionName(v8::Handle<v8::Script> script,
       SharedFunctionInfo::cast(shared_func_info_ptr));
 
   // Verify inferred function name.
-  SmartArrayPointer<char> inferred_name =
+  SmartPointer<char> inferred_name =
       shared_func_info->inferred_name()->ToCString();
   CHECK_EQ(ref_inferred_name, *inferred_name);
 #endif  // ENABLE_DEBUGGER_SUPPORT
@@ -280,84 +280,4 @@ TEST(Issue380) {
       "{return p}(\"if blah blah\",62,1976,\'a|b\'.split(\'|\'),0,{})\n"
       "}");
   CheckFunctionName(script, "return p", "");
-}
-
-
-TEST(MultipleAssignments) {
-  InitializeVM();
-  v8::HandleScope scope;
-
-  v8::Handle<v8::Script> script = Compile(
-      "var fun1 = fun2 = function () { return 1; }\n"
-      "var bar1 = bar2 = bar3 = function () { return 2; }\n"
-      "foo1 = foo2 = function () { return 3; }\n"
-      "baz1 = baz2 = baz3 = function () { return 4; }");
-  CheckFunctionName(script, "return 1", "fun2");
-  CheckFunctionName(script, "return 2", "bar3");
-  CheckFunctionName(script, "return 3", "foo2");
-  CheckFunctionName(script, "return 4", "baz3");
-}
-
-
-TEST(AsConstructorParameter) {
-  InitializeVM();
-  v8::HandleScope scope;
-
-  v8::Handle<v8::Script> script = Compile(
-      "function Foo() {}\n"
-      "var foo = new Foo(function() { return 1; })\n"
-      "var bar = new Foo(function() { return 2; }, function() { return 3; })");
-  CheckFunctionName(script, "return 1", "");
-  CheckFunctionName(script, "return 2", "");
-  CheckFunctionName(script, "return 3", "");
-}
-
-
-TEST(FactoryHashmap) {
-  InitializeVM();
-  v8::HandleScope scope;
-
-  v8::Handle<v8::Script> script = Compile(
-      "function createMyObj() {\n"
-      "  var obj = {};\n"
-      "  obj[\"method1\"] = function() { return 1; }\n"
-      "  obj[\"method2\"] = function() { return 2; }\n"
-      "  return obj;\n"
-      "}");
-  CheckFunctionName(script, "return 1", "obj.method1");
-  CheckFunctionName(script, "return 2", "obj.method2");
-}
-
-
-TEST(FactoryHashmapVariable) {
-  InitializeVM();
-  v8::HandleScope scope;
-
-  v8::Handle<v8::Script> script = Compile(
-      "function createMyObj() {\n"
-      "  var obj = {};\n"
-      "  var methodName = \"method1\";\n"
-      "  obj[methodName] = function() { return 1; }\n"
-      "  methodName = \"method2\";\n"
-      "  obj[methodName] = function() { return 2; }\n"
-      "  return obj;\n"
-      "}");
-  // Can't infer function names statically.
-  CheckFunctionName(script, "return 1", "obj.(anonymous function)");
-  CheckFunctionName(script, "return 2", "obj.(anonymous function)");
-}
-
-
-TEST(FactoryHashmapConditional) {
-  InitializeVM();
-  v8::HandleScope scope;
-
-  v8::Handle<v8::Script> script = Compile(
-      "function createMyObj() {\n"
-      "  var obj = {};\n"
-      "  obj[0 ? \"method1\" : \"method2\"] = function() { return 1; }\n"
-      "  return obj;\n"
-      "}");
-  // Can't infer the function name statically.
-  CheckFunctionName(script, "return 1", "obj.(anonymous function)");
 }

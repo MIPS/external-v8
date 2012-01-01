@@ -25,29 +25,34 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// In Issue 87, we allowed unicode escape sequences in RegExp flags.
-// However, according to ES5, they should not be interpreted, but passed
-// verbatim to the RegExp constructor.
-// (On top of that, the original test was bugged and never tested anything).
-// The behavior was changed in r8969 to not interpret escapes, but this
-// test didn't test that, and only failed when making invalid flag characters
-// an error too.
+function testFlags(flagstring, global, ignoreCase, multiline) {
+  var text = "/x/"+flagstring;
+  var re = eval(text);
+  assertEquals(global, re.global, text + ".global");
+  assertEquals(ignoreCase, re.ignoreCase, text + ".ignoreCase");
+  assertEquals(multiline, re.multiline, text + ".multiline");
+}
 
-assertThrows("/x/\\u0067");
-assertThrows("/x/\\u0069");
-assertThrows("/x/\\u006d");
+testFlags("", false, false, false);
 
-assertThrows("/x/\\u0067i");
-assertThrows("/x/\\u0069m");
-assertThrows("/x/\\u006dg");
+testFlags("\u0067", true, false, false);
 
-assertThrows("/x/m\\u0067");
-assertThrows("/x/g\\u0069");
-assertThrows("/x/i\\u006d");
+testFlags("\u0069", false, true, false)
 
-assertThrows("/x/m\\u0067i");
-assertThrows("/x/g\\u0069m");
-assertThrows("/x/i\\u006dg");
+testFlags("\u006d", false, false, true);
 
-assertThrows("/x/\\u0068");
-assertThrows("/x/\\u0020");
+testFlags("\u0068", false, false, false);
+
+testFlags("\u0020", false, false, false);
+
+
+testFlags("\u0067g", true, false, false);
+
+testFlags("g\u0067", true, false, false);
+
+testFlags("abc\u0067efg", true, false, false);
+
+testFlags("i\u0067", true, true, false);
+
+testFlags("\u0067i", true, true, false);
+

@@ -28,7 +28,7 @@
 #ifndef V8_JSREGEXP_H_
 #define V8_JSREGEXP_H_
 
-#include "allocation.h"
+#include "macro-assembler.h"
 #include "zone-inl.h"
 
 namespace v8 {
@@ -255,7 +255,6 @@ class SetRelation BASE_EMBEDDED {
     return (bits_ == (kInFirst | kInSecond | kInBoth));
   }
   int value() { return bits_; }
-
  private:
   int bits_;
 };
@@ -405,7 +404,6 @@ class DispatchTable : public ZoneObject {
 
   template <typename Callback>
   void ForEach(Callback* callback) { return tree()->ForEach(callback); }
-
  private:
   // There can't be a static empty set since it allocates its
   // successors in a zone and caches them.
@@ -795,7 +793,6 @@ class ActionNode: public SeqRegExpNode {
   virtual int GreedyLoopTextLength() { return kNodeIsTooComplexForGreedyLoops; }
   virtual ActionNode* Clone() { return new ActionNode(*this); }
   virtual int ComputeFirstCharacterSet(int budget);
-
  private:
   union {
     struct {
@@ -864,7 +861,6 @@ class TextNode: public SeqRegExpNode {
   }
   void CalculateOffsets();
   virtual int ComputeFirstCharacterSet(int budget);
-
  private:
   enum TextEmitPassType {
     NON_ASCII_MATCH,             // Check for characters that can't match.
@@ -929,7 +925,6 @@ class AssertionNode: public SeqRegExpNode {
   virtual AssertionNode* Clone() { return new AssertionNode(*this); }
   AssertionNodeType type() { return type_; }
   void set_type(AssertionNodeType type) { type_ = type; }
-
  private:
   AssertionNode(AssertionNodeType t, RegExpNode* on_success)
       : SeqRegExpNode(on_success), type_(t) { }
@@ -960,7 +955,6 @@ class BackReferenceNode: public SeqRegExpNode {
   }
   virtual BackReferenceNode* Clone() { return new BackReferenceNode(*this); }
   virtual int ComputeFirstCharacterSet(int budget);
-
  private:
   int start_reg_;
   int end_reg_;
@@ -1077,7 +1071,7 @@ class ChoiceNode: public RegExpNode {
   virtual bool try_to_emit_quick_check_for_alternative(int i) { return true; }
 
  protected:
-  int GreedyLoopTextLengthForAlternative(GuardedAlternative* alternative);
+  int GreedyLoopTextLength(GuardedAlternative* alternative);
   ZoneList<GuardedAlternative>* alternatives_;
 
  private:
@@ -1307,7 +1301,6 @@ class Trace {
   }
   void InvalidateCurrentCharacter();
   void AdvanceCurrentPositionInTrace(int by, RegExpCompiler* compiler);
-
  private:
   int FindAffectedRegisters(OutSet* affected_registers);
   void PerformDeferredActions(RegExpMacroAssembler* macro,
@@ -1409,7 +1402,6 @@ FOR_EACH_NODE_TYPE(DECLARE_VISIT)
   void fail(const char* error_message) {
     error_message_ = error_message;
   }
-
  private:
   bool ignore_case_;
   bool is_ascii_;

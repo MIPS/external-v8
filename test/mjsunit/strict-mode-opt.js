@@ -25,10 +25,8 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// Flags: --allow-natives-syntax
-
 var global = 0;
-var MAX = 5;
+var MAX = 1000000;
 
 // Attempt to inline strcit in non-strict.
 
@@ -45,7 +43,6 @@ function nonstrictCallStrict(n) {
 (function testInlineStrictInNonStrict() {
   for (var i = 0; i <= MAX; i ++) {
     try {
-      if (i == MAX - 1) %OptimizeFunctionOnNextCall(nonstrictCallStrict);
       nonstrictCallStrict(i);
     } catch (e) {
       assertInstanceof(e, ReferenceError);
@@ -71,7 +68,6 @@ function strictCallNonStrict(n) {
 (function testInlineNonStrictInStrict() {
   for (var i = 0; i <= MAX; i ++) {
     try {
-      if (i == MAX - 1) %OptimizeFunctionOnNextCall(nonstrictCallStrict);
       strictCallNonStrict(i);
     } catch (e) {
       fail("no exception", "exception");
@@ -91,7 +87,6 @@ function strictAssignToUndefined(n) {
 (function testOptimizeStrictAssignToUndefined() {
   for (var i = 0; i <= MAX; i ++) {
     try {
-      if (i == MAX - 1) %OptimizeFunctionOnNextCall(nonstrictCallStrict);
       strictAssignToUndefined(i);
     } catch (e) {
       assertInstanceof(e, ReferenceError);

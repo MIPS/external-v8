@@ -28,7 +28,6 @@
 #include "v8.h"
 
 #include "isolate.h"
-#include "elements.h"
 #include "bootstrapper.h"
 #include "debug.h"
 #include "deoptimizer.h"
@@ -50,9 +49,6 @@ bool V8::has_been_setup_ = false;
 bool V8::has_been_disposed_ = false;
 bool V8::has_fatal_error_ = false;
 bool V8::use_crankshaft_ = true;
-
-static Mutex* entropy_mutex = OS::CreateMutex();
-static EntropySource entropy_source;
 
 
 bool V8::Initialize(Deserializer* des) {
@@ -104,45 +100,42 @@ void V8::TearDown() {
 }
 
 
-static void seed_random(uint32_t* state) {
-  for (int i = 0; i < 2; ++i) {
-    if (FLAG_random_seed != 0) {
-      state[i] = FLAG_random_seed;
-    } else if (entropy_source != NULL) {
-      uint32_t val;
-      ScopedLock lock(entropy_mutex);
-      entropy_source(reinterpret_cast<unsigned char*>(&val), sizeof(uint32_t));
-      state[i] = val;
-    } else {
-      state[i] = random();
-    }
+static uint32_t random_seed() {
+  if (FLAG_random_seed == 0) {
+    return random();
   }
+  return FLAG_random_seed;
 }
+
+
+typedef struct {
+  uint32_t hi;
+  uint32_t lo;
+} random_state;
 
 
 // Random number generator using George Marsaglia's MWC algorithm.
-static uint32_t random_base(uint32_t* state) {
-  // Initialize seed using the system random().
-  // No non-zero seed will ever become zero again.
-  if (state[0] == 0) seed_random(state);
+static uint32_t random_base(random_state *state) {
+  // Initialize seed using the system random(). If one of the seeds
+  // should ever become zero again, or if random() returns zero, we
+  // avoid getting stuck with zero bits in hi or lo by re-initializing
+  // them on demand.
+  if (state->hi == 0) state->hi = random_seed();
+  if (state->lo == 0) state->lo = random_seed();
 
-  // Mix the bits.  Never replaces state[i] with 0 if it is nonzero.
-  state[0] = 18273 * (state[0] & 0xFFFF) + (state[0] >> 16);
-  state[1] = 36969 * (state[1] & 0xFFFF) + (state[1] >> 16);
-
-  return (state[0] << 14) + (state[1] & 0x3FFFF);
-}
-
-
-void V8::SetEntropySource(EntropySource source) {
-  entropy_source = source;
+  // Mix the bits.
+  state->hi = 36969 * (state->hi & 0xFFFF) + (state->hi >> 16);
+  state->lo = 18273 * (state->lo & 0xFFFF) + (state->lo >> 16);
+  return (state->hi << 16) + (state->lo & 0xFFFF);
 }
 
 
 // Used by JavaScript APIs
 uint32_t V8::Random(Isolate* isolate) {
   ASSERT(isolate == Isolate::Current());
-  return random_base(isolate->random_seed());
+  // TODO(isolates): move lo and hi to isolate
+  static random_state state = {0, 0};
+  return random_base(&state);
 }
 
 
@@ -151,7 +144,9 @@ uint32_t V8::Random(Isolate* isolate) {
 // leaks that could be used in an exploit.
 uint32_t V8::RandomPrivate(Isolate* isolate) {
   ASSERT(isolate == Isolate::Current());
-  return random_base(isolate->private_random_seed());
+  // TODO(isolates): move lo and hi to isolate
+  static random_state state = {0, 0};
+  return random_base(&state);
 }
 
 
@@ -213,8 +208,6 @@ void V8::InitializeOncePerProcess() {
 
   // Peephole optimization might interfere with deoptimization.
   FLAG_peephole_optimization = !use_crankshaft_;
-
-  ElementsAccessor::InitializeOncePerProcess();
 }
 
 } }  // namespace v8::internal

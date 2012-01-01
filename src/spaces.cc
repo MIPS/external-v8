@@ -1,4 +1,4 @@
-// Copyright 2011 the V8 project authors. All rights reserved.
+// Copyright 2006-2010 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -402,9 +402,7 @@ void MemoryAllocator::FreeRawMemory(void* mem,
                                     size_t length,
                                     Executability executable) {
 #ifdef DEBUG
-  // Do not try to zap the guard page.
-  size_t guard_size = (executable == EXECUTABLE) ? Page::kPageSize : 0;
-  ZapBlock(reinterpret_cast<Address>(mem) + guard_size, length - guard_size);
+  ZapBlock(reinterpret_cast<Address>(mem), length);
 #endif
   if (isolate_->code_range()->contains(static_cast<Address>(mem))) {
     isolate_->code_range()->FreeRawMemory(mem, length);
@@ -506,26 +504,12 @@ Page* MemoryAllocator::AllocatePages(int requested_pages,
   LOG(isolate_, NewEvent("PagedChunk", chunk, chunk_size));
 
   *allocated_pages = PagesInChunk(static_cast<Address>(chunk), chunk_size);
-
   // We may 'lose' a page due to alignment.
   ASSERT(*allocated_pages >= kPagesPerChunk - 1);
-
-  size_t guard_size = (owner->executable() == EXECUTABLE) ? Page::kPageSize : 0;
-
-  // Check that we got at least one page that we can use.
-  if (*allocated_pages <= ((guard_size != 0) ? 1 : 0)) {
-    FreeRawMemory(chunk,
-                  chunk_size,
-                  owner->executable());
+  if (*allocated_pages == 0) {
+    FreeRawMemory(chunk, chunk_size, owner->executable());
     LOG(isolate_, DeleteEvent("PagedChunk", chunk));
     return Page::FromAddress(NULL);
-  }
-
-  if (guard_size != 0) {
-    OS::Guard(chunk, guard_size);
-    chunk_size -= guard_size;
-    chunk = static_cast<Address>(chunk) + guard_size;
-    --*allocated_pages;
   }
 
   int chunk_id = Pop();
@@ -697,8 +681,7 @@ void MemoryAllocator::DeleteChunk(int chunk_id) {
     LOG(isolate_, DeleteEvent("PagedChunk", c.address()));
     ObjectSpace space = static_cast<ObjectSpace>(1 << c.owner_identity());
     size_t size = c.size();
-    size_t guard_size = (c.executable() == EXECUTABLE) ? Page::kPageSize : 0;
-    FreeRawMemory(c.address() - guard_size, size + guard_size, c.executable());
+    FreeRawMemory(c.address(), size, c.executable());
     PerformAllocationCallback(space, kAllocationActionFree, size);
   }
   c.init(NULL, 0, NULL);
@@ -883,6 +866,30 @@ void PagedSpace::TearDown() {
   first_page_ = NULL;
   accounting_stats_.Clear();
 }
+
+
+#ifdef ENABLE_HEAP_PROTECTION
+
+void PagedSpace::Protect() {
+  Page* page = first_page_;
+  while (page->is_valid()) {
+    Isolate::Current()->memory_allocator()->ProtectChunkFromPage(page);
+    page = Isolate::Current()->memory_allocator()->
+        FindLastPageInSameChunk(page)->next_page();
+  }
+}
+
+
+void PagedSpace::Unprotect() {
+  Page* page = first_page_;
+  while (page->is_valid()) {
+    Isolate::Current()->memory_allocator()->UnprotectChunkFromPage(page);
+    page = Isolate::Current()->memory_allocator()->
+        FindLastPageInSameChunk(page)->next_page();
+  }
+}
+
+#endif
 
 
 void PagedSpace::MarkAllPagesClean() {
@@ -1189,6 +1196,7 @@ bool NewSpace::Setup(Address start, int size) {
   ASSERT(IsPowerOf2(maximum_semispace_capacity));
 
   // Allocate and setup the histogram arrays if necessary.
+#if defined(DEBUG) || defined(ENABLE_LOGGING_AND_PROFILING)
   allocated_histogram_ = NewArray<HistogramInfo>(LAST_TYPE + 1);
   promoted_histogram_ = NewArray<HistogramInfo>(LAST_TYPE + 1);
 
@@ -1196,6 +1204,7 @@ bool NewSpace::Setup(Address start, int size) {
                        promoted_histogram_[name].set_name(#name);
   INSTANCE_TYPE_LIST(SET_NAME)
 #undef SET_NAME
+#endif
 
   ASSERT(size == 2 * heap()->ReservedSemiSpaceSize());
   ASSERT(IsAddressAligned(start, size, 0));
@@ -1227,6 +1236,7 @@ bool NewSpace::Setup(Address start, int size) {
 
 
 void NewSpace::TearDown() {
+#if defined(DEBUG) || defined(ENABLE_LOGGING_AND_PROFILING)
   if (allocated_histogram_) {
     DeleteArray(allocated_histogram_);
     allocated_histogram_ = NULL;
@@ -1235,6 +1245,7 @@ void NewSpace::TearDown() {
     DeleteArray(promoted_histogram_);
     promoted_histogram_ = NULL;
   }
+#endif
 
   start_ = NULL;
   allocation_info_.top = NULL;
@@ -1245,6 +1256,24 @@ void NewSpace::TearDown() {
   to_space_.TearDown();
   from_space_.TearDown();
 }
+
+
+#ifdef ENABLE_HEAP_PROTECTION
+
+void NewSpace::Protect() {
+  heap()->isolate()->memory_allocator()->Protect(ToSpaceLow(), Capacity());
+  heap()->isolate()->memory_allocator()->Protect(FromSpaceLow(), Capacity());
+}
+
+
+void NewSpace::Unprotect() {
+  heap()->isolate()->memory_allocator()->Unprotect(ToSpaceLow(), Capacity(),
+                                                   to_space_.executable());
+  heap()->isolate()->memory_allocator()->Unprotect(FromSpaceLow(), Capacity(),
+                                                   from_space_.executable());
+}
+
+#endif
 
 
 void NewSpace::Flip() {
@@ -1535,14 +1564,14 @@ static void ReportCodeKindStatistics() {
       CASE(BUILTIN);
       CASE(LOAD_IC);
       CASE(KEYED_LOAD_IC);
+      CASE(KEYED_EXTERNAL_ARRAY_LOAD_IC);
       CASE(STORE_IC);
       CASE(KEYED_STORE_IC);
+      CASE(KEYED_EXTERNAL_ARRAY_STORE_IC);
       CASE(CALL_IC);
       CASE(KEYED_CALL_IC);
-      CASE(UNARY_OP_IC);
-      CASE(BINARY_OP_IC);
+      CASE(TYPE_RECORDING_BINARY_OP_IC);
       CASE(COMPARE_IC);
-      CASE(TO_BOOLEAN_IC);
     }
   }
 
@@ -1610,6 +1639,7 @@ static void ReportHistogram(bool print_spill) {
 
 
 // Support for statistics gathering for --heap-stats and --log-gc.
+#if defined(DEBUG) || defined(ENABLE_LOGGING_AND_PROFILING)
 void NewSpace::ClearHistograms() {
   for (int i = 0; i <= LAST_TYPE; i++) {
     allocated_histogram_[i].clear();
@@ -1619,7 +1649,9 @@ void NewSpace::ClearHistograms() {
 
 // Because the copying collector does not touch garbage objects, we iterate
 // the new space before a collection to get a histogram of allocated objects.
-// This only happens when --log-gc flag is set.
+// This only happens (1) when compiled with DEBUG and the --heap-stats flag is
+// set, or when compiled with ENABLE_LOGGING_AND_PROFILING and the --log-gc
+// flag is set.
 void NewSpace::CollectStatistics() {
   ClearHistograms();
   SemiSpaceIterator it(this);
@@ -1628,6 +1660,7 @@ void NewSpace::CollectStatistics() {
 }
 
 
+#ifdef ENABLE_LOGGING_AND_PROFILING
 static void DoReportStatistics(Isolate* isolate,
                                HistogramInfo* info, const char* description) {
   LOG(isolate, HeapSampleBeginEvent("NewSpace", description));
@@ -1654,6 +1687,7 @@ static void DoReportStatistics(Isolate* isolate,
   }
   LOG(isolate, HeapSampleEndEvent("NewSpace", description));
 }
+#endif  // ENABLE_LOGGING_AND_PROFILING
 
 
 void NewSpace::ReportStatistics() {
@@ -1676,11 +1710,13 @@ void NewSpace::ReportStatistics() {
   }
 #endif  // DEBUG
 
+#ifdef ENABLE_LOGGING_AND_PROFILING
   if (FLAG_log_gc) {
     Isolate* isolate = ISOLATE;
     DoReportStatistics(isolate, allocated_histogram_, "allocated");
     DoReportStatistics(isolate, promoted_histogram_, "promoted");
   }
+#endif  // ENABLE_LOGGING_AND_PROFILING
 }
 
 
@@ -1698,6 +1734,7 @@ void NewSpace::RecordPromotion(HeapObject* obj) {
   promoted_histogram_[type].increment_number(1);
   promoted_histogram_[type].increment_bytes(obj->Size());
 }
+#endif  // defined(DEBUG) || defined(ENABLE_LOGGING_AND_PROFILING)
 
 
 // -----------------------------------------------------------------------------
@@ -2690,10 +2727,9 @@ LargeObjectChunk* LargeObjectChunk::New(int size_in_bytes,
                                         Executability executable) {
   size_t requested = ChunkSizeFor(size_in_bytes);
   size_t size;
-  size_t guard_size = (executable == EXECUTABLE) ? Page::kPageSize : 0;
   Isolate* isolate = Isolate::Current();
   void* mem = isolate->memory_allocator()->AllocateRawMemory(
-      requested + guard_size, &size, executable);
+      requested, &size, executable);
   if (mem == NULL) return NULL;
 
   // The start of the chunk may be overlayed with a page so we have to
@@ -2701,17 +2737,11 @@ LargeObjectChunk* LargeObjectChunk::New(int size_in_bytes,
   ASSERT((size & Page::kPageFlagMask) == 0);
 
   LOG(isolate, NewEvent("LargeObjectChunk", mem, size));
-  if (size < requested + guard_size) {
+  if (size < requested) {
     isolate->memory_allocator()->FreeRawMemory(
         mem, size, executable);
     LOG(isolate, DeleteEvent("LargeObjectChunk", mem));
     return NULL;
-  }
-
-  if (guard_size != 0) {
-    OS::Guard(mem, guard_size);
-    size -= guard_size;
-    mem = static_cast<Address>(mem) + guard_size;
   }
 
   ObjectSpace space = (executable == EXECUTABLE)
@@ -2722,23 +2752,9 @@ LargeObjectChunk* LargeObjectChunk::New(int size_in_bytes,
 
   LargeObjectChunk* chunk = reinterpret_cast<LargeObjectChunk*>(mem);
   chunk->size_ = size;
-  chunk->GetPage()->heap_ = isolate->heap();
+  Page* page = Page::FromAddress(RoundUp(chunk->address(), Page::kPageSize));
+  page->heap_ = isolate->heap();
   return chunk;
-}
-
-
-void LargeObjectChunk::Free(Executability executable) {
-  size_t guard_size = (executable == EXECUTABLE) ? Page::kPageSize : 0;
-  ObjectSpace space =
-      (executable == EXECUTABLE) ? kObjectSpaceCodeSpace : kObjectSpaceLoSpace;
-  // Do not access instance fields after FreeRawMemory!
-  Address my_address = address();
-  size_t my_size = size();
-  Isolate* isolate = GetPage()->heap_->isolate();
-  MemoryAllocator* a = isolate->memory_allocator();
-  a->FreeRawMemory(my_address - guard_size, my_size + guard_size, executable);
-  a->PerformAllocationCallback(space, kAllocationActionFree, my_size);
-  LOG(isolate, DeleteEvent("LargeObjectChunk", my_address));
 }
 
 
@@ -2774,10 +2790,49 @@ void LargeObjectSpace::TearDown() {
   while (first_chunk_ != NULL) {
     LargeObjectChunk* chunk = first_chunk_;
     first_chunk_ = first_chunk_->next();
-    chunk->Free(chunk->GetPage()->PageExecutability());
+    LOG(heap()->isolate(), DeleteEvent("LargeObjectChunk", chunk->address()));
+    Page* page = Page::FromAddress(RoundUp(chunk->address(), Page::kPageSize));
+    Executability executable =
+        page->IsPageExecutable() ? EXECUTABLE : NOT_EXECUTABLE;
+    ObjectSpace space = kObjectSpaceLoSpace;
+    if (executable == EXECUTABLE) space = kObjectSpaceCodeSpace;
+    size_t size = chunk->size();
+    heap()->isolate()->memory_allocator()->FreeRawMemory(chunk->address(),
+                                                         size,
+                                                         executable);
+    heap()->isolate()->memory_allocator()->PerformAllocationCallback(
+        space, kAllocationActionFree, size);
   }
-  Setup();
+
+  size_ = 0;
+  page_count_ = 0;
+  objects_size_ = 0;
 }
+
+
+#ifdef ENABLE_HEAP_PROTECTION
+
+void LargeObjectSpace::Protect() {
+  LargeObjectChunk* chunk = first_chunk_;
+  while (chunk != NULL) {
+    heap()->isolate()->memory_allocator()->Protect(chunk->address(),
+                                                   chunk->size());
+    chunk = chunk->next();
+  }
+}
+
+
+void LargeObjectSpace::Unprotect() {
+  LargeObjectChunk* chunk = first_chunk_;
+  while (chunk != NULL) {
+    bool is_code = chunk->GetObject()->IsCode();
+    heap()->isolate()->memory_allocator()->Unprotect(chunk->address(),
+        chunk->size(), is_code ? EXECUTABLE : NOT_EXECUTABLE);
+    chunk = chunk->next();
+  }
+}
+
+#endif
 
 
 MaybeObject* LargeObjectSpace::AllocateRawInternal(int requested_size,
@@ -2804,14 +2859,14 @@ MaybeObject* LargeObjectSpace::AllocateRawInternal(int requested_size,
   first_chunk_ = chunk;
 
   // Initialize page header.
-  Page* page = chunk->GetPage();
+  Page* page = Page::FromAddress(RoundUp(chunk->address(), Page::kPageSize));
   Address object_address = page->ObjectAreaStart();
 
   // Clear the low order bit of the second word in the page to flag it as a
   // large object page.  If the chunk_size happened to be written there, its
   // low order bit should already be clear.
   page->SetIsLargeObjectPage(true);
-  page->SetPageExecutability(executable);
+  page->SetIsPageExecutable(executable);
   page->SetRegionMarks(Page::kAllRegionsCleanMarks);
   return HeapObject::FromAddress(object_address);
 }
@@ -2942,8 +2997,14 @@ void LargeObjectSpace::FreeUnmarkedObjects() {
       previous = current;
       current = current->next();
     } else {
+      Page* page = Page::FromAddress(RoundUp(current->address(),
+                                     Page::kPageSize));
+      Executability executable =
+          page->IsPageExecutable() ? EXECUTABLE : NOT_EXECUTABLE;
+      Address chunk_address = current->address();
+      size_t chunk_size = current->size();
+
       // Cut the chunk out from the chunk list.
-      LargeObjectChunk* current_chunk = current;
       current = current->next();
       if (previous == NULL) {
         first_chunk_ = current;
@@ -2956,10 +3017,17 @@ void LargeObjectSpace::FreeUnmarkedObjects() {
           object, heap()->isolate());
       LiveObjectList::ProcessNonLive(object);
 
-      size_ -= static_cast<int>(current_chunk->size());
+      size_ -= static_cast<int>(chunk_size);
       objects_size_ -= object->Size();
       page_count_--;
-      current_chunk->Free(current_chunk->GetPage()->PageExecutability());
+      ObjectSpace space = kObjectSpaceLoSpace;
+      if (executable == EXECUTABLE) space = kObjectSpaceCodeSpace;
+      heap()->isolate()->memory_allocator()->FreeRawMemory(chunk_address,
+                                                           chunk_size,
+                                                           executable);
+      heap()->isolate()->memory_allocator()->PerformAllocationCallback(
+          space, kAllocationActionFree, size_);
+      LOG(heap()->isolate(), DeleteEvent("LargeObjectChunk", chunk_address));
     }
   }
 }
@@ -3003,7 +3071,7 @@ void LargeObjectSpace::Verify() {
     // strings), fixed arrays, and byte arrays in large object space.
     ASSERT(object->IsCode() || object->IsSeqString() ||
            object->IsExternalString() || object->IsFixedArray() ||
-           object->IsFixedDoubleArray() || object->IsByteArray());
+           object->IsByteArray());
 
     // The object itself should look OK.
     object->Verify();

@@ -1,4 +1,4 @@
-// Copyright 2011 the V8 project authors. All rights reserved.
+// Copyright 2006-2008 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -28,14 +28,12 @@
 #ifndef V8_DEBUG_H_
 #define V8_DEBUG_H_
 
-#include "allocation.h"
 #include "arguments.h"
 #include "assembler.h"
 #include "debug-agent.h"
 #include "execution.h"
 #include "factory.h"
 #include "flags.h"
-#include "frames-inl.h"
 #include "hashmap.h"
 #include "platform.h"
 #include "string-stream.h"
@@ -424,8 +422,7 @@ class Debug {
     FRAME_DROPPED_IN_DEBUG_SLOT_CALL,
     // The top JS frame had been calling some C++ function. The return address
     // gets patched automatically.
-    FRAME_DROPPED_IN_DIRECT_CALL,
-    FRAME_DROPPED_IN_RETURN_CALL
+    FRAME_DROPPED_IN_DIRECT_CALL
   };
 
   void FramesHaveBeenDropped(StackFrame::Id new_break_frame_id,
@@ -679,14 +676,13 @@ class MessageDispatchHelperThread;
 // Mutex to CommandMessageQueue.  Includes logging of all puts and gets.
 class LockingCommandMessageQueue BASE_EMBEDDED {
  public:
-  LockingCommandMessageQueue(Logger* logger, int size);
+  explicit LockingCommandMessageQueue(int size);
   ~LockingCommandMessageQueue();
   bool IsEmpty() const;
   CommandMessage Get();
   void Put(const CommandMessage& message);
   void Clear();
  private:
-  Logger* logger_;
   CommandMessageQueue queue_;
   Mutex* lock_;
   DISALLOW_COPY_AND_ASSIGN(LockingCommandMessageQueue);
@@ -1026,7 +1022,6 @@ class Debug_Address {
         return NULL;
     }
   }
-
  private:
   Debug::AddressId id_;
 };

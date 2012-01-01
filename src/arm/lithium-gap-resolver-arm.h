@@ -40,6 +40,7 @@ class LGapResolver;
 
 class LGapResolver BASE_EMBEDDED {
  public:
+
   explicit LGapResolver(LCodeGen* owner);
 
   // Resolve a set of parallel moves, emitting assembler instructions.

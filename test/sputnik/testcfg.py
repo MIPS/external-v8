@@ -57,7 +57,7 @@ class SputnikTestCase(test.TestCase):
 
   def AfterRun(self, result):
     # Dispose the temporary file if everything looks okay.
-    if result is None or not result.HasPreciousOutput(): self.tmpfile.Dispose()
+    if not result.HasPreciousOutput(): self.tmpfile.Dispose()
     self.tmpfile = None
 
   def GetCommand(self):
@@ -101,7 +101,7 @@ class SputnikTestConfiguration(test.TestConfiguration):
     return result
 
   def GetBuildRequirements(self):
-    return ['d8']
+    return ['sample', 'sample=shell']
 
   def GetTestStatus(self, sections, defs):
     status_file = join(self.root, 'sputnik.status')

@@ -1,4 +1,4 @@
-// Copyright 2011 the V8 project authors. All rights reserved.
+// Copyright 2007-2008 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -54,7 +54,7 @@ struct ByteMnemonic {
 };
 
 
-static const ByteMnemonic two_operands_instr[] = {
+static ByteMnemonic two_operands_instr[] = {
   {0x03, "add", REG_OPER_OP_ORDER},
   {0x09, "or", OPER_REG_OP_ORDER},
   {0x0B, "or", REG_OPER_OP_ORDER},
@@ -79,7 +79,7 @@ static const ByteMnemonic two_operands_instr[] = {
 };
 
 
-static const ByteMnemonic zero_operands_instr[] = {
+static ByteMnemonic zero_operands_instr[] = {
   {0xC3, "ret", UNSET_OP_ORDER},
   {0xC9, "leave", UNSET_OP_ORDER},
   {0x90, "nop", UNSET_OP_ORDER},
@@ -98,14 +98,14 @@ static const ByteMnemonic zero_operands_instr[] = {
 };
 
 
-static const ByteMnemonic call_jump_instr[] = {
+static ByteMnemonic call_jump_instr[] = {
   {0xE8, "call", UNSET_OP_ORDER},
   {0xE9, "jmp", UNSET_OP_ORDER},
   {-1, "", UNSET_OP_ORDER}
 };
 
 
-static const ByteMnemonic short_immediate_instr[] = {
+static ByteMnemonic short_immediate_instr[] = {
   {0x05, "add", UNSET_OP_ORDER},
   {0x0D, "or", UNSET_OP_ORDER},
   {0x15, "adc", UNSET_OP_ORDER},
@@ -117,7 +117,7 @@ static const ByteMnemonic short_immediate_instr[] = {
 };
 
 
-static const char* const jump_conditional_mnem[] = {
+static const char* jump_conditional_mnem[] = {
   /*0*/ "jo", "jno", "jc", "jnc",
   /*4*/ "jz", "jnz", "jna", "ja",
   /*8*/ "js", "jns", "jpe", "jpo",
@@ -125,7 +125,7 @@ static const char* const jump_conditional_mnem[] = {
 };
 
 
-static const char* const set_conditional_mnem[] = {
+static const char* set_conditional_mnem[] = {
   /*0*/ "seto", "setno", "setc", "setnc",
   /*4*/ "setz", "setnz", "setna", "seta",
   /*8*/ "sets", "setns", "setpe", "setpo",
@@ -133,7 +133,7 @@ static const char* const set_conditional_mnem[] = {
 };
 
 
-static const char* const conditional_move_mnem[] = {
+static const char* conditional_move_mnem[] = {
   /*0*/ "cmovo", "cmovno", "cmovc", "cmovnc",
   /*4*/ "cmovz", "cmovnz", "cmovna", "cmova",
   /*8*/ "cmovs", "cmovns", "cmovpe", "cmovpo",
@@ -169,7 +169,7 @@ class InstructionTable {
   InstructionDesc instructions_[256];
   void Clear();
   void Init();
-  void CopyTable(const ByteMnemonic bm[], InstructionType type);
+  void CopyTable(ByteMnemonic bm[], InstructionType type);
   void SetTableRange(InstructionType type,
                      byte start,
                      byte end,
@@ -208,8 +208,7 @@ void InstructionTable::Init() {
 }
 
 
-void InstructionTable::CopyTable(const ByteMnemonic bm[],
-                                 InstructionType type) {
+void InstructionTable::CopyTable(ByteMnemonic bm[], InstructionType type) {
   for (int i = 0; bm[i].b >= 0; i++) {
     InstructionDesc* id = &instructions_[bm[i].b];
     id->mnem = bm[i].mnem;
@@ -982,14 +981,6 @@ int DisassemblerIA32::InstructionDecode(v8::internal::Vector<char> out_buffer,
                            NameOfXMMRegister(regop),
                            NameOfXMMRegister(rm));
             data++;
-          } else if (f0byte == 0x57) {
-            data += 2;
-            int mod, regop, rm;
-            get_modrm(*data, &mod, &regop, &rm);
-            AppendToBuffer("xorps %s,%s",
-                           NameOfXMMRegister(regop),
-                           NameOfXMMRegister(rm));
-            data++;
           } else if ((f0byte & 0xF0) == 0x80) {
             data += JumpConditional(data, branch_hint);
           } else if (f0byte == 0xBE || f0byte == 0xBF || f0byte == 0xB6 ||
@@ -1141,17 +1132,7 @@ int DisassemblerIA32::InstructionDecode(v8::internal::Vector<char> out_buffer,
             }
           } else if (*data == 0x3A) {
             data++;
-            if (*data == 0x0B) {
-              data++;
-              int mod, regop, rm;
-              get_modrm(*data, &mod, &regop, &rm);
-              int8_t imm8 = static_cast<int8_t>(data[1]);
-              AppendToBuffer("roundsd %s,%s,%d",
-                             NameOfXMMRegister(regop),
-                             NameOfXMMRegister(rm),
-                             static_cast<int>(imm8));
-              data += 2;
-            } else if (*data == 0x16) {
+            if (*data == 0x16) {
               data++;
               int mod, regop, rm;
               get_modrm(*data, &mod, &regop, &rm);

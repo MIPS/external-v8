@@ -1,4 +1,4 @@
-# Copyright 2011 the V8 project authors. All rights reserved.
+# Copyright 2010 the V8 project authors. All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are
 # met:
@@ -26,22 +26,42 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 {
-  'includes': ['../../build/common.gypi'],
-  'variables': {
-    'generated_file': '<(SHARED_INTERMEDIATE_DIR)/resources.cc',
+  'target_defaults': {
+    'conditions': [
+      ['OS!="mac"', {
+        # TODO(sgjesse): This is currently copied from v8.gyp, should probably
+        # be refactored.
+        'conditions': [
+          ['v8_target_arch=="arm"', {
+            'defines': [
+              'V8_TARGET_ARCH_ARM',
+            ],
+          }],
+          ['v8_target_arch=="ia32"', {
+            'defines': [
+              'V8_TARGET_ARCH_IA32',
+            ],
+          }],
+          ['v8_target_arch=="x64"', {
+            'defines': [
+              'V8_TARGET_ARCH_X64',
+            ],
+          }],
+        ],
+      }],
+    ],
   },
   'targets': [
     {
       'target_name': 'cctest',
       'type': 'executable',
       'dependencies': [
-        'resources',
+        '../../tools/gyp/v8.gyp:v8',
       ],
       'include_dirs': [
         '../../src',
       ],
       'sources': [
-        '<(generated_file)',
         'cctest.cc',
         'gay-fixed.cc',
         'gay-precision.cc',
@@ -60,7 +80,6 @@
         'test-debug.cc',
         'test-decls.cc',
         'test-deoptimization.cc',
-        'test-dictionary.cc',
         'test-diy-fp.cc',
         'test-double.cc',
         'test-dtoa.cc',
@@ -74,11 +93,10 @@
         'test-list.cc',
         'test-liveedit.cc',
         'test-lock.cc',
-        'test-lockers.cc',
         'test-log.cc',
+        'test-log-utils.cc',
         'test-mark-compact.cc',
         'test-parsing.cc',
-        'test-platform-tls.cc',
         'test-profile-generator.cc',
         'test-regexp.cc',
         'test-reloc-info.cc',
@@ -89,6 +107,7 @@
         'test-strtod.cc',
         'test-thread-termination.cc',
         'test-threads.cc',
+        'test-type-info.cc',
         'test-unbound-queue.cc',
         'test-utils.cc',
         'test-version.cc'
@@ -117,7 +136,7 @@
         ['v8_target_arch=="mips"', {
           'sources': [
             'test-assembler-mips.cc',
-            'test-disasm-mips.cc',
+            'test-mips.cc',
           ],
         }],
         [ 'OS=="linux"', {
@@ -135,56 +154,6 @@
             'test-platform-win32.cc',
           ],
         }],
-        ['component=="shared_library"', {
-          # cctest can't be built against a shared library, so we need to
-          # depend on the underlying static target in that case.
-          'conditions': [
-            ['v8_use_snapshot=="true"', {
-              'dependencies': ['../../tools/gyp/v8.gyp:v8_snapshot'],
-            },
-            {
-              'dependencies': ['../../tools/gyp/v8.gyp:v8_nosnapshot'],
-            }],
-          ],
-        }, {
-          'dependencies': ['../../tools/gyp/v8.gyp:v8'],
-        }],
-      ],
-    },
-    {
-      'target_name': 'resources',
-      'type': 'none',
-      'variables': {
-        'file_list': [
-           '../../tools/splaytree.js',
-           '../../tools/codemap.js',
-           '../../tools/csvparser.js',
-           '../../tools/consarray.js',
-           '../../tools/profile.js',
-           '../../tools/profile_view.js',
-           '../../tools/logreader.js',
-           'log-eq-of-logging-and-traversal.js',
-        ],
-      },
-      'actions': [
-        {
-          'action_name': 'js2c',
-          'inputs': [
-            '../../tools/js2c.py',
-            '<@(file_list)',
-          ],
-          'outputs': [
-            '<(generated_file)',
-          ],
-          'action': [
-            'python',
-            '../../tools/js2c.py',
-            '<@(_outputs)',
-            'TEST',  # type
-            'off',  # compression
-            '<@(file_list)',
-          ],
-        }
       ],
     },
   ],

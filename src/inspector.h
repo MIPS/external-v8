@@ -41,6 +41,7 @@ namespace internal {
 
 class Inspector {
  public:
+
   static void DumpObjectType(FILE* out, Object *obj, bool print_more);
   static void DumpObjectType(FILE* out, Object *obj) {
     DumpObjectType(out, obj, false);
@@ -58,3 +59,4 @@ class Inspector {
 #endif  // INSPECTOR
 
 #endif  // V8_INSPECTOR_H_
+

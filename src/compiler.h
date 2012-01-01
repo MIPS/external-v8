@@ -28,8 +28,8 @@
 #ifndef V8_COMPILER_H_
 #define V8_COMPILER_H_
 
-#include "allocation.h"
 #include "ast.h"
+#include "frame-element.h"
 #include "zone.h"
 
 namespace v8 {
@@ -82,12 +82,6 @@ class CompilationInfo BASE_EMBEDDED {
   void MarkAsInLoop() {
     ASSERT(is_lazy());
     flags_ |= IsInLoop::encode(true);
-  }
-  void MarkAsAllowingNativesSyntax() {
-    flags_ |= IsNativesSyntaxAllowed::encode(true);
-  }
-  bool allows_natives_syntax() const {
-    return IsNativesSyntaxAllowed::decode(flags_);
   }
   void MarkAsNative() {
     flags_ |= IsNative::encode(true);
@@ -150,10 +144,6 @@ class CompilationInfo BASE_EMBEDDED {
     return V8::UseCrankshaft() && !closure_.is_null();
   }
 
-  // Disable all optimization attempts of this info for the rest of the
-  // current compilation pipeline.
-  void AbortOptimization();
-
  private:
   Isolate* isolate_;
 
@@ -173,7 +163,6 @@ class CompilationInfo BASE_EMBEDDED {
 
   void Initialize(Mode mode) {
     mode_ = V8::UseCrankshaft() ? mode : NONOPT;
-    ASSERT(!script_.is_null());
     if (script_->type()->value() == Script::TYPE_NATIVE) {
       MarkAsNative();
     }
@@ -199,11 +188,8 @@ class CompilationInfo BASE_EMBEDDED {
   class IsInLoop: public BitField<bool, 3, 1> {};
   // Strict mode - used in eager compilation.
   class IsStrictMode: public BitField<bool, 4, 1> {};
-  // Native syntax (%-stuff) allowed?
-  class IsNativesSyntaxAllowed: public BitField<bool, 5, 1> {};
   // Is this a function from our natives.
   class IsNative: public BitField<bool, 6, 1> {};
-
 
   unsigned flags_;
 
@@ -299,6 +285,22 @@ class Compiler : public AllStatic {
   static void RecordFunctionCompilation(Logger::LogEventsAndTags tag,
                                         CompilationInfo* info,
                                         Handle<SharedFunctionInfo> shared);
+};
+
+
+// During compilation we need a global list of handles to constants
+// for frame elements.  When the zone gets deleted, we make sure to
+// clear this list of handles as well.
+class CompilationZoneScope : public ZoneScope {
+ public:
+  explicit CompilationZoneScope(ZoneScopeMode mode) : ZoneScope(mode) { }
+  virtual ~CompilationZoneScope() {
+    if (ShouldDeleteOnExit()) {
+      Isolate* isolate = Isolate::Current();
+      isolate->frame_element_constant_list()->Clear();
+      isolate->result_constant_list()->Clear();
+    }
+  }
 };
 
 

@@ -459,9 +459,7 @@ DEPENDENT_TEST(PartialDeserialization, PartialSerialization) {
       CHECK(root->IsString());
     }
     v8::HandleScope handle_scope;
-    Handle<Object> root_handle(root);
-
-    ReserveSpaceForPartialSnapshot(file_name);
+    Handle<Object>root_handle(root);
 
     Object* root2;
     {
@@ -544,9 +542,7 @@ DEPENDENT_TEST(ContextDeserialization, ContextSerialization) {
       CHECK(root->IsContext());
     }
     v8::HandleScope handle_scope;
-    Handle<Object> root_handle(root);
-
-    ReserveSpaceForPartialSnapshot(file_name);
+    Handle<Object>root_handle(root);
 
     Object* root2;
     {

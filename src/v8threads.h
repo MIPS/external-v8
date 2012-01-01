@@ -54,7 +54,6 @@ class ThreadState {
 
   // Get data area for archiving a thread.
   char* data() { return data_; }
-
  private:
   explicit ThreadState(ThreadManager* thread_manager);
 
@@ -153,15 +152,12 @@ class ContextSwitcher: public Thread {
   static void PreemptionReceived();
 
  private:
-  ContextSwitcher(Isolate* isolate, int every_n_ms);
-
-  Isolate* isolate() const { return isolate_; }
+  explicit ContextSwitcher(Isolate* isolate, int every_n_ms);
 
   void Run();
 
   bool keep_going_;
   int sleep_ms_;
-  Isolate* isolate_;
 };
 
 } }  // namespace v8::internal

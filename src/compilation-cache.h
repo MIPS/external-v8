@@ -223,6 +223,14 @@ class CompilationCache {
                  JSRegExp::Flags flags,
                  Handle<FixedArray> data);
 
+  // Support for eager optimization tracking.
+  bool ShouldOptimizeEagerly(Handle<JSFunction> function);
+  void MarkForEagerOptimizing(Handle<JSFunction> function);
+  void MarkForLazyOptimizing(Handle<JSFunction> function);
+
+  // Reset the eager optimization tracking data.
+  void ResetEagerOptimizingData();
+
   // Clear the cache - also used to initialize the cache at startup.
   void Clear();
 
@@ -242,7 +250,6 @@ class CompilationCache {
   // cache during debugging to make sure new scripts are always compiled.
   void Enable();
   void Disable();
-
  private:
   explicit CompilationCache(Isolate* isolate);
   ~CompilationCache();
@@ -266,6 +273,8 @@ class CompilationCache {
 
   // Current enable state of the compilation cache.
   bool enabled_;
+
+  HashMap* eager_optimizing_set_;
 
   friend class Isolate;
 

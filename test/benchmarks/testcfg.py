@@ -91,7 +91,7 @@ class BenchmarkTestConfiguration(test.TestConfiguration):
     return [test]
 
   def GetBuildRequirements(self):
-    return ['d8']
+    return ['sample', 'sample=shell']
 
   def GetTestStatus(self, sections, defs):
     pass

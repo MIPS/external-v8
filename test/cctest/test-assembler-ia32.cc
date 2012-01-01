@@ -102,7 +102,7 @@ TEST(AssemblerIa321) {
 
   __ bind(&C);
   __ test(edx, Operand(edx));
-  __ j(not_zero, &L);
+  __ j(not_zero, &L, taken);
   __ ret(0);
 
   CodeDesc desc;
@@ -140,7 +140,7 @@ TEST(AssemblerIa322) {
 
   __ bind(&C);
   __ test(edx, Operand(edx));
-  __ j(not_zero, &L);
+  __ j(not_zero, &L, taken);
   __ ret(0);
 
   // some relocated stuff here, not executed
@@ -351,10 +351,10 @@ TEST(AssemblerIa329) {
   __ fld_d(Operand(esp, 3 * kPointerSize));
   __ fld_d(Operand(esp, 1 * kPointerSize));
   __ FCmp();
-  __ j(parity_even, &nan_l);
-  __ j(equal, &equal_l);
-  __ j(below, &less_l);
-  __ j(above, &greater_l);
+  __ j(parity_even, &nan_l, taken);
+  __ j(equal, &equal_l, taken);
+  __ j(below, &less_l, taken);
+  __ j(above, &greater_l, taken);
 
   __ mov(eax, kUndefined);
   __ ret(0);
@@ -392,20 +392,6 @@ TEST(AssemblerIa329) {
   CHECK_EQ(kEqual, f(2.2, 2.2));
   CHECK_EQ(kGreater, f(3.3, 2.2));
   CHECK_EQ(kNaN, f(OS::nan_value(), 1.1));
-}
-
-
-TEST(AssemblerIa3210) {
-  // Test chaining of label usages within instructions (issue 1644).
-  InitializeVM();
-  v8::HandleScope scope;
-  Assembler assm(Isolate::Current(), NULL, 0);
-
-  Label target;
-  __ j(equal, &target);
-  __ j(not_equal, &target);
-  __ bind(&target);
-  __ nop();
 }
 
 #undef __

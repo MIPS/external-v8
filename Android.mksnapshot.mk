@@ -16,14 +16,8 @@ include $(LOCAL_PATH)/Android.v8common.mk
 
 V8_LOCAL_SRC_FILES += \
   src/mksnapshot.cc \
+  src/arm/simulator-arm.cc \
   src/snapshot-empty.cc
-ifeq ($(TARGET_ARCH),arm)
-  src/arm/simulator-arm.cc
-endif
-ifeq ($(TARGET_ARCH),mips)
-V8_LOCAL_SRC_FILES += \
-    src/mips/simulator-mips.cc
-endif
 
 ifeq ($(HOST_OS),linux)
 V8_LOCAL_SRC_FILES += \
@@ -48,57 +42,33 @@ $(JS2C_PY): $(intermediates)/%.py : $(LOCAL_PATH)/tools/%.py | $(ACP)
 	$(copy-file-to-target)
 
 # Generate libraries.cc
-GEN3 := $(intermediates)/libraries.cc
-$(GEN3): SCRIPT := $(intermediates)/js2c.py
-$(GEN3): $(LOCAL_JS_LIBRARY_FILES) $(JS2C_PY)
+GEN2 := $(intermediates)/libraries.cc $(intermediates)/libraries-empty.cc
+$(GEN2): SCRIPT := $(intermediates)/js2c.py
+$(GEN2): $(LOCAL_JS_LIBRARY_FILES) $(JS2C_PY)
 	@echo "Generating libraries.cc"
 	@mkdir -p $(dir $@)
-	python $(SCRIPT) $(GEN3) CORE off $(LOCAL_JS_LIBRARY_FILES)
-V8_GENERATED_LIBRARIES := $(intermediates)/libraries.cc
-
-GEN4 := $(intermediates)/experimental-libraries.cc
-$(GEN4): SCRIPT := $(intermediates)/js2c.py
-$(GEN4): $(LOCAL_JS_EXPERIMENTAL_LIBRARY_FILES) $(JS2C_PY)
-	@echo "Generating experimental-libraries.cc"
-	@mkdir -p $(dir $@)
-	python $(SCRIPT) $(GEN4) EXPERIMENTAL off $(LOCAL_JS_EXPERIMENTAL_LIBRARY_FILES)
-V8_GENERATED_LIBRARIES += $(intermediates)/experimental-libraries.cc
-
-LOCAL_GENERATED_SOURCES += $(V8_GENERATED_LIBRARIES)
+	python $(SCRIPT) $(GEN2) CORE $(LOCAL_JS_LIBRARY_FILES)
+LOCAL_GENERATED_SOURCES := $(intermediates)/libraries.cc
 
 LOCAL_CFLAGS := \
 	-Wno-endif-labels \
 	-Wno-import \
 	-Wno-format \
-	-fno-exceptions \
-	-Umips \
-	-finline-limit=64 \
-	-fno-strict-aliasing \
+	-ansi \
+	-fno-rtti \
 	-DENABLE_DEBUGGER_SUPPORT \
 	-DENABLE_LOGGING_AND_PROFILING \
 	-DENABLE_VMSTATE_TRACKING \
-	-DOBJECT_PRINT \
-	-DENABLE_DISASSEMBLER
-
+	-DV8_NATIVE_REGEXP
 
 ifeq ($(TARGET_ARCH),arm)
   LOCAL_CFLAGS += -DV8_TARGET_ARCH_ARM
-endif
-
-ifeq ($(TARGET_ARCH),mips)
-  LOCAL_CFLAGS += -DV8_TARGET_ARCH_MIPS
-  LOCAL_CFLAGS += -DCAN_USE_FPU_INSTRUCTIONS
 endif
 
 ifeq ($(TARGET_CPU_ABI),armeabi-v7a)
     ifeq ($(ARCH_ARM_HAVE_VFP),true)
         LOCAL_CFLAGS += -DCAN_USE_VFP_INSTRUCTIONS -DCAN_USE_ARMV7_INSTRUCTIONS
     endif
-endif
-
-
-ifeq ($(TARGET_ARCH),x86)
-  LOCAL_CFLAGS += -DV8_TARGET_ARCH_IA32
 endif
 
 ifeq ($(DEBUG_V8),true)

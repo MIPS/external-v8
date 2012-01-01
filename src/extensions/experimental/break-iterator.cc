@@ -25,9 +25,7 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include "src/extensions/experimental/break-iterator.h"
-
-#include <string.h>
+#include "break-iterator.h"
 
 #include "unicode/brkiter.h"
 #include "unicode/locid.h"

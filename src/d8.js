@@ -103,8 +103,7 @@ Debug.ScopeType = { Global: 0,
                     Local: 1,
                     With: 2,
                     Closure: 3,
-                    Catch: 4,
-                    Block: 5 };
+                    Catch: 4 };
 
 
 // Current debug state.
@@ -392,14 +391,14 @@ function DebugRequest(cmd_line) {
           this.frameCommandToJSONRequest_('' +
                                           (Debug.State.currentFrame + 1));
       break;
-
+      
     case 'down':
     case 'do':
       this.request_ =
           this.frameCommandToJSONRequest_('' +
                                           (Debug.State.currentFrame - 1));
       break;
-
+      
     case 'set':
     case 'print':
     case 'p':
@@ -978,14 +977,9 @@ DebugRequest.prototype.breakCommandToJSONRequest_ = function(args) {
     // specification it is considered a function break point.
     pos = target.indexOf(':');
     if (pos > 0) {
+      type = 'script';
       var tmp = target.substring(pos + 1, target.length);
       target = target.substring(0, pos);
-      if (target[0] == '/' && target[target.length - 1] == '/') {
-        type = 'scriptRegExp';
-        target = target.substring(1, target.length - 1);
-      } else {
-        type = 'script';
-      }
 
       // Check for both line and column.
       pos = tmp.indexOf(':');
@@ -1072,7 +1066,7 @@ DebugRequest.prototype.changeBreakpointCommandToJSONRequest_ =
         arg2 = 'uncaught';
       }
       excType = arg2;
-
+      
     // Check for:
     //   en[able] [all|unc[aught]] exc[eptions]
     //   dis[able] [all|unc[aught]] exc[eptions]
@@ -1131,7 +1125,7 @@ DebugRequest.prototype.changeBreakpointCommandToJSONRequest_ =
         request.arguments.ignoreCount = parseInt(otherArgs);
         break;
       default:
-        throw new Error('Invalid arguments.');
+        throw new Error('Invalid arguments.');  
     }
   } else {
     throw new Error('Invalid arguments.');
@@ -1252,7 +1246,7 @@ DebugRequest.prototype.lolMakeListRequest =
       start_index = parseInt(args[i]);
       // The user input start index starts at 1:
       if (start_index <= 0) {
-        throw new Error('Invalid index ' + args[i] + '.');
+        throw new Error('Invalid index ' + args[i] + '.');                
       }
       start_index -= 1;
       is_verbose = true;
@@ -1786,7 +1780,7 @@ function decodeLolInfoResponse(body) {
 
 
 function decodeLolListResponse(body, title) {
-
+  
   var result;
   var total_count = body.count;
   var total_size = body.size;
@@ -1990,9 +1984,6 @@ function DebugResponseDetails(response) {
           if (breakpoint.script_name) {
               result += ' script_name=' + breakpoint.script_name;
           }
-          if (breakpoint.script_regexp) {
-              result += ' script_regexp=' + breakpoint.script_regexp;
-          }
           result += ' line=' + (breakpoint.line + 1);
           if (breakpoint.column != null) {
             result += ' column=' + (breakpoint.column + 1);
@@ -2021,7 +2012,7 @@ function DebugResponseDetails(response) {
         } else if (body.breakOnUncaughtExceptions) {
           result += '* breaking on UNCAUGHT exceptions is enabled\n';
         } else {
-          result += '* all exception breakpoints are disabled\n';
+          result += '* all exception breakpoints are disabled\n';            
         }
         details.text = result;
         break;
