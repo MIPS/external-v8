@@ -1,4 +1,4 @@
-// Copyright 2010 the V8 project authors. All rights reserved.
+// Copyright 2011 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -30,6 +30,7 @@
 
 #include <math.h>
 
+#include "allocation.h"
 #include "globals.h"
 #include "list.h"
 #include "mark-compact.h"
@@ -64,7 +65,9 @@ inline Heap* _inline_get_heap_();
   V(Map, heap_number_map, HeapNumberMap)                                       \
   V(Map, global_context_map, GlobalContextMap)                                 \
   V(Map, fixed_array_map, FixedArrayMap)                                       \
+  V(Map, serialized_scope_info_map, SerializedScopeInfoMap)                    \
   V(Map, fixed_cow_array_map, FixedCOWArrayMap)                                \
+  V(Map, fixed_double_array_map, FixedDoubleArrayMap)                          \
   V(Object, no_interceptor_result_sentinel, NoInterceptorResultSentinel)       \
   V(Map, meta_map, MetaMap)                                                    \
   V(Map, hash_table_map, HashTableMap)                                         \
@@ -74,9 +77,11 @@ inline Heap* _inline_get_heap_();
   V(Object, instanceof_cache_map, InstanceofCacheMap)                          \
   V(Object, instanceof_cache_answer, InstanceofCacheAnswer)                    \
   V(FixedArray, single_character_string_cache, SingleCharacterStringCache)     \
+  V(FixedArray, string_split_cache, StringSplitCache)                          \
   V(Object, termination_exception, TerminationException)                       \
   V(FixedArray, empty_fixed_array, EmptyFixedArray)                            \
   V(ByteArray, empty_byte_array, EmptyByteArray)                               \
+  V(FixedDoubleArray, empty_fixed_double_array, EmptyFixedDoubleArray)         \
   V(String, empty_string, EmptyString)                                         \
   V(DescriptorArray, empty_descriptor_array, EmptyDescriptorArray)             \
   V(Map, string_map, StringMap)                                                \
@@ -84,6 +89,8 @@ inline Heap* _inline_get_heap_();
   V(Map, symbol_map, SymbolMap)                                                \
   V(Map, cons_string_map, ConsStringMap)                                       \
   V(Map, cons_ascii_string_map, ConsAsciiStringMap)                            \
+  V(Map, sliced_string_map, SlicedStringMap)                                   \
+  V(Map, sliced_ascii_string_map, SlicedAsciiStringMap)                        \
   V(Map, ascii_symbol_map, AsciiSymbolMap)                                     \
   V(Map, cons_symbol_map, ConsSymbolMap)                                       \
   V(Map, cons_ascii_symbol_map, ConsAsciiSymbolMap)                            \
@@ -103,21 +110,26 @@ inline Heap* _inline_get_heap_();
   V(Map, external_int_array_map, ExternalIntArrayMap)                          \
   V(Map, external_unsigned_int_array_map, ExternalUnsignedIntArrayMap)         \
   V(Map, external_float_array_map, ExternalFloatArrayMap)                      \
-  V(Map, context_map, ContextMap)                                              \
+  V(Map, external_double_array_map, ExternalDoubleArrayMap)                    \
+  V(Map, non_strict_arguments_elements_map, NonStrictArgumentsElementsMap)     \
+  V(Map, function_context_map, FunctionContextMap)                             \
   V(Map, catch_context_map, CatchContextMap)                                   \
+  V(Map, with_context_map, WithContextMap)                                     \
+  V(Map, block_context_map, BlockContextMap)                                   \
   V(Map, code_map, CodeMap)                                                    \
   V(Map, oddball_map, OddballMap)                                              \
   V(Map, global_property_cell_map, GlobalPropertyCellMap)                      \
   V(Map, shared_function_info_map, SharedFunctionInfoMap)                      \
   V(Map, message_object_map, JSMessageObjectMap)                               \
-  V(Map, proxy_map, ProxyMap)                                                  \
+  V(Map, foreign_map, ForeignMap)                                              \
   V(Object, nan_value, NanValue)                                               \
   V(Object, minus_zero_value, MinusZeroValue)                                  \
   V(Map, neander_map, NeanderMap)                                              \
   V(JSObject, message_listeners, MessageListeners)                             \
-  V(Proxy, prototype_accessors, PrototypeAccessors)                            \
+  V(Foreign, prototype_accessors, PrototypeAccessors)                          \
   V(NumberDictionary, code_stubs, CodeStubs)                                   \
   V(NumberDictionary, non_monomorphic_cache, NonMonomorphicCache)              \
+  V(PolymorphicCodeCache, polymorphic_code_cache, PolymorphicCodeCache)        \
   V(Code, js_entry_code, JsEntryCode)                                          \
   V(Code, js_construct_entry_code, JsConstructEntryCode)                       \
   V(FixedArray, natives_source_cache, NativesSourceCache)                      \
@@ -137,7 +149,6 @@ inline Heap* _inline_get_heap_();
   V(StringImpl_symbol, "StringImpl")                                     \
   V(arguments_symbol, "arguments")                                       \
   V(Arguments_symbol, "Arguments")                                       \
-  V(arguments_shadow_symbol, ".arguments")                               \
   V(call_symbol, "call")                                                 \
   V(apply_symbol, "apply")                                               \
   V(caller_symbol, "caller")                                             \
@@ -153,6 +164,8 @@ inline Heap* _inline_get_heap_();
   V(function_symbol, "function")                                         \
   V(length_symbol, "length")                                             \
   V(name_symbol, "name")                                                 \
+  V(native_symbol, "native")                                             \
+  V(null_symbol, "null")                                                 \
   V(number_symbol, "number")                                             \
   V(Number_symbol, "Number")                                             \
   V(nan_symbol, "NaN")                                                   \
@@ -176,8 +189,14 @@ inline Heap* _inline_get_heap_();
   V(value_of_symbol, "valueOf")                                          \
   V(InitializeVarGlobal_symbol, "InitializeVarGlobal")                   \
   V(InitializeConstGlobal_symbol, "InitializeConstGlobal")               \
-  V(KeyedLoadSpecialized_symbol, "KeyedLoadSpecialized")                 \
-  V(KeyedStoreSpecialized_symbol, "KeyedStoreSpecialized")               \
+  V(KeyedLoadElementMonomorphic_symbol,                                  \
+    "KeyedLoadElementMonomorphic")                                       \
+  V(KeyedLoadElementPolymorphic_symbol,                                  \
+    "KeyedLoadElementPolymorphic")                                       \
+  V(KeyedStoreElementMonomorphic_symbol,                                 \
+    "KeyedStoreElementMonomorphic")                                      \
+  V(KeyedStoreElementPolymorphic_symbol,                                 \
+    "KeyedStoreElementPolymorphic")                                      \
   V(stack_overflow_symbol, "kStackOverflowBoilerplate")                  \
   V(illegal_access_symbol, "illegal access")                             \
   V(out_of_memory_symbol, "out-of-memory")                               \
@@ -206,29 +225,8 @@ inline Heap* _inline_get_heap_();
   V(identity_hash_symbol, "v8::IdentityHash")                            \
   V(closure_symbol, "(closure)")                                         \
   V(use_strict, "use strict")                                            \
-  V(KeyedLoadExternalByteArray_symbol, "KeyedLoadExternalByteArray")     \
-  V(KeyedLoadExternalUnsignedByteArray_symbol,                           \
-      "KeyedLoadExternalUnsignedByteArray")                              \
-  V(KeyedLoadExternalShortArray_symbol,                                  \
-      "KeyedLoadExternalShortArray")                                     \
-  V(KeyedLoadExternalUnsignedShortArray_symbol,                          \
-      "KeyedLoadExternalUnsignedShortArray")                             \
-  V(KeyedLoadExternalIntArray_symbol, "KeyedLoadExternalIntArray")       \
-  V(KeyedLoadExternalUnsignedIntArray_symbol,                            \
-       "KeyedLoadExternalUnsignedIntArray")                              \
-  V(KeyedLoadExternalFloatArray_symbol, "KeyedLoadExternalFloatArray")   \
-  V(KeyedLoadExternalPixelArray_symbol, "KeyedLoadExternalPixelArray")   \
-  V(KeyedStoreExternalByteArray_symbol, "KeyedStoreExternalByteArray")   \
-  V(KeyedStoreExternalUnsignedByteArray_symbol,                          \
-        "KeyedStoreExternalUnsignedByteArray")                           \
-  V(KeyedStoreExternalShortArray_symbol, "KeyedStoreExternalShortArray") \
-  V(KeyedStoreExternalUnsignedShortArray_symbol,                         \
-        "KeyedStoreExternalUnsignedShortArray")                          \
-  V(KeyedStoreExternalIntArray_symbol, "KeyedStoreExternalIntArray")     \
-  V(KeyedStoreExternalUnsignedIntArray_symbol,                           \
-        "KeyedStoreExternalUnsignedIntArray")                            \
-  V(KeyedStoreExternalFloatArray_symbol, "KeyedStoreExternalFloatArray") \
-  V(KeyedStoreExternalPixelArray_symbol, "KeyedStoreExternalPixelArray")
+  V(dot_symbol, ".")                                                     \
+  V(anonymous_function_symbol, "(anonymous function)")
 
 // Forward declarations.
 class GCTracer;
@@ -417,12 +415,6 @@ class Heap {
   // Uncommit unused semi space.
   bool UncommitFromSpace() { return new_space_.UncommitFromSpace(); }
 
-#ifdef ENABLE_HEAP_PROTECTION
-  // Protect/unprotect the heap by marking all spaces read-only/writable.
-  void Protect();
-  void Unprotect();
-#endif
-
   // Allocates and initializes a new JavaScript object based on a
   // constructor.
   // Returns Failure::RetryAfterGC(requested_bytes, space) if the allocation
@@ -447,6 +439,18 @@ class Heap {
   // failed.
   // Please note this does not perform a garbage collection.
   MUST_USE_RESULT MaybeObject* AllocateFunctionPrototype(JSFunction* function);
+
+  // Allocates a Harmony Proxy.
+  // Returns Failure::RetryAfterGC(requested_bytes, space) if the allocation
+  // failed.
+  // Please note this does not perform a garbage collection.
+  MUST_USE_RESULT MaybeObject* AllocateJSProxy(Object* handler,
+                                               Object* prototype);
+
+  // Reinitialize a JSProxy into an (empty) JSObject.  The receiver
+  // must have the same size as an empty object.  The object is reinitialized
+  // and behaves as an object that has been freshly allocated.
+  MUST_USE_RESULT MaybeObject* ReinitializeJSProxyAsJSObject(JSProxy* object);
 
   // Reinitialize an JSGlobalProxy based on a constructor.  The object
   // must have the same size as objects allocated using the
@@ -484,6 +488,12 @@ class Heap {
 
   // Allocates an empty code cache.
   MUST_USE_RESULT MaybeObject* AllocateCodeCache();
+
+  // Allocates a serialized scope info.
+  MUST_USE_RESULT MaybeObject* AllocateSerializedScopeInfo(int length);
+
+  // Allocates an empty PolymorphicCodeCache.
+  MUST_USE_RESULT MaybeObject* AllocatePolymorphicCodeCache();
 
   // Clear the Instanceof cache (used when a prototype changes).
   inline void ClearInstanceofCache();
@@ -616,11 +626,32 @@ class Heap {
   // Failure::RetryAfterGC(requested_bytes, space) if the allocation failed.
   MUST_USE_RESULT MaybeObject* CopyFixedArrayWithMap(FixedArray* src, Map* map);
 
+  // Make a copy of src and return it. Returns
+  // Failure::RetryAfterGC(requested_bytes, space) if the allocation failed.
+  MUST_USE_RESULT inline MaybeObject* CopyFixedDoubleArray(
+      FixedDoubleArray* src);
+
+  // Make a copy of src, set the map, and return the copy. Returns
+  // Failure::RetryAfterGC(requested_bytes, space) if the allocation failed.
+  MUST_USE_RESULT MaybeObject* CopyFixedDoubleArrayWithMap(
+      FixedDoubleArray* src, Map* map);
+
   // Allocates a fixed array initialized with the hole values.
   // Returns Failure::RetryAfterGC(requested_bytes, space) if the allocation
   // failed.
   // Please note this does not perform a garbage collection.
   MUST_USE_RESULT MaybeObject* AllocateFixedArrayWithHoles(
+      int length,
+      PretenureFlag pretenure = NOT_TENURED);
+
+  MUST_USE_RESULT MaybeObject* AllocateRawFixedDoubleArray(
+      int length,
+      PretenureFlag pretenure);
+
+  // Allocates a fixed double array with uninitialized values. Returns
+  // Failure::RetryAfterGC(requested_bytes, space) if the allocation failed.
+  // Please note this does not perform a garbage collection.
+  MUST_USE_RESULT MaybeObject* AllocateUninitializedFixedDoubleArray(
       int length,
       PretenureFlag pretenure = NOT_TENURED);
 
@@ -634,12 +665,22 @@ class Heap {
 
   // Allocate a function context.
   MUST_USE_RESULT MaybeObject* AllocateFunctionContext(int length,
-                                                       JSFunction* closure);
+                                                       JSFunction* function);
 
+  // Allocate a catch context.
+  MUST_USE_RESULT MaybeObject* AllocateCatchContext(JSFunction* function,
+                                                    Context* previous,
+                                                    String* name,
+                                                    Object* thrown_object);
   // Allocate a 'with' context.
-  MUST_USE_RESULT MaybeObject* AllocateWithContext(Context* previous,
-                                                   JSObject* extension,
-                                                   bool is_catch_context);
+  MUST_USE_RESULT MaybeObject* AllocateWithContext(JSFunction* function,
+                                                   Context* previous,
+                                                   JSObject* extension);
+
+  // Allocate a block context.
+  MUST_USE_RESULT MaybeObject* AllocateBlockContext(JSFunction* function,
+                                                    Context* previous,
+                                                    SerializedScopeInfo* info);
 
   // Allocates a new utility object in the old generation.
   MUST_USE_RESULT MaybeObject* AllocateStruct(InstanceType type);
@@ -696,12 +737,12 @@ class Heap {
   // Please note this does not perform a garbage collection.
   MUST_USE_RESULT inline MaybeObject* NumberFromUint32(uint32_t value);
 
-  // Allocates a new proxy object.
+  // Allocates a new foreign object.
   // Returns Failure::RetryAfterGC(requested_bytes, space) if the allocation
   // failed.
   // Please note this does not perform a garbage collection.
-  MUST_USE_RESULT MaybeObject* AllocateProxy(
-      Address proxy, PretenureFlag pretenure = NOT_TENURED);
+  MUST_USE_RESULT MaybeObject* AllocateForeign(
+      Address address, PretenureFlag pretenure = NOT_TENURED);
 
   // Allocates a new SharedFunctionInfo object.
   // Returns Failure::RetryAfterGC(requested_bytes, space) if the allocation
@@ -798,6 +839,10 @@ class Heap {
     return LookupSymbol(CStrVector(str));
   }
   MUST_USE_RESULT MaybeObject* LookupSymbol(String* str);
+  MUST_USE_RESULT MaybeObject* LookupAsciiSymbol(Handle<SeqAsciiString> string,
+                                                 int from,
+                                                 int length);
+
   bool LookupSymbolIfExists(String* str, String** symbol);
   bool LookupTwoCharsSymbolIfExists(String* str, String** symbol);
 
@@ -1030,10 +1075,8 @@ class Heap {
   void ZapFromSpace();
 #endif
 
-#if defined(ENABLE_LOGGING_AND_PROFILING)
   // Print short heap statistics.
   void PrintShortHeapStatistics();
-#endif
 
   // Makes a new symbol object
   // Returns Failure::RetryAfterGC(requested_bytes, space) if the allocation
@@ -1057,6 +1100,8 @@ class Heap {
 
   enum HeapState { NOT_IN_GC, SCAVENGE, MARK_COMPACT };
   inline HeapState gc_state() { return gc_state_; }
+
+  inline bool IsInGCPostProcessing() { return gc_post_processing_depth_ > 0; }
 
 #ifdef DEBUG
   bool IsAllocationAllowed() { return allocation_allowed_; }
@@ -1232,6 +1277,11 @@ class Heap {
     return &external_string_table_;
   }
 
+  // Returns the current sweep generation.
+  int sweep_generation() {
+    return sweep_generation_;
+  }
+
   inline Isolate* isolate();
   bool is_safe_to_read_maps() { return is_safe_to_read_maps_; }
 
@@ -1261,6 +1311,9 @@ class Heap {
   // scavenge since last new space expansion.
   int survived_since_last_expansion_;
 
+  // For keeping track on when to flush RegExp code.
+  int sweep_generation_;
+
   int always_allocate_scope_depth_;
   int linear_allocation_scope_depth_;
 
@@ -1281,6 +1334,7 @@ class Heap {
   CellSpace* cell_space_;
   LargeObjectSpace* lo_space_;
   HeapState gc_state_;
+  int gc_post_processing_depth_;
 
   // Returns the size of object residing in non new spaces.
   intptr_t PromotedSpaceSize();
@@ -1457,6 +1511,9 @@ class Heap {
   // Allocate empty fixed array.
   MUST_USE_RESULT MaybeObject* AllocateEmptyFixedArray();
 
+  // Allocate empty fixed double array.
+  MUST_USE_RESULT MaybeObject* AllocateEmptyFixedDoubleArray();
+
   void SwitchScavengingVisitorsTableIfProfilingWasEnabled();
 
   // Performs a minor collection in new generation.
@@ -1478,11 +1535,9 @@ class Heap {
   // around a GC).
   inline void CompletelyClearInstanceofCache();
 
-#if defined(DEBUG) || defined(ENABLE_LOGGING_AND_PROFILING)
   // Record statistics before and after garbage collection.
   void ReportStatisticsBeforeGC();
   void ReportStatisticsAfterGC();
-#endif
 
   // Slow part of scavenge object.
   static void ScavengeObjectSlow(HeapObject** p, HeapObject* object);
@@ -1605,6 +1660,7 @@ class Heap {
   friend class Page;
   friend class Isolate;
   friend class MarkCompactCollector;
+  friend class StaticMarkingVisitor;
   friend class MapCompact;
 
   DISALLOW_COPY_AND_ASSIGN(Heap);
@@ -1634,7 +1690,7 @@ class HeapStats {
   int* weak_global_handle_count;        // 15
   int* pending_global_handle_count;     // 16
   int* near_death_global_handle_count;  // 17
-  int* destroyed_global_handle_count;   // 18
+  int* free_global_handle_count;        // 18
   intptr_t* memory_allocator_size;           // 19
   intptr_t* memory_allocator_capacity;       // 20
   int* objects_per_type;                // 21
@@ -1902,6 +1958,7 @@ class DescriptorLookupCache {
   void Clear();
 
   static const int kAbsent = -2;
+
  private:
   DescriptorLookupCache() {
     for (int i = 0; i < kLength; ++i) {
@@ -2117,6 +2174,27 @@ class GCTracer BASE_EMBEDDED {
   intptr_t promoted_objects_size_;
 
   Heap* heap_;
+};
+
+
+class StringSplitCache {
+ public:
+  static Object* Lookup(FixedArray* cache, String* string, String* pattern);
+  static void Enter(Heap* heap,
+                    FixedArray* cache,
+                    String* string,
+                    String* pattern,
+                    FixedArray* array);
+  static void Clear(FixedArray* cache);
+  static const int kStringSplitCacheSize = 0x100;
+
+ private:
+  static const int kArrayEntriesPerCacheEntry = 4;
+  static const int kStringOffset = 0;
+  static const int kPatternOffset = 1;
+  static const int kArrayOffset = 2;
+
+  static MaybeObject* WrapFixedArrayInJSArray(Object* fixed_array);
 };
 
 

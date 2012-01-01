@@ -1,4 +1,4 @@
-// Copyright 2010 the V8 project authors. All rights reserved.
+// Copyright 2011 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -30,13 +30,13 @@
 
 #include "assembler.h"
 #include "mips/assembler-mips.h"
+#include "v8globals.h"
 
 namespace v8 {
 namespace internal {
 
 // Forward declaration.
 class JumpTarget;
-class PostCallGenerator;
 
 // Reserved Register Usage Summary.
 //
@@ -50,20 +50,16 @@ class PostCallGenerator;
 // trying to update gp register for position-independent-code. Whenever
 // MIPS generated code calls C code, it must be via t9 register.
 
-// Registers aliases
+
+// Register aliases.
 // cp is assumed to be a callee saved register.
+const Register lithiumScratchReg = s3;  // Scratch register.
+const Register lithiumScratchReg2 = s4;  // Scratch register.
+const Register condReg = s5;  // Simulated (partial) condition code for mips.
 const Register roots = s6;  // Roots array pointer.
-const Register cp = s7;     // JavaScript context pointer
-const Register fp = s8_fp;  // Alias fp
-// Register used for condition evaluation.
-const Register condReg1 = s4;
-const Register condReg2 = s5;
-
-enum InvokeJSFlags {
-  CALL_JS,
-  JUMP_JS
-};
-
+const Register cp = s7;     // JavaScript context pointer.
+const Register fp = s8_fp;  // Alias for fp.
+const DoubleRegister lithiumScratchDouble = f30;  // Double scratch register.
 
 // Flags used for the AllocateInNewSpace functions.
 enum AllocationFlags {
@@ -95,49 +91,50 @@ enum BranchDelaySlot {
   PROTECT
 };
 
+
+// -----------------------------------------------------------------------------
+// Static helper functions.
+
+static MemOperand ContextOperand(Register context, int index) {
+  return MemOperand(context, Context::SlotOffset(index));
+}
+
+
+static inline MemOperand GlobalObjectOperand()  {
+  return ContextOperand(cp, Context::GLOBAL_INDEX);
+}
+
+
+// Generate a MemOperand for loading a field from an object.
+static inline MemOperand FieldMemOperand(Register object, int offset) {
+  return MemOperand(object, offset - kHeapObjectTag);
+}
+
+
+// Generate a MemOperand for storing arguments 5..N on the stack
+// when calling CallCFunction().
+static inline MemOperand CFunctionArgumentOperand(int index) {
+  ASSERT(index > kCArgSlotCount);
+  // Argument 5 takes the slot just past the four Arg-slots.
+  int offset = (index - 5) * kPointerSize + kCArgsSlotsSize;
+  return MemOperand(sp, offset);
+}
+
+
 // MacroAssembler implements a collection of frequently used macros.
 class MacroAssembler: public Assembler {
  public:
-  MacroAssembler(void* buffer, int size);
+  // The isolate parameter can be NULL if the macro assembler should
+  // not use isolate-dependent functionality. In this case, it's the
+  // responsibility of the caller to never invoke such function on the
+  // macro assembler.
+  MacroAssembler(Isolate* isolate, void* buffer, int size);
 
-// Arguments macros
+  // Arguments macros.
 #define COND_TYPED_ARGS Condition cond, Register r1, const Operand& r2
 #define COND_ARGS cond, r1, r2
 
-// ** Prototypes
-
-// * Prototypes for functions with no target (eg Ret()).
-#define DECLARE_NOTARGET_PROTOTYPE(Name) \
-  void Name(BranchDelaySlot bd = PROTECT); \
-  void Name(COND_TYPED_ARGS, BranchDelaySlot bd = PROTECT); \
-  inline void Name(BranchDelaySlot bd, COND_TYPED_ARGS) { \
-    Name(COND_ARGS, bd); \
-  }
-
-// * Prototypes for functions with a target.
-
-// Cases when relocation may be needed.
-#define DECLARE_RELOC_PROTOTYPE(Name, target_type) \
-  void Name(target_type target, \
-            RelocInfo::Mode rmode, \
-            BranchDelaySlot bd = PROTECT); \
-  inline void Name(BranchDelaySlot bd, \
-                   target_type target, \
-                   RelocInfo::Mode rmode) { \
-    Name(target, rmode, bd); \
-  } \
-  void Name(target_type target, \
-            RelocInfo::Mode rmode, \
-            COND_TYPED_ARGS, \
-            BranchDelaySlot bd = PROTECT); \
-  inline void Name(BranchDelaySlot bd, \
-                   target_type target, \
-                   RelocInfo::Mode rmode, \
-                   COND_TYPED_ARGS) { \
-    Name(target, rmode, COND_ARGS, bd); \
-  }
-
-// Cases when relocation is not needed.
+  // Cases when relocation is not needed.
 #define DECLARE_NORELOC_PROTOTYPE(Name, target_type) \
   void Name(target_type target, BranchDelaySlot bd = PROTECT); \
   inline void Name(BranchDelaySlot bd, target_type target) { \
@@ -152,34 +149,45 @@ class MacroAssembler: public Assembler {
     Name(target, COND_ARGS, bd); \
   }
 
-// ** Target prototypes.
-
-#define DECLARE_JUMP_CALL_PROTOTYPES(Name) \
-  DECLARE_NORELOC_PROTOTYPE(Name, Register) \
-  DECLARE_NORELOC_PROTOTYPE(Name, const Operand&) \
-  DECLARE_RELOC_PROTOTYPE(Name, byte*) \
-  DECLARE_RELOC_PROTOTYPE(Name, Handle<Code>)
-
 #define DECLARE_BRANCH_PROTOTYPES(Name) \
   DECLARE_NORELOC_PROTOTYPE(Name, Label*) \
   DECLARE_NORELOC_PROTOTYPE(Name, int16_t)
 
+  DECLARE_BRANCH_PROTOTYPES(Branch)
+  DECLARE_BRANCH_PROTOTYPES(BranchAndLink)
 
-DECLARE_JUMP_CALL_PROTOTYPES(Jump)
-DECLARE_JUMP_CALL_PROTOTYPES(Call)
-
-DECLARE_BRANCH_PROTOTYPES(Branch)
-DECLARE_BRANCH_PROTOTYPES(BranchAndLink)
-
-DECLARE_NOTARGET_PROTOTYPE(Ret)
-
+#undef DECLARE_BRANCH_PROTOTYPES
 #undef COND_TYPED_ARGS
 #undef COND_ARGS
-#undef DECLARE_NOTARGET_PROTOTYPE
-#undef DECLARE_NORELOC_PROTOTYPE
-#undef DECLARE_RELOC_PROTOTYPE
-#undef DECLARE_JUMP_CALL_PROTOTYPES
-#undef DECLARE_BRANCH_PROTOTYPES
+
+
+  // Jump, Call, and Ret pseudo instructions implementing inter-working.
+#define COND_ARGS Condition cond = al, Register rs = zero_reg, \
+  const Operand& rt = Operand(zero_reg), BranchDelaySlot bd = PROTECT
+
+  void Jump(Register target, COND_ARGS);
+  void Jump(intptr_t target, RelocInfo::Mode rmode, COND_ARGS);
+  void Jump(Address target, RelocInfo::Mode rmode, COND_ARGS);
+  void Jump(Handle<Code> code, RelocInfo::Mode rmode, COND_ARGS);
+  static int CallSize(Register target, COND_ARGS);
+  void Call(Register target, COND_ARGS);
+  static int CallSize(Address target, RelocInfo::Mode rmode, COND_ARGS);
+  void Call(Address target, RelocInfo::Mode rmode, COND_ARGS);
+  static int CallSize(Handle<Code> code,
+                      RelocInfo::Mode rmode = RelocInfo::CODE_TARGET,
+                      unsigned ast_id = kNoASTId,
+                      COND_ARGS);
+  void Call(Handle<Code> code,
+            RelocInfo::Mode rmode = RelocInfo::CODE_TARGET,
+            unsigned ast_id = kNoASTId,
+            COND_ARGS);
+  void Ret(COND_ARGS);
+  inline void Ret(BranchDelaySlot bd, Condition cond = al,
+    Register rs = zero_reg, const Operand& rt = Operand(zero_reg)) {
+    Ret(cond, rs, rt, bd);
+  }
+
+#undef COND_ARGS
 
   // Emit code to discard a non-negative number of pointer-sized elements
   // from the stack, clobbering only the sp register.
@@ -198,9 +206,30 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   void Swap(Register reg1, Register reg2, Register scratch = no_reg);
 
   void Call(Label* target);
-  // May do nothing if the registers are identical.
-  void Move(Register dst, Register src);
 
+  inline void Move(Register dst, Register src) {
+    if (!dst.is(src)) {
+      mov(dst, src);
+    }
+  }
+
+  inline void Move(FPURegister dst, FPURegister src) {
+    if (!dst.is(src)) {
+      mov_d(dst, src);
+    }
+  }
+
+  inline void Move(Register dst_low, Register dst_high, FPURegister src) {
+    mfc1(dst_low, src);
+    mfc1(dst_high, FPURegister::from_code(src.code() + 1));
+  }
+
+  inline void Move(FPURegister dst, Register src_low, Register src_high) {
+    mtc1(src_low, dst);
+    mtc1(src_high, FPURegister::from_code(dst.code() + 1));
+  }
+
+  void Move(FPURegister dst, double imm);
 
   // Jump unconditionally to given label.
   // We NEED a nop in the branch delay slot, as it used by v8, for example in
@@ -262,7 +291,7 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
 
 
   // ---------------------------------------------------------------------------
-  // Inline caching support
+  // Inline caching support.
 
   // Generate code for checking access rights - used for security checks
   // on access to global objects across environments. The holder register
@@ -270,6 +299,16 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   void CheckAccessGlobalProxy(Register holder_reg,
                               Register scratch,
                               Label* miss);
+
+
+  void LoadFromNumberDictionary(Label* miss,
+                                Register elements,
+                                Register key,
+                                Register result,
+                                Register reg0,
+                                Register reg1,
+                                Register reg2);
+
 
   inline void MarkCode(NopMarkerTypes type) {
     nop(type);
@@ -306,7 +345,7 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
 
 
   // ---------------------------------------------------------------------------
-  // Allocation support
+  // Allocation support.
 
   // Allocate an object in new space. The object_size is specified
   // either in bytes or in words if the allocation flag SIZE_IN_WORDS
@@ -357,6 +396,16 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
                                Register scratch1,
                                Register scratch2,
                                Label* gc_required);
+  void AllocateTwoByteSlicedString(Register result,
+                                   Register length,
+                                   Register scratch1,
+                                   Register scratch2,
+                                   Label* gc_required);
+  void AllocateAsciiSlicedString(Register result,
+                                 Register length,
+                                 Register scratch1,
+                                 Register scratch2,
+                                 Label* gc_required);
 
   // Allocates a heap number or jumps to the gc_required label if the young
   // space is full and a scavenge is needed. All registers are clobbered also
@@ -373,7 +422,7 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
                                    Label* gc_required);
 
   // ---------------------------------------------------------------------------
-  // Instruction macros
+  // Instruction macros.
 
 #define DEFINE_INSTRUCTION(instr)                                              \
   void instr(Register rd, Register rs, const Operand& rt);                     \
@@ -405,6 +454,7 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   DEFINE_INSTRUCTION(Or);
   DEFINE_INSTRUCTION(Xor);
   DEFINE_INSTRUCTION(Nor);
+  DEFINE_INSTRUCTION2(Neg);
 
   DEFINE_INSTRUCTION(Slt);
   DEFINE_INSTRUCTION(Sltu);
@@ -416,12 +466,12 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
 #undef DEFINE_INSTRUCTION2
 
 
-  //------------Pseudo-instructions-------------
+  // ---------------------------------------------------------------------------
+  // Pseudo-instructions.
 
   void mov(Register rd, Register rt) { or_(rd, rt, zero_reg); }
 
-
-  // load int32 in the rd register
+  // Load int32 in the rd register.
   void li(Register rd, Operand j, bool gen2instr = false);
   inline void li(Register rd, int32_t j, bool gen2instr = false) {
     li(rd, Operand(j), gen2instr);
@@ -430,112 +480,139 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
     li(dst, Operand(value), gen2instr);
   }
 
-  // Exception-generating instructions and debugging support
-  void stop(const char* msg);
-
-
   // Push multiple registers on the stack.
   // Registers are saved in numerical order, with higher numbered registers
-  // saved in higher memory addresses
+  // saved in higher memory addresses.
   void MultiPush(RegList regs);
   void MultiPushReversed(RegList regs);
 
-  void Push(Register src) {
+  void MultiPushFPU(RegList regs);
+  void MultiPushReversedFPU(RegList regs);
+
+  // Lower case push() for compatibility with arch-independent code.
+  void push(Register src) {
     Addu(sp, sp, Operand(-kPointerSize));
     sw(src, MemOperand(sp, 0));
   }
 
-  // Push two registers.  Pushes leftmost register first (to highest address).
-  void Push(Register src1, Register src2, Condition cond = al) {
-    ASSERT(cond == al);  // Do not support conditional versions yet.
+  // Push a handle.
+  void Push(Handle<Object> handle);
+
+  // Push two registers. Pushes leftmost register first (to highest address).
+  void Push(Register src1, Register src2) {
     Subu(sp, sp, Operand(2 * kPointerSize));
     sw(src1, MemOperand(sp, 1 * kPointerSize));
     sw(src2, MemOperand(sp, 0 * kPointerSize));
   }
 
-  // Push three registers.  Pushes leftmost register first (to highest address).
-  void Push(Register src1, Register src2, Register src3, Condition cond = al) {
-    ASSERT(cond == al);  // Do not support conditional versions yet.
-    Addu(sp, sp, Operand(3 * -kPointerSize));
+  // Push three registers. Pushes leftmost register first (to highest address).
+  void Push(Register src1, Register src2, Register src3) {
+    Subu(sp, sp, Operand(3 * kPointerSize));
     sw(src1, MemOperand(sp, 2 * kPointerSize));
     sw(src2, MemOperand(sp, 1 * kPointerSize));
     sw(src3, MemOperand(sp, 0 * kPointerSize));
   }
 
-  // Push four registers.  Pushes leftmost register first (to highest address).
-  void Push(Register src1, Register src2,
-            Register src3, Register src4, Condition cond = al) {
-    ASSERT(cond == al);  // Do not support conditional versions yet.
-    Addu(sp, sp, Operand(4 * -kPointerSize));
+  // Push four registers. Pushes leftmost register first (to highest address).
+  void Push(Register src1, Register src2, Register src3, Register src4) {
+    Subu(sp, sp, Operand(4 * kPointerSize));
     sw(src1, MemOperand(sp, 3 * kPointerSize));
     sw(src2, MemOperand(sp, 2 * kPointerSize));
     sw(src3, MemOperand(sp, 1 * kPointerSize));
     sw(src4, MemOperand(sp, 0 * kPointerSize));
   }
 
-  inline void push(Register src) { Push(src); }
-  inline void pop(Register src) { Pop(src); }
-
   void Push(Register src, Condition cond, Register tst1, Register tst2) {
-    // Since we don't have conditionnal execution we use a Branch.
+    // Since we don't have conditional execution we use a Branch.
     Branch(3, cond, tst1, Operand(tst2));
-    Addu(sp, sp, Operand(-kPointerSize));
+    Subu(sp, sp, Operand(kPointerSize));
     sw(src, MemOperand(sp, 0));
   }
-
 
   // Pops multiple values from the stack and load them in the
   // registers specified in regs. Pop order is the opposite as in MultiPush.
   void MultiPop(RegList regs);
   void MultiPopReversed(RegList regs);
-  void Pop(Register dst) {
+
+  void MultiPopFPU(RegList regs);
+  void MultiPopReversedFPU(RegList regs);
+
+  // Lower case pop() for compatibility with arch-independent code.
+  void pop(Register dst) {
     lw(dst, MemOperand(sp, 0));
     Addu(sp, sp, Operand(kPointerSize));
   }
+
+  // Pop two registers. Pops rightmost register first (from lower address).
+  void Pop(Register src1, Register src2) {
+    ASSERT(!src1.is(src2));
+    lw(src2, MemOperand(sp, 0 * kPointerSize));
+    lw(src1, MemOperand(sp, 1 * kPointerSize));
+    Addu(sp, sp, 2 * kPointerSize);
+  }
+
+  // Pop three registers. Pops rightmost register first (from lower address).
+  void Pop(Register src1, Register src2, Register src3) {
+    lw(src3, MemOperand(sp, 0 * kPointerSize));
+    lw(src2, MemOperand(sp, 1 * kPointerSize));
+    lw(src1, MemOperand(sp, 2 * kPointerSize));
+    Addu(sp, sp, 3 * kPointerSize);
+  }
+
   void Pop(uint32_t count = 1) {
     Addu(sp, sp, Operand(count * kPointerSize));
   }
 
-  // ---------------------------------------------------------------------------
-  // These functions are only used by crankshaft, so they are currently
-  // unimplemented.
-
   // Push and pop the registers that can hold pointers, as defined by the
   // RegList constant kSafepointSavedRegisters.
-  void PushSafepointRegisters() {
-    UNIMPLEMENTED_MIPS();
-  }
-
-  void PopSafepointRegisters() {
-    UNIMPLEMENTED_MIPS();
-  }
-
-  void PushSafepointRegistersAndDoubles() {
-    UNIMPLEMENTED_MIPS();
-  }
-
-  void PopSafepointRegistersAndDoubles() {
-    UNIMPLEMENTED_MIPS();
-  }
-
-  static int SafepointRegisterStackIndex(int reg_code) {
-    UNIMPLEMENTED_MIPS();
-    return 0;
-  }
-
-  // ---------------------------------------------------------------------------
+  void PushSafepointRegisters();
+  void PopSafepointRegisters();
+  void PushSafepointRegistersAndDoubles();
+  void PopSafepointRegistersAndDoubles();
+  // Store value in register src in the safepoint stack slot for
+  // register dst.
+  void StoreToSafepointRegisterSlot(Register src, Register dst);
+  void StoreToSafepointRegistersAndDoublesSlot(Register src, Register dst);
+  // Load the value of the src register from its safepoint stack slot
+  // into register dst.
+  void LoadFromSafepointRegisterSlot(Register dst, Register src);
 
   // MIPS32 R2 instruction macro.
   void Ins(Register rt, Register rs, uint16_t pos, uint16_t size);
   void Ext(Register rt, Register rs, uint16_t pos, uint16_t size);
 
+  // Flush the I-cache from asm code. You should use CPU::FlushICache from C.
+  // Does not handle errors.
+  void FlushICache(Register address, unsigned instructions);
+
+  // ---------------------------------------------------------------------------
+  // FPU macros. These do not handle special cases like NaN or +- inf.
+
   // Convert unsigned word to double.
-  void Cvt_d_uw(FPURegister fd, FPURegister fs);
-  void Cvt_d_uw(FPURegister fd, Register rs);
+  void Cvt_d_uw(FPURegister fd, FPURegister fs, FPURegister scratch);
+  void Cvt_d_uw(FPURegister fd, Register rs, FPURegister scratch);
 
   // Convert double to unsigned word.
-  void Trunc_uw_d(FPURegister fd, FPURegister fs);
-  void Trunc_uw_d(FPURegister fd, Register rs);
+  void Trunc_uw_d(FPURegister fd, FPURegister fs, FPURegister scratch);
+  void Trunc_uw_d(FPURegister fd, Register rs, FPURegister scratch);
+
+  // Wrapper function for the different cmp/branch types.
+  void BranchF(Label* target,
+               Label* nan,
+               Condition cc,
+               FPURegister cmp1,
+               FPURegister cmp2,
+               BranchDelaySlot bd = PROTECT);
+
+  // Alternate (inline) version for better readability with USE_DELAY_SLOT.
+  inline void BranchF(BranchDelaySlot bd,
+                      Label* target,
+                      Label* nan,
+                      Condition cc,
+                      FPURegister cmp1,
+                      FPURegister cmp2) {
+    BranchF(target, nan, cc, cmp1, cmp2, bd);
+  };
 
   // Convert the HeapNumber pointed to by source to a 32bits signed integer
   // dest. If the HeapNumber does not fit into a 32bits signed integer branch
@@ -548,8 +625,42 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
                       FPURegister double_scratch,
                       Label *not_int32);
 
+  // Truncates a double using a specific rounding mode.
+  // The except_flag will contain any exceptions caused by the instruction.
+  // If check_inexact is kDontCheckForInexactConversion, then the inexacat
+  // exception is masked.
+  void EmitFPUTruncate(FPURoundingMode rounding_mode,
+                       FPURegister result,
+                       DoubleRegister double_input,
+                       Register scratch1,
+                       Register except_flag,
+                       CheckForInexactConversion check_inexact
+                           = kDontCheckForInexactConversion);
+
+  // Helper for EmitECMATruncate.
+  // This will truncate a floating-point value outside of the singed 32bit
+  // integer range to a 32bit signed integer.
+  // Expects the double value loaded in input_high and input_low.
+  // Exits with the answer in 'result'.
+  // Note that this code does not work for values in the 32bit range!
+  void EmitOutOfInt32RangeTruncate(Register result,
+                                   Register input_high,
+                                   Register input_low,
+                                   Register scratch);
+
+  // Performs a truncating conversion of a floating point number as used by
+  // the JS bitwise operations. See ECMA-262 9.5: ToInt32.
+  // Exits with 'result' holding the answer and all other registers clobbered.
+  void EmitECMATruncate(Register result,
+                        FPURegister double_input,
+                        FPURegister single_scratch,
+                        Register scratch,
+                        Register scratch2,
+                        Register scratch3);
+
+
   // -------------------------------------------------------------------------
-  // Activation frames
+  // Activation frames.
 
   void EnterInternalFrame() { EnterFrame(StackFrame::INTERNAL); }
   void LeaveInternalFrame() { LeaveFrame(StackFrame::INTERNAL); }
@@ -558,22 +669,20 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   void LeaveConstructFrame() { LeaveFrame(StackFrame::CONSTRUCT); }
 
   // Enter exit frame.
-  // Expects the number of arguments in register a0 and
-  // the builtin function to call in register a1.
-  // On output hold_argc, hold_function, and hold_argv are setup.
-  void EnterExitFrame(Register hold_argc,
-                      Register hold_argv,
-                      Register hold_function,
-                      bool save_doubles);
+  // argc - argument count to be dropped by LeaveExitFrame.
+  // save_doubles - saves FPU registers on stack, currently disabled.
+  // stack_space - extra stack space.
+  void EnterExitFrame(bool save_doubles,
+                      int stack_space = 0);
 
-  // Leave the current exit frame. Expects the return value in v0.
-  void LeaveExitFrame(bool save_doubles);
-
-  // Align the stack by optionally pushing a Smi zero.
-  void AlignStack(int offset);    // TODO(mips) : remove this function.
+  // Leave the current exit frame.
+  void LeaveExitFrame(bool save_doubles, Register arg_count);
 
   // Get the actual activation frame alignment for target environment.
   static int ActivationFrameAlignment();
+
+  // Make sure the stack is aligned. Only emits code in debug mode.
+  void AssertStackIsAligned();
 
   void LoadContext(Register dst, int context_chain_length);
 
@@ -586,31 +695,40 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
                                     Register scratch);
 
   // -------------------------------------------------------------------------
-  // JavaScript invokes
+  // JavaScript invokes.
+
+  // Setup call kind marking in t1. The method takes t1 as an
+  // explicit first parameter to make the code more readable at the
+  // call sites.
+  void SetCallKind(Register dst, CallKind kind);
 
   // Invoke the JavaScript function code by either calling or jumping.
   void InvokeCode(Register code,
                   const ParameterCount& expected,
                   const ParameterCount& actual,
                   InvokeFlag flag,
-                  PostCallGenerator* post_call_generator = NULL);
+                  const CallWrapper& call_wrapper,
+                  CallKind call_kind);
 
   void InvokeCode(Handle<Code> code,
                   const ParameterCount& expected,
                   const ParameterCount& actual,
                   RelocInfo::Mode rmode,
-                  InvokeFlag flag);
+                  InvokeFlag flag,
+                  CallKind call_kind);
 
   // Invoke the JavaScript function in the given register. Changes the
   // current context to the context in the function before invoking.
   void InvokeFunction(Register function,
                       const ParameterCount& actual,
                       InvokeFlag flag,
-                      PostCallGenerator* post_call_generator = NULL);
+                      const CallWrapper& call_wrapper,
+                      CallKind call_kind);
 
   void InvokeFunction(JSFunction* function,
                       const ParameterCount& actual,
-                      InvokeFlag flag);
+                      InvokeFlag flag,
+                      CallKind call_kind);
 
 
   void IsObjectJSObjectType(Register heap_object,
@@ -628,14 +746,14 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
 
 #ifdef ENABLE_DEBUGGER_SUPPORT
   // -------------------------------------------------------------------------
-  // Debugger Support
+  // Debugger Support.
 
   void DebugBreak();
 #endif
 
 
   // -------------------------------------------------------------------------
-  // Exception handling
+  // Exception handling.
 
   // Push a new try handler and link into try handler chain.
   // The return address must be passed in register ra.
@@ -646,8 +764,23 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   // Must preserve the result register.
   void PopTryHandler();
 
+  // Passes thrown value (in v0) to the handler of top of the try handler chain.
+  void Throw(Register value);
+
+  // Propagates an uncatchable exception to the top of the current JS stack's
+  // handler chain.
+  void ThrowUncatchable(UncatchableExceptionType type, Register value);
+
   // Copies a fixed number of fields of heap objects from src to dst.
   void CopyFields(Register dst, Register src, RegList temps, int field_count);
+
+  // Copies a number of bytes from src to dst. All registers are clobbered. On
+  // exit src and dst will point to the place just after where the last byte was
+  // read or written and length will be zero.
+  void CopyBytes(Register src,
+                 Register dst,
+                 Register length,
+                 Register scratch);
 
   // -------------------------------------------------------------------------
   // Support functions.
@@ -666,31 +799,65 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
                      Register map,
                      Register type_reg);
 
+  // Check if a map for a JSObject indicates that the object has fast elements.
+  // Jump to the specified label if it does not.
+  void CheckFastElements(Register map,
+                         Register scratch,
+                         Label* fail);
+
   // Check if the map of an object is equal to a specified map (either
   // given directly or as an index into the root list) and branch to
   // label if not. Skip the smi check if not required (object is known
-  // to be a heap object)
+  // to be a heap object).
   void CheckMap(Register obj,
                 Register scratch,
                 Handle<Map> map,
                 Label* fail,
-                bool is_heap_object);
+                SmiCheckType smi_check_type);
 
   void CheckMap(Register obj,
                 Register scratch,
                 Heap::RootListIndex index,
                 Label* fail,
-                bool is_heap_object);
+                SmiCheckType smi_check_type);
+
+  // Check if the map of an object is equal to a specified map and branch to a
+  // specified target if equal. Skip the smi check if not required (object is
+  // known to be a heap object)
+  void DispatchMap(Register obj,
+                   Register scratch,
+                   Handle<Map> map,
+                   Handle<Code> success,
+                   SmiCheckType smi_check_type);
 
   // Generates code for reporting that an illegal operation has
   // occurred.
   void IllegalOperation(int num_arguments);
+
+
+  // Load and check the instance type of an object for being a string.
+  // Loads the type into the second argument register.
+  // Returns a condition that will be enabled if the object was a string.
+  Condition IsObjectStringType(Register obj,
+                               Register type,
+                               Register result) {
+    lw(type, FieldMemOperand(obj, HeapObject::kMapOffset));
+    lbu(type, FieldMemOperand(type, Map::kInstanceTypeOffset));
+    And(type, type, Operand(kIsNotStringMask));
+    ASSERT_EQ(0, kStringTag);
+    return eq;
+  }
+
 
   // Picks out an array index from the hash field.
   // Register use:
   //   hash - holds the index's hash. Clobbered.
   //   index - holds the overwritten index on exit.
   void IndexFromHash(Register hash, Register index);
+
+  // Get the number of least significant bits from a register.
+  void GetLeastBitsFromSmi(Register dst, Register src, int num_least_bits);
+  void GetLeastBitsFromInt32(Register dst, Register src, int mun_least_bits);
 
   // Load the value of a number object into a FPU double register. If the
   // object is not a number a jump to the label not_number is performed
@@ -712,14 +879,69 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
                               Register scratch1);
 
   // -------------------------------------------------------------------------
-  // Runtime calls
+  // Overflow handling functions.
+  // Usage: first call the appropriate arithmetic function, then call one of the
+  // jump functions with the overflow_dst register as the second parameter.
+
+  void AdduAndCheckForOverflow(Register dst,
+                               Register left,
+                               Register right,
+                               Register overflow_dst,
+                               Register scratch = at);
+
+  void SubuAndCheckForOverflow(Register dst,
+                               Register left,
+                               Register right,
+                               Register overflow_dst,
+                               Register scratch = at);
+
+  void BranchOnOverflow(Label* label,
+                        Register overflow_check,
+                        BranchDelaySlot bd = PROTECT) {
+    Branch(label, lt, overflow_check, Operand(zero_reg), bd);
+  }
+
+  void BranchOnNoOverflow(Label* label,
+                          Register overflow_check,
+                          BranchDelaySlot bd = PROTECT) {
+    Branch(label, ge, overflow_check, Operand(zero_reg), bd);
+  }
+
+  void RetOnOverflow(Register overflow_check, BranchDelaySlot bd = PROTECT) {
+    Ret(lt, overflow_check, Operand(zero_reg), bd);
+  }
+
+  void RetOnNoOverflow(Register overflow_check, BranchDelaySlot bd = PROTECT) {
+    Ret(ge, overflow_check, Operand(zero_reg), bd);
+  }
+
+  // -------------------------------------------------------------------------
+  // Runtime calls.
 
   // Call a code stub.
   void CallStub(CodeStub* stub, Condition cond = cc_always,
                 Register r1 = zero_reg, const Operand& r2 = Operand(zero_reg));
 
+  // Call a code stub and return the code object called.  Try to generate
+  // the code if necessary.  Do not perform a GC but instead return a retry
+  // after GC failure.
+  MUST_USE_RESULT MaybeObject* TryCallStub(CodeStub* stub,
+                                           Condition cond = cc_always,
+                                           Register r1 = zero_reg,
+                                           const Operand& r2 =
+                                               Operand(zero_reg));
+
   // Tail call a code stub (jump).
   void TailCallStub(CodeStub* stub);
+
+  // Tail call a code stub (jump) and return the code object called.  Try to
+  // generate the code if necessary.  Do not perform a GC but instead return
+  // a retry after GC failure.
+  MUST_USE_RESULT MaybeObject* TryTailCallStub(CodeStub* stub,
+                                               Condition cond = cc_always,
+                                               Register r1 = zero_reg,
+                                               const Operand& r2 =
+                                                   Operand(zero_reg));
 
   void CallJSExitStub(CodeStub* stub);
 
@@ -741,10 +963,19 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
                                  int num_arguments,
                                  int result_size);
 
+  // Tail call of a runtime routine (jump). Try to generate the code if
+  // necessary. Do not perform a GC but instead return a retry after GC
+  // failure.
+  MUST_USE_RESULT MaybeObject* TryTailCallExternalReference(
+      const ExternalReference& ext, int num_arguments, int result_size);
+
   // Convenience function: tail call a runtime routine (jump).
   void TailCallRuntime(Runtime::FunctionId fid,
                        int num_arguments,
                        int result_size);
+
+  int CalculateStackPassedWords(int num_reg_arguments,
+                                int num_double_arguments);
 
   // Before calling a C-function from generated code, align arguments on stack
   // and add space for the four mips argument slots.
@@ -755,7 +986,11 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   // C++ code.
   // Needs a scratch register to do some arithmetic. This register will be
   // trashed.
-  void PrepareCallCFunction(int num_arguments, Register scratch);
+  void PrepareCallCFunction(int num_reg_arguments,
+                            int num_double_registers,
+                            Register scratch);
+  void PrepareCallCFunction(int num_reg_arguments,
+                            Register scratch);
 
   // Arguments 1-4 are placed in registers a0 thru a3 respectively.
   // Arguments 5..n are stored to stack using following:
@@ -768,15 +1003,37 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   // function).
   void CallCFunction(ExternalReference function, int num_arguments);
   void CallCFunction(Register function, Register scratch, int num_arguments);
+  void CallCFunction(ExternalReference function,
+                     int num_reg_arguments,
+                     int num_double_arguments);
+  void CallCFunction(Register function, Register scratch,
+                     int num_reg_arguments,
+                     int num_double_arguments);
+  void GetCFunctionDoubleResult(const DoubleRegister dst);
+
+  // There are two ways of passing double arguments on MIPS, depending on
+  // whether soft or hard floating point ABI is used. These functions
+  // abstract parameter passing for the three different ways we call
+  // C functions from generated code.
+  void SetCallCDoubleArguments(DoubleRegister dreg);
+  void SetCallCDoubleArguments(DoubleRegister dreg1, DoubleRegister dreg2);
+  void SetCallCDoubleArguments(DoubleRegister dreg, Register reg);
+
+  // Calls an API function. Allocates HandleScope, extracts returned value
+  // from handle and propagates exceptions. Restores context.
+  MaybeObject* TryCallApiFunctionAndReturn(ExternalReference function,
+                                           int stack_space);
 
   // Jump to the builtin routine.
   void JumpToExternalReference(const ExternalReference& builtin);
 
+  MaybeObject* TryJumpToExternalReference(const ExternalReference& ext);
+
   // Invoke specified builtin JavaScript function. Adds an entry to
   // the unresolved list if the name does not resolve.
   void InvokeBuiltin(Builtins::JavaScript id,
-                     InvokeJSFlags flags,
-                     PostCallGenerator* post_call_generator = NULL);
+                     InvokeFlag flag,
+                     const CallWrapper& call_wrapper = NullCallWrapper());
 
   // Store the code object for the given builtin in the target register and
   // setup the function in a1.
@@ -787,14 +1044,17 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
 
   struct Unresolved {
     int pc;
-    uint32_t flags;  // see Bootstrapper::FixupFlags decoders/encoders.
+    uint32_t flags;  // See Bootstrapper::FixupFlags decoders/encoders.
     const char* name;
   };
 
-  Handle<Object> CodeObject() { return code_object_; }
+  Handle<Object> CodeObject() {
+    ASSERT(!code_object_.is_null());
+    return code_object_;
+  }
 
   // -------------------------------------------------------------------------
-  // StatsCounter support
+  // StatsCounter support.
 
   void SetCounter(StatsCounter* counter, int value,
                   Register scratch1, Register scratch2);
@@ -805,7 +1065,7 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
 
 
   // -------------------------------------------------------------------------
-  // Debugging
+  // Debugging.
 
   // Calls Abort(msg) if the condition cc is not satisfied.
   // Use --debug_code to enable.
@@ -826,7 +1086,7 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   bool allow_stub_calls() { return allow_stub_calls_; }
 
   // ---------------------------------------------------------------------------
-  // Number utilities
+  // Number utilities.
 
   // Check whether the value of reg is a power of two and not zero. If not
   // control continues at the label not_power_of_two. If reg is a power of two
@@ -837,7 +1097,7 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
                                  Label* not_power_of_two_or_zero);
 
   // -------------------------------------------------------------------------
-  // Smi utilities
+  // Smi utilities.
 
   // Try to convert int32 to smi. If the value is to large, preserve
   // the original value and jump to not_a_smi. Destroys scratch and
@@ -849,6 +1109,13 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
 
   void SmiTag(Register reg) {
     Addu(reg, reg, reg);
+  }
+
+  // Test for overflow < 0: use BranchOnOverflow() or BranchOnNoOverflow().
+  void SmiTagCheckOverflow(Register reg, Register overflow) {
+    mov(overflow, reg);  // Save original value.
+    addu(reg, reg, reg);
+    xor_(overflow, overflow, reg);  // Overflow if (value ^ 2 * value) < 0.
   }
 
   void SmiTag(Register dst, Register src) {
@@ -865,10 +1132,11 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
 
   // Jump the register contains a smi.
   inline void JumpIfSmi(Register value, Label* smi_label,
-                        Register scratch = at) {
+                        Register scratch = at,
+                        BranchDelaySlot bd = PROTECT) {
     ASSERT_EQ(0, kSmiTag);
     andi(scratch, value, kSmiTagMask);
-    Branch(smi_label, eq, scratch, Operand(zero_reg));
+    Branch(bd, smi_label, eq, scratch, Operand(zero_reg));
   }
 
   // Jump if the register contains a non-smi.
@@ -888,13 +1156,16 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   void AbortIfSmi(Register object);
   void AbortIfNotSmi(Register object);
 
+  // Abort execution if argument is a string. Used in debug code.
+  void AbortIfNotString(Register object);
+
   // Abort execution if argument is not the root value with the given index.
   void AbortIfNotRootValue(Register src,
                            Heap::RootListIndex root_value_index,
                            const char* message);
 
   // ---------------------------------------------------------------------------
-  // HeapNumber utilities
+  // HeapNumber utilities.
 
   void JumpIfNotHeapNumber(Register object,
                            Register heap_number_map,
@@ -902,7 +1173,7 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
                            Label* on_not_heap_number);
 
   // -------------------------------------------------------------------------
-  // String utilities
+  // String utilities.
 
   // Checks if both instance types are sequential ASCII strings and jumps to
   // label if either is not.
@@ -935,22 +1206,49 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
                                            Register scratch2,
                                            Label* failure);
 
+  // ---------------------------------------------------------------------------
+  // Patching helpers.
+
+  // Patch the relocated value (lui/ori pair).
+  void PatchRelocatedValue(Register li_location,
+                           Register scratch,
+                           Register new_value);
+
+  void ClampUint8(Register output_reg, Register input_reg);
+
+  void ClampDoubleToUint8(Register result_reg,
+                          DoubleRegister input_reg,
+                          DoubleRegister temp_double_reg);
+
+
+  void LoadInstanceDescriptors(Register map, Register descriptors);
+
  private:
   void CallCFunctionHelper(Register function,
                            ExternalReference function_reference,
                            Register scratch,
-                           int num_arguments);
+                           int num_reg_arguments,
+                           int num_double_arguments);
 
-  void Jump(intptr_t target, RelocInfo::Mode rmode,
-            BranchDelaySlot bd = PROTECT);
-  void Jump(intptr_t target, RelocInfo::Mode rmode, Condition cond = cc_always,
-            Register r1 = zero_reg, const Operand& r2 = Operand(zero_reg),
-            BranchDelaySlot bd = PROTECT);
-  void Call(intptr_t target, RelocInfo::Mode rmode,
-            BranchDelaySlot bd = PROTECT);
-  void Call(intptr_t target, RelocInfo::Mode rmode, Condition cond = cc_always,
-            Register r1 = zero_reg, const Operand& r2 = Operand(zero_reg),
-            BranchDelaySlot bd = PROTECT);
+  void BranchShort(int16_t offset, BranchDelaySlot bdslot = PROTECT);
+  void BranchShort(int16_t offset, Condition cond, Register rs,
+                   const Operand& rt,
+                   BranchDelaySlot bdslot = PROTECT);
+  void BranchShort(Label* L, BranchDelaySlot bdslot = PROTECT);
+  void BranchShort(Label* L, Condition cond, Register rs,
+                   const Operand& rt,
+                   BranchDelaySlot bdslot = PROTECT);
+  void BranchAndLinkShort(int16_t offset, BranchDelaySlot bdslot = PROTECT);
+  void BranchAndLinkShort(int16_t offset, Condition cond, Register rs,
+                          const Operand& rt,
+                          BranchDelaySlot bdslot = PROTECT);
+  void BranchAndLinkShort(Label* L, BranchDelaySlot bdslot = PROTECT);
+  void BranchAndLinkShort(Label* L, Condition cond, Register rs,
+                          const Operand& rt,
+                          BranchDelaySlot bdslot = PROTECT);
+  void J(Label* L, BranchDelaySlot bdslot);
+  void Jr(Label* L, BranchDelaySlot bdslot);
+  void Jalr(Label* L, BranchDelaySlot bdslot);
 
   // Helper functions for generating invokes.
   void InvokePrologue(const ParameterCount& expected,
@@ -959,7 +1257,8 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
                       Register code_reg,
                       Label* done,
                       InvokeFlag flag,
-                      PostCallGenerator* post_call_generator = NULL);
+                      const CallWrapper& call_wrapper,
+                      CallKind call_kind);
 
   // Get the code for the given builtin. Returns if able to resolve
   // the function in the 'resolved' flag.
@@ -975,15 +1274,22 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
                            Register scratch1,
                            Register scratch2);
 
+  // Compute memory operands for safepoint stack slots.
+  static int SafepointRegisterStackIndex(int reg_code);
+  MemOperand SafepointRegisterSlot(Register reg);
+  MemOperand SafepointRegistersAndDoublesSlot(Register reg);
 
   bool generating_stub_;
   bool allow_stub_calls_;
   // This handle will be patched with the code object on installation.
   Handle<Object> code_object_;
+
+  // Needs access to SafepointRegisterStackIndex for optimized frame
+  // traversal.
+  friend class OptimizedFrame;
 };
 
 
-#ifdef ENABLE_DEBUGGER_SUPPORT
 // The code patcher is used to patch (typically) small parts of code e.g. for
 // debugging and other types of instrumentation. When using the code patcher
 // the exact number of bytes specified must be emitted. It is not legal to emit
@@ -998,10 +1304,14 @@ class CodePatcher {
   MacroAssembler* masm() { return &masm_; }
 
   // Emit an instruction directly.
-  void Emit(Instr x);
+  void Emit(Instr instr);
 
   // Emit an address directly.
   void Emit(Address addr);
+
+  // Change the condition part of an instruction leaving the rest of the current
+  // instruction unchanged.
+  void ChangeBranchCondition(Condition cond);
 
  private:
   byte* address_;  // The address of the code being patched.
@@ -1009,37 +1319,6 @@ class CodePatcher {
   int size_;  // Number of bytes of the expected patch size.
   MacroAssembler masm_;  // Macro assembler used to generate the code.
 };
-#endif  // ENABLE_DEBUGGER_SUPPORT
-
-
-// Helper class for generating code or data associated with the code
-// right after a call instruction. As an example this can be used to
-// generate safepoint data after calls for crankshaft.
-class PostCallGenerator {
- public:
-  PostCallGenerator() { }
-  virtual ~PostCallGenerator() { }
-  virtual void Generate() = 0;
-};
-
-
-// -----------------------------------------------------------------------------
-// Static helper functions.
-
-static MemOperand ContextOperand(Register context, int index) {
-  return MemOperand(context, Context::SlotOffset(index));
-}
-
-
-static inline MemOperand GlobalObjectOperand()  {
-  return ContextOperand(cp, Context::GLOBAL_INDEX);
-}
-
-
-// Generate a MemOperand for loading a field from an object.
-static inline MemOperand FieldMemOperand(Register object, int offset) {
-  return MemOperand(object, offset - kHeapObjectTag);
-}
 
 
 
@@ -1055,4 +1334,3 @@ static inline MemOperand FieldMemOperand(Register object, int offset) {
 } }  // namespace v8::internal
 
 #endif  // V8_MIPS_MACRO_ASSEMBLER_MIPS_H_
-

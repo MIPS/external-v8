@@ -97,7 +97,7 @@ class LCodeGen BASE_EMBEDDED {
   void DoDeferredNumberTagI(LNumberTagI* instr);
   void DoDeferredTaggedToI(LTaggedToI* instr);
   void DoDeferredMathAbsTaggedHeapNumber(LUnaryMathOperation* instr);
-  void DoDeferredStackCheck(LGoto* instr);
+  void DoDeferredStackCheck(LStackCheck* instr);
   void DoDeferredStringCharCodeAt(LStringCharCodeAt* instr);
   void DoDeferredStringCharFromCode(LStringCharFromCode* instr);
   void DoDeferredLInstanceOfKnownGlobal(LInstanceOfKnownGlobal* instr,
@@ -105,6 +105,7 @@ class LCodeGen BASE_EMBEDDED {
 
   // Parallel move support.
   void DoParallelMove(LParallelMove* move);
+  void DoGap(LGap* instr);
 
   // Emit frame translation commands for an environment.
   void WriteTranslation(LEnvironment* environment, Translation* translation);
@@ -147,8 +148,8 @@ class LCodeGen BASE_EMBEDDED {
                        Register temporary,
                        Register temporary2);
 
-  int StackSlotCount() const { return chunk()->spill_slot_count(); }
-  int ParameterCount() const { return scope()->num_parameters(); }
+  int GetStackSlotCount() const { return chunk()->spill_slot_count(); }
+  int GetParameterCount() const { return scope()->num_parameters(); }
 
   void Abort(const char* format, ...);
   void Comment(const char* format, ...);
@@ -165,11 +166,6 @@ class LCodeGen BASE_EMBEDDED {
   bool GenerateRelocPadding();
   bool GenerateSafepointTable();
 
-  enum ContextMode {
-    RESTORE_CONTEXT,
-    CONTEXT_ADJUSTED
-  };
-
   enum SafepointMode {
     RECORD_SIMPLE_SAFEPOINT,
     RECORD_SAFEPOINT_WITH_REGISTERS_AND_NO_ARGUMENTS
@@ -177,37 +173,35 @@ class LCodeGen BASE_EMBEDDED {
 
   void CallCode(Handle<Code> code,
                 RelocInfo::Mode mode,
-                LInstruction* instr,
-                ContextMode context_mode);
+                LInstruction* instr);
 
   void CallCodeGeneric(Handle<Code> code,
                        RelocInfo::Mode mode,
                        LInstruction* instr,
-                       ContextMode context_mode,
                        SafepointMode safepoint_mode);
 
   void CallRuntime(const Runtime::Function* fun,
                    int argc,
-                   LInstruction* instr,
-                   ContextMode context_mode);
+                   LInstruction* instr);
 
   void CallRuntime(Runtime::FunctionId id,
                    int argc,
-                   LInstruction* instr,
-                   ContextMode context_mode) {
+                   LInstruction* instr) {
     const Runtime::Function* function = Runtime::FunctionForId(id);
-    CallRuntime(function, argc, instr, context_mode);
+    CallRuntime(function, argc, instr);
   }
 
   void CallRuntimeFromDeferred(Runtime::FunctionId id,
                                int argc,
-                               LInstruction* instr);
+                               LInstruction* instr,
+                               LOperand* context);
 
   // Generate a direct call to a known function.  Expects the function
   // to be in edi.
   void CallKnownFunction(Handle<JSFunction> function,
                          int arity,
-                         LInstruction* instr);
+                         LInstruction* instr,
+                         CallKind call_kind);
 
   void LoadHeapObject(Register result, Handle<HeapObject> object);
 
@@ -228,6 +222,10 @@ class LCodeGen BASE_EMBEDDED {
   Register ToRegister(int index) const;
   XMMRegister ToDoubleRegister(int index) const;
   int ToInteger32(LConstantOperand* op) const;
+  Operand BuildFastArrayOperand(LOperand* elements_pointer,
+                                LOperand* key,
+                                ElementsKind elements_kind,
+                                uint32_t offset);
 
   // Specific math operations - used from DoUnaryMathOperation.
   void EmitIntegerMathAbs(LUnaryMathOperation* instr);
@@ -251,9 +249,12 @@ class LCodeGen BASE_EMBEDDED {
                                     int arguments,
                                     int deoptimization_index);
   void RecordPosition(int position);
+  int LastSafepointEnd() {
+    return static_cast<int>(safepoints_.GetPcAfterGap());
+  }
 
   static Condition TokenToCondition(Token::Value op, bool is_unsigned);
-  void EmitGoto(int block, LDeferredCode* deferred_stack_check = NULL);
+  void EmitGoto(int block);
   void EmitBranch(int left_block, int right_block, Condition cc);
   void EmitCmpI(LOperand* left, LOperand* right);
   void EmitNumberUntagD(Register input,
@@ -272,7 +273,6 @@ class LCodeGen BASE_EMBEDDED {
   // true and false label should be made, to optimize fallthrough.
   Condition EmitIsObject(Register input,
                          Register temp1,
-                         Register temp2,
                          Label* is_not_object,
                          Label* is_object);
 
@@ -280,10 +280,10 @@ class LCodeGen BASE_EMBEDDED {
   // Caller should branch on equal condition.
   void EmitIsConstructCall(Register temp);
 
-  void EmitLoadField(Register result,
-                     Register object,
-                     Handle<Map> type,
-                     Handle<String> name);
+  void EmitLoadFieldOrConstantFunction(Register result,
+                                       Register object,
+                                       Handle<Map> type,
+                                       Handle<String> name);
 
   LChunk* const chunk_;
   MacroAssembler* const masm_;

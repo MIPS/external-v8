@@ -52,6 +52,7 @@
 #undef MAP_TYPE
 
 #include "v8.h"
+#include "v8threads.h"
 
 #include "platform.h"
 #include "vm-state-inl.h"
@@ -180,20 +181,6 @@ void OS::Free(void* buf, const size_t length) {
 }
 
 
-#ifdef ENABLE_HEAP_PROTECTION
-
-void OS::Protect(void* address, size_t size) {
-  UNIMPLEMENTED();
-}
-
-
-void OS::Unprotect(void* address, size_t size, bool is_executable) {
-  UNIMPLEMENTED();
-}
-
-#endif
-
-
 void OS::Sleep(int milliseconds) {
   unsigned int ms = static_cast<unsigned int>(milliseconds);
   usleep(1000 * ms);
@@ -265,15 +252,12 @@ PosixMemoryMappedFile::~PosixMemoryMappedFile() {
 }
 
 
-#ifdef ENABLE_LOGGING_AND_PROFILING
 static unsigned StringToLong(char* buffer) {
   return static_cast<unsigned>(strtol(buffer, NULL, 16));  // NOLINT
 }
-#endif
 
 
 void OS::LogSharedLibraryAddresses() {
-#ifdef ENABLE_LOGGING_AND_PROFILING
   static const int MAP_LENGTH = 1024;
   int fd = open("/proc/self/maps", O_RDONLY);
   if (fd < 0) return;
@@ -310,7 +294,6 @@ void OS::LogSharedLibraryAddresses() {
     LOG(i::Isolate::Current(), SharedLibraryEvent(start_of_path, start, end));
   }
   close(fd);
-#endif
 }
 
 
@@ -397,42 +380,15 @@ class Thread::PlatformData : public Malloced {
 };
 
 
-ThreadHandle::ThreadHandle(Kind kind) {
-  data_ = new PlatformData(kind);
-}
-
-
-void ThreadHandle::Initialize(ThreadHandle::Kind kind) {
-  data_->Initialize(kind);
-}
-
-
-ThreadHandle::~ThreadHandle() {
-  delete data_;
-}
-
-
-bool ThreadHandle::IsSelf() const {
-  return pthread_equal(data_->thread_, pthread_self());
-}
-
-
-bool ThreadHandle::IsValid() const {
-  return data_->thread_ != kNoThread;
-}
-
-
-Thread::Thread(Isolate* isolate, const Options& options)
+Thread::Thread(const Options& options)
     : data_(new PlatformData),
-      isolate_(isolate),
       stack_size_(options.stack_size) {
   set_name(options.name);
 }
 
 
-Thread::Thread(Isolate* isolate, const char* name)
+Thread::Thread(const char* name)
     : data_(new PlatformData),
-      isolate_(isolate),
       stack_size_(0) {
   set_name(name);
 }
@@ -448,9 +404,8 @@ static void* ThreadEntry(void* arg) {
   // This is also initialized by the first argument to pthread_create() but we
   // don't know which thread will run first (the original thread or the new
   // one) so we initialize it here too.
-  thread_->data_->thread_ = pthread_self();
-  ASSERT(thread->IsValid());
-  Thread::SetThreadLocal(Isolate::isolate_key(), thread->isolate());
+  thread->data()->thread_ = pthread_self();
+  ASSERT(thread->data()->thread_ != kNoThread);
   thread->Run();
   return NULL;
 }
@@ -470,13 +425,13 @@ void Thread::Start() {
     pthread_attr_setstacksize(&attr, static_cast<size_t>(stack_size_));
     attr_ptr = &attr;
   }
-  pthread_create(&thread_handle_data()->thread_, attr_ptr, ThreadEntry, this);
-  ASSERT(IsValid());
+  pthread_create(&data_->thread_, attr_ptr, ThreadEntry, this);
+  ASSERT(data_->thread_ != kNoThread);
 }
 
 
 void Thread::Join() {
-  pthread_join(thread_handle_data()->thread_, NULL);
+  pthread_join(data_->thread_, NULL);
 }
 
 
@@ -516,7 +471,6 @@ void Thread::YieldCPU() {
 
 class FreeBSDMutex : public Mutex {
  public:
-
   FreeBSDMutex() {
     pthread_mutexattr_t attrs;
     int result = pthread_mutexattr_init(&attrs);
@@ -615,8 +569,6 @@ Semaphore* OS::CreateSemaphore(int count) {
 }
 
 
-#ifdef ENABLE_LOGGING_AND_PROFILING
-
 static pthread_t GetThreadID() {
   pthread_t thread_id = pthread_self();
   return thread_id;
@@ -684,7 +636,7 @@ class SignalSender : public Thread {
   };
 
   explicit SignalSender(int interval)
-      : Thread(NULL, "SignalSender"),
+      : Thread("SignalSender"),
         interval_(interval) {}
 
   static void AddActiveSampler(Sampler* sampler) {
@@ -711,8 +663,7 @@ class SignalSender : public Thread {
     ScopedLock lock(mutex_);
     SamplerRegistry::RemoveActiveSampler(sampler);
     if (SamplerRegistry::GetState() == SamplerRegistry::HAS_NO_SAMPLERS) {
-      RuntimeProfiler::WakeUpRuntimeProfilerThreadBeforeShutdown();
-      instance_->Join();
+      RuntimeProfiler::StopRuntimeProfilerThreadBeforeShutdown(instance_);
       delete instance_;
       instance_ = NULL;
 
@@ -845,6 +796,5 @@ void Sampler::Stop() {
   SetActive(false);
 }
 
-#endif  // ENABLE_LOGGING_AND_PROFILING
 
 } }  // namespace v8::internal

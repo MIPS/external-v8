@@ -28,6 +28,9 @@
 #ifndef V8_IA32_REGEXP_MACRO_ASSEMBLER_IA32_H_
 #define V8_IA32_REGEXP_MACRO_ASSEMBLER_IA32_H_
 
+#include "ia32/assembler-ia32.h"
+#include "ia32/assembler-ia32-inl.h"
+
 namespace v8 {
 namespace internal {
 
@@ -168,7 +171,7 @@ class RegExpMacroAssemblerIA32: public NativeRegExpMacroAssembler {
 
   // Equivalent to a conditional branch to the label, unless the label
   // is NULL, in which case it is a conditional Backtrack.
-  void BranchOrBacktrack(Condition condition, Label* to, Hint hint = no_hint);
+  void BranchOrBacktrack(Condition condition, Label* to);
 
   // Call and return internally in the generated code in a way that
   // is GC-safe (i.e., doesn't leave absolute code addresses on the stack)
