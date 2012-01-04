@@ -4,12 +4,17 @@ LOCAL_PATH := $(call my-dir)
 # ===================================================
 include $(CLEAR_VARS)
 
-LOCAL_MIPS_MODE=mips
+ifeq ($(TARGET_ARCH),mips)
+       LOCAL_MIPS_MODE=mips
+endif
 
 # Set up the target identity
 LOCAL_MODULE := libv8
 LOCAL_MODULE_CLASS := STATIC_LIBRARIES
 intermediates := $(call local-intermediates-dir)
+
+PRIVATE_CLEAN_FILES := $(HOST_OUT)/bin/mksnapshot \
+    $(HOST_OUT)/obj/EXECUTABLES/mksnapshot_intermediates
 
 # Android.v8common.mk defines common V8_LOCAL_SRC_FILES
 # and V8_LOCAL_JS_LIBRARY_FILES
@@ -66,21 +71,21 @@ LOCAL_SRC_FILES += \
   src/snapshot-empty.cc
 endif
 
+# The -fvisibility=hidden option below prevents exporting of symbols from
+# libv8.a in libwebcore.so.  That reduces size of libwebcore.so by 500k.
 LOCAL_CFLAGS += \
 	-O3 \
 	-Wno-endif-labels \
 	-Wno-import \
 	-Wno-format \
 	-fno-exceptions \
-	-Umips \
-  -finline-limit=64 \
-	-fno-strict-aliasing \
+	-fvisibility=hidden \
 	-DENABLE_DEBUGGER_SUPPORT \
 	-DENABLE_LOGGING_AND_PROFILING \
 	-DENABLE_VMSTATE_TRACKING \
-  -DOBJECT_PRINT \
-  -DENABLE_DISASSEMBLER
-
+	-DOBJECT_PRINT \
+	-DENABLE_DISASSEMBLER \
+	-DV8_NATIVE_REGEXP
 
 ifeq ($(TARGET_ARCH),arm)
 	LOCAL_CFLAGS += -DARM -DV8_TARGET_ARCH_ARM
@@ -88,6 +93,9 @@ endif
 
 ifeq ($(TARGET_ARCH),mips)
 	LOCAL_CFLAGS += -DV8_TARGET_ARCH_MIPS
+	LOCAL_CFLAGS += -Umips
+	LOCAL_CFLAGS += -finline-limit=64
+	LOCAL_CFLAGS += -fno-strict-aliasing
 endif
 
 ifeq ($(TARGET_ARCH),x86)

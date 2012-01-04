@@ -17,9 +17,12 @@ include $(LOCAL_PATH)/Android.v8common.mk
 V8_LOCAL_SRC_FILES += \
   src/mksnapshot.cc \
   src/snapshot-empty.cc
+
 ifeq ($(TARGET_ARCH),arm)
+V8_LOCAL_SRC_FILES += \
   src/arm/simulator-arm.cc
 endif
+
 ifeq ($(TARGET_ARCH),mips)
 V8_LOCAL_SRC_FILES += \
     src/mips/simulator-mips.cc
@@ -70,15 +73,14 @@ LOCAL_CFLAGS := \
 	-Wno-endif-labels \
 	-Wno-import \
 	-Wno-format \
-	-fno-exceptions \
-	-Umips \
-	-finline-limit=64 \
-	-fno-strict-aliasing \
+	-ansi \
+	-fno-rtti \
 	-DENABLE_DEBUGGER_SUPPORT \
 	-DENABLE_LOGGING_AND_PROFILING \
 	-DENABLE_VMSTATE_TRACKING \
 	-DOBJECT_PRINT \
-	-DENABLE_DISASSEMBLER
+	-DENABLE_DISASSEMBLER \
+	-DV8_NATIVE_REGEXP
 
 
 ifeq ($(TARGET_ARCH),arm)
@@ -88,6 +90,10 @@ endif
 ifeq ($(TARGET_ARCH),mips)
   LOCAL_CFLAGS += -DV8_TARGET_ARCH_MIPS
   LOCAL_CFLAGS += -DCAN_USE_FPU_INSTRUCTIONS
+  LOCAL_CFLAGS += -Umips
+  LOCAL_CFLAGS += -finline-limit=64
+  LOCAL_CFLAGS += -fno-strict-aliasing
+
 endif
 
 ifeq ($(TARGET_CPU_ABI),armeabi-v7a)
