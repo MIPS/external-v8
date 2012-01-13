@@ -4,6 +4,10 @@ LOCAL_PATH := $(call my-dir)
 # ===================================================
 include $(CLEAR_VARS)
 
+ifeq ($(TARGET_ARCH),mips)
+       LOCAL_MIPS_MODE=mips
+endif
+
 # Set up the target identity
 LOCAL_MODULE := libv8
 LOCAL_MODULE_CLASS := STATIC_LIBRARIES
@@ -73,6 +77,18 @@ LOCAL_CFLAGS += \
 
 ifeq ($(TARGET_ARCH),arm)
 	LOCAL_CFLAGS += -DARM -DV8_TARGET_ARCH_ARM
+endif
+
+ifeq ($(TARGET_ARCH),mips)
+	LOCAL_CFLAGS += -DV8_TARGET_ARCH_MIPS
+	LOCAL_CFLAGS += -O3
+	LOCAL_CFLAGS += -Umips
+	LOCAL_CFLAGS += -finline-limit=64
+	LOCAL_CFLAGS += -fno-strict-aliasing
+endif
+
+ifeq ($(TARGET_ARCH),x86)
+	LOCAL_CFLAGS += -DV8_TARGET_ARCH_IA32
 endif
 
 ifeq ($(DEBUG_V8),true)

@@ -88,9 +88,15 @@ const uint32_t kDebugZapValue = 0xbadbaddb;
 #endif
 
 
+#if defined(V8_TARGET_ARCH_MIPS) && defined(__mips__)
+// Number of bits to represent the page size for paged spaces. For MIPS we need
+// the value of 14, which gives 16K bytes per page.
+const int kPageSizeBits = 14;
+#else
 // Number of bits to represent the page size for paged spaces. The value of 13
 // gives 8K bytes per page.
 const int kPageSizeBits = 13;
+#endif  // V8_TARGET_ARCH_MIPS
 
 // On Intel architecture, cache line size is 64 bytes.
 // On ARM it may be less (32 bytes), but as far this constant is
@@ -460,16 +466,17 @@ enum StateTag {
 // (We assign CPUID itself to one of the currently reserved bits --
 // feel free to change this if needed.)
 // On X86/X64, values below 32 are bits in EDX, values above 32 are bits in ECX.
-enum CpuFeature { SSE4_1 = 32 + 19,  // x86
-                  SSE3 = 32 + 0,     // x86
-                  SSE2 = 26,   // x86
-                  CMOV = 15,   // x86
-                  RDTSC = 4,   // x86
-                  CPUID = 10,  // x86
-                  VFP3 = 1,    // ARM
-                  ARMv7 = 2,   // ARM
-                  SAHF = 0,    // x86
-                  FPU = 1};    // MIPS
+enum CpuFeature { SSE4_1 = 32 + 19,   // x86
+                  SSE3 = 32 + 0,      // x86
+                  SSE2 = 26,          // x86
+                  CMOV = 15,          // x86
+                  RDTSC = 4,          // x86
+                  CPUID = 10,         // x86
+                  VFP3 = 1,           // ARM
+                  ARMv7 = 2,          // ARM
+                  SAHF = 0,           // x86
+                  FPU = 1,            // MIPS
+                  BUG_24K_E156 = 2};  // MIPS 24K Erratum 156
 
 // The Strict Mode (ECMA-262 5th edition, 4.2.2).
 enum StrictModeFlag {

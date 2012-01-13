@@ -16,8 +16,17 @@ include $(LOCAL_PATH)/Android.v8common.mk
 
 V8_LOCAL_SRC_FILES += \
   src/mksnapshot.cc \
-  src/arm/simulator-arm.cc \
   src/snapshot-empty.cc
+
+ifeq ($(TARGET_ARCH),arm)
+V8_LOCAL_SRC_FILES += \
+  src/arm/simulator-arm.cc
+endif
+
+ifeq ($(TARGET_ARCH),mips)
+V8_LOCAL_SRC_FILES += \
+    src/mips/simulator-mips.cc
+endif
 
 ifeq ($(HOST_OS),linux)
 V8_LOCAL_SRC_FILES += \
@@ -61,14 +70,30 @@ LOCAL_CFLAGS := \
 	-DENABLE_VMSTATE_TRACKING \
 	-DV8_NATIVE_REGEXP
 
+
 ifeq ($(TARGET_ARCH),arm)
   LOCAL_CFLAGS += -DV8_TARGET_ARCH_ARM
+endif
+
+ifeq ($(TARGET_ARCH),mips)
+  LOCAL_CFLAGS += -DV8_TARGET_ARCH_MIPS
+  LOCAL_CFLAGS += -DCAN_USE_FPU_INSTRUCTIONS
+  LOCAL_CFLAGS += -Umips
+  LOCAL_CFLAGS += -finline-limit=64
+  LOCAL_CFLAGS += -fno-strict-aliasing
+  LOCAL_CFLAGS += -DOBJECT_PRINT
+  LOCAL_CFLAGS += -DENABLE_DISASSEMBLER
 endif
 
 ifeq ($(TARGET_CPU_ABI),armeabi-v7a)
     ifeq ($(ARCH_ARM_HAVE_VFP),true)
         LOCAL_CFLAGS += -DCAN_USE_VFP_INSTRUCTIONS -DCAN_USE_ARMV7_INSTRUCTIONS
     endif
+endif
+
+
+ifeq ($(TARGET_ARCH),x86)
+  LOCAL_CFLAGS += -DV8_TARGET_ARCH_IA32
 endif
 
 ifeq ($(DEBUG_V8),true)

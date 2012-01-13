@@ -34,3 +34,14 @@ ifeq ($(TARGET_ARCH),arm)
     include $(BASE_PATH)/Android.libv8.mk
     include $(BASE_PATH)/Android.v8shell.mk
 endif
+
+ifeq ($(TARGET_ARCH),mips)
+  ifneq ($(ARCH_HAS_BIGENDIAN),true)
+    ENABLE_V8_SNAPSHOT = false
+    ifeq ($(ENABLE_V8_SNAPSHOT),true)
+        include $(BASE_PATH)/Android.mksnapshot.mk
+    endif
+    include $(BASE_PATH)/Android.libv8.mk
+    include $(BASE_PATH)/Android.v8shell.mk
+  endif
+endif
