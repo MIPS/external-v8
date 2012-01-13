@@ -80,8 +80,27 @@ static const int kInvalidFPUControlRegister = -1;
 static const uint32_t kFPUInvalidResult = (uint32_t) (1 << 31) - 1;
 
 // FCSR constants.
-static const uint32_t kFCSRFlagMask = (1 << 6) - 1;
-static const uint32_t kFCSRFlagShift = 2;
+static const uint32_t kFCSRInexactFlagBit = 2;
+static const uint32_t kFCSRUnderflowFlagBit = 3;
+static const uint32_t kFCSROverflowFlagBit = 4;
+static const uint32_t kFCSRDivideByZeroFlagBit = 5;
+static const uint32_t kFCSRInvalidOpFlagBit = 6;
+
+static const uint32_t kFCSRInexactFlagMask = 1 << kFCSRInexactFlagBit;
+static const uint32_t kFCSRUnderflowFlagMask = 1 << kFCSRUnderflowFlagBit;
+static const uint32_t kFCSROverflowFlagMask = 1 << kFCSROverflowFlagBit;
+static const uint32_t kFCSRDivideByZeroFlagMask = 1 << kFCSRDivideByZeroFlagBit;
+static const uint32_t kFCSRInvalidOpFlagMask = 1 << kFCSRInvalidOpFlagBit;
+
+static const uint32_t kFCSRFlagMask =
+    kFCSRInexactFlagMask |
+    kFCSRUnderflowFlagMask |
+    kFCSROverflowFlagMask |
+    kFCSRDivideByZeroFlagMask |
+    kFCSRInvalidOpFlagMask;
+
+static const uint32_t kFCSRExceptionFlagMask =
+    kFCSRFlagMask ^ kFCSRInexactFlagMask;
 
 // Helper functions for converting between register numbers and names.
 class Registers {
@@ -133,8 +152,6 @@ class FPURegisters {
 // On MIPS all instructions are 32 bits.
 typedef int32_t Instr;
 
-typedef unsigned char byte_;
-
 // Special Software Interrupt codes when used in the presence of the MIPS
 // simulator.
 enum SoftwareInterruptCodes {
@@ -161,6 +178,8 @@ static const int kImm16Shift = 0;
 static const int kImm16Bits  = 16;
 static const int kImm26Shift = 0;
 static const int kImm26Bits  = 26;
+static const int kImm28Shift = 0;
+static const int kImm28Bits  = 28;
 
 static const int kFsShift       = 11;
 static const int kFsBits        = 5;
@@ -180,6 +199,7 @@ static const int kFBtrueBits    = 1;
 static const int  kOpcodeMask   = ((1 << kOpcodeBits) - 1) << kOpcodeShift;
 static const int  kImm16Mask    = ((1 << kImm16Bits) - 1) << kImm16Shift;
 static const int  kImm26Mask    = ((1 << kImm26Bits) - 1) << kImm26Shift;
+static const int  kImm28Mask    = ((1 << kImm28Bits) - 1) << kImm28Shift;
 static const int  kRsFieldMask  = ((1 << kRsBits) - 1) << kRsShift;
 static const int  kRtFieldMask  = ((1 << kRtBits) - 1) << kRtShift;
 static const int  kRdFieldMask  = ((1 << kRdBits) - 1) << kRdShift;
@@ -247,12 +267,12 @@ enum Opcode {
 enum SecondaryField {
   // SPECIAL Encoding of Function Field.
   SLL       =   ((0 << 3) + 0),
+  MOVCI     =   ((0 << 3) + 1),
   SRL       =   ((0 << 3) + 2),
   SRA       =   ((0 << 3) + 3),
   SLLV      =   ((0 << 3) + 4),
   SRLV      =   ((0 << 3) + 6),
   SRAV      =   ((0 << 3) + 7),
-  MOVCI     =   ((0 << 3) + 1),
 
   JR        =   ((1 << 3) + 0),
   JALR      =   ((1 << 3) + 1),
@@ -455,14 +475,38 @@ inline Condition ReverseCondition(Condition cc) {
 
 // ----- Coprocessor conditions.
 enum FPUCondition {
-  F,    // False
-  UN,   // Unordered
-  EQ,   // Equal
-  UEQ,  // Unordered or Equal
-  OLT,  // Ordered or Less Than
-  ULT,  // Unordered or Less Than
-  OLE,  // Ordered or Less Than or Equal
-  ULE   // Unordered or Less Than or Equal
+  kNoFPUCondition = -1,
+
+  F     = 0,  // False.
+  UN    = 1,  // Unordered.
+  EQ    = 2,  // Equal.
+  UEQ   = 3,  // Unordered or Equal.
+  OLT   = 4,  // Ordered or Less Than.
+  ULT   = 5,  // Unordered or Less Than.
+  OLE   = 6,  // Ordered or Less Than or Equal.
+  ULE   = 7   // Unordered or Less Than or Equal.
+};
+
+
+// FPU rounding modes.
+enum FPURoundingMode {
+  RN = 0 << 0,  // Round to Nearest.
+  RZ = 1 << 0,  // Round towards zero.
+  RP = 2 << 0,  // Round towards Plus Infinity.
+  RM = 3 << 0,  // Round towards Minus Infinity.
+
+  // Aliases.
+  kRoundToNearest = RN,
+  kRoundToZero = RZ,
+  kRoundToPlusInf = RP,
+  kRoundToMinusInf = RM
+};
+
+static const uint32_t kFPURoundingModeMask = 3 << 0;
+
+enum CheckForInexactConversion {
+  kCheckForInexactConversion,
+  kDontCheckForInexactConversion
 };
 
 
@@ -687,7 +731,7 @@ class Instruction {
   // reference to an instruction is to convert a pointer. There is no way
   // to allocate or create instances of class Instruction.
   // Use the At(pc) function to create references to Instruction.
-  static Instruction* At(byte_* pc) {
+  static Instruction* At(byte* pc) {
     return reinterpret_cast<Instruction*>(pc);
   }
 
