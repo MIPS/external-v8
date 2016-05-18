@@ -527,7 +527,11 @@ LUnallocated* LChunkBuilder::TempDoubleRegister() {
   return operand;
 }
 
-int LPlatformChunk::GetNextSpillIndex() { return current_frame_slots_++; }
+
+int LPlatformChunk::GetNextSpillIndex() {
+  return spill_slot_count_++;
+}
+
 
 LOperand* LPlatformChunk::GetNextSpillSlot(RegisterKind kind) {
   int index = GetNextSpillIndex();
@@ -1080,6 +1084,12 @@ LInstruction* LChunkBuilder::DoCallRuntime(HCallRuntime* instr) {
 }
 
 
+LInstruction* LChunkBuilder::DoCallStub(HCallStub* instr) {
+  LOperand* context = UseFixed(instr->context(), cp);
+  return MarkAsCall(DefineFixed(new(zone()) LCallStub(context), x0), instr);
+}
+
+
 LInstruction* LChunkBuilder::DoCapturedObject(HCapturedObject* instr) {
   instr->ReplayEnvironment(current_block_->last_environment());
 
@@ -1557,6 +1567,14 @@ LInstruction* LChunkBuilder::DoInvokeFunction(HInvokeFunction* instr) {
 }
 
 
+LInstruction* LChunkBuilder::DoCompareMinusZeroAndBranch(
+    HCompareMinusZeroAndBranch* instr) {
+  LOperand* value = UseRegister(instr->value());
+  LOperand* scratch = TempRegister();
+  return new(zone()) LCompareMinusZeroAndBranch(value, scratch);
+}
+
+
 LInstruction* LChunkBuilder::DoIsStringAndBranch(HIsStringAndBranch* instr) {
   DCHECK(instr->value()->representation().IsTagged());
   LOperand* value = UseRegisterAtStart(instr->value());
@@ -1722,6 +1740,12 @@ LInstruction* LChunkBuilder::DoLoadNamedGeneric(HLoadNamedGeneric* instr) {
 
 LInstruction* LChunkBuilder::DoLoadRoot(HLoadRoot* instr) {
   return DefineAsRegister(new(zone()) LLoadRoot);
+}
+
+
+LInstruction* LChunkBuilder::DoMapEnumLength(HMapEnumLength* instr) {
+  LOperand* map = UseRegisterAtStart(instr->value());
+  return DefineAsRegister(new(zone()) LMapEnumLength(map));
 }
 
 
@@ -1942,7 +1966,8 @@ LInstruction* LChunkBuilder::DoParameter(HParameter* instr) {
     return DefineAsSpilled(result, spill_index);
   } else {
     DCHECK(info()->IsStub());
-    CallInterfaceDescriptor descriptor = graph()->descriptor();
+    CallInterfaceDescriptor descriptor =
+        info()->code_stub()->GetCallInterfaceDescriptor();
     int index = static_cast<int>(instr->index());
     Register reg = descriptor.GetRegisterParameter(index);
     return DefineFixed(result, reg);
@@ -2637,7 +2662,6 @@ LInstruction* LChunkBuilder::DoUnknownOSRValue(HUnknownOSRValue* instr) {
       Retry(kTooManySpillSlotsNeededForOSR);
       spill_index = 0;
     }
-    spill_index += StandardFrameConstants::kFixedSlotCount;
   }
   return DefineAsSpilled(new(zone()) LUnknownOSRValue, spill_index);
 }
@@ -2692,6 +2716,16 @@ LInstruction* LChunkBuilder::DoWrapReceiver(HWrapReceiver* instr) {
 LInstruction* LChunkBuilder::DoStoreFrameContext(HStoreFrameContext* instr) {
   LOperand* context = UseRegisterAtStart(instr->context());
   return new(zone()) LStoreFrameContext(context);
+}
+
+
+LInstruction* LChunkBuilder::DoAllocateBlockContext(
+    HAllocateBlockContext* instr) {
+  LOperand* context = UseFixed(instr->context(), cp);
+  LOperand* function = UseRegisterAtStart(instr->function());
+  LAllocateBlockContext* result =
+      new(zone()) LAllocateBlockContext(context, function);
+  return MarkAsCall(DefineFixed(result, cp), instr);
 }
 
 

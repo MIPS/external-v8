@@ -184,8 +184,6 @@ DOUBLE_REGISTERS(DECLARE_REGISTER)
 #undef DECLARE_REGISTER
 const DoubleRegister no_double_reg = {DoubleRegister::kCode_no_reg};
 
-typedef DoubleRegister Simd128Register;
-
 typedef DoubleRegister XMMRegister;
 
 enum Condition {
@@ -678,7 +676,6 @@ class Assembler : public AssemblerBase {
   void cmp(Register reg0, Register reg1) { cmp(reg0, Operand(reg1)); }
   void cmp(Register reg, const Operand& op);
   void cmp(Register reg, const Immediate& imm) { cmp(Operand(reg), imm); }
-  void cmp(const Operand& op, Register reg);
   void cmp(const Operand& op, const Immediate& imm);
   void cmp(const Operand& op, Handle<Object> handle);
 
@@ -963,8 +960,6 @@ class Assembler : public AssemblerBase {
   }
   void cvtsd2si(Register dst, XMMRegister src);
 
-  void cvtsi2ss(XMMRegister dst, Register src) { cvtsi2ss(dst, Operand(src)); }
-  void cvtsi2ss(XMMRegister dst, const Operand& src);
   void cvtsi2sd(XMMRegister dst, Register src) { cvtsi2sd(dst, Operand(src)); }
   void cvtsi2sd(XMMRegister dst, const Operand& src);
   void cvtss2sd(XMMRegister dst, const Operand& src);
@@ -1413,7 +1408,7 @@ class Assembler : public AssemblerBase {
 
   // Record a deoptimization reason that can be used by a log or cpu profiler.
   // Use --trace-deopt to enable.
-  void RecordDeoptReason(const int reason, int raw_position);
+  void RecordDeoptReason(const int reason, const SourcePosition position);
 
   // Writes a single byte or word of data in the code stream.  Used for
   // inline tables, e.g., jump-tables.

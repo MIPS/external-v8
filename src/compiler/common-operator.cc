@@ -803,6 +803,11 @@ const Operator* CommonOperatorBuilder::Call(const CallDescriptor* descriptor) {
 }
 
 
+const Operator* CommonOperatorBuilder::LazyBailout() {
+  return Call(Linkage::GetLazyBailoutDescriptor(zone()));
+}
+
+
 const Operator* CommonOperatorBuilder::TailCall(
     const CallDescriptor* descriptor) {
   class TailCallOperator final : public Operator1<const CallDescriptor*> {
@@ -861,9 +866,11 @@ const Operator* CommonOperatorBuilder::ResizeMergeOrPhi(const Operator* op,
 const FrameStateFunctionInfo*
 CommonOperatorBuilder::CreateFrameStateFunctionInfo(
     FrameStateType type, int parameter_count, int local_count,
-    Handle<SharedFunctionInfo> shared_info) {
+    Handle<SharedFunctionInfo> shared_info,
+    ContextCallingMode context_calling_mode) {
   return new (zone()->New(sizeof(FrameStateFunctionInfo)))
-      FrameStateFunctionInfo(type, parameter_count, local_count, shared_info);
+      FrameStateFunctionInfo(type, parameter_count, local_count, shared_info,
+                             context_calling_mode);
 }
 
 }  // namespace compiler

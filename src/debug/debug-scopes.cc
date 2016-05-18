@@ -28,7 +28,7 @@ ScopeIterator::ScopeIterator(Isolate* isolate, FrameInspector* frame_inspector,
     return;
   }
 
-  context_ = Handle<Context>::cast(frame_inspector->GetContext());
+  context_ = Handle<Context>(Context::cast(frame_inspector->GetContext()));
 
   // Catch the case when the debugger stops in an internal function.
   Handle<JSFunction> function = GetFunction();
@@ -58,8 +58,12 @@ ScopeIterator::ScopeIterator(Isolate* isolate, FrameInspector* frame_inspector,
     // return, which requires a debug info to be available.
     Handle<DebugInfo> debug_info(shared_info->GetDebugInfo());
 
+    // PC points to the instruction after the current one, possibly a break
+    // location as well. So the "- 1" to exclude it from the search.
+    Address call_pc = GetFrame()->pc() - 1;
+
     // Find the break point where execution has stopped.
-    BreakLocation location = BreakLocation::FromFrame(debug_info, GetFrame());
+    BreakLocation location = BreakLocation::FromAddress(debug_info, call_pc);
 
     ignore_nested_scopes = location.IsReturn();
   }
@@ -458,8 +462,7 @@ MaybeHandle<JSObject> ScopeIterator::MaterializeLocalScope() {
       isolate_->factory()->NewJSObject(isolate_->object_function());
   frame_inspector_->MaterializeStackLocals(local_scope, function);
 
-  Handle<Context> frame_context =
-      Handle<Context>::cast(frame_inspector_->GetContext());
+  Handle<Context> frame_context(Context::cast(frame_inspector_->GetContext()));
 
   HandleScope scope(isolate_);
   Handle<SharedFunctionInfo> shared(function->shared());
@@ -468,7 +471,7 @@ MaybeHandle<JSObject> ScopeIterator::MaterializeLocalScope() {
   if (!scope_info->HasContext()) return local_scope;
 
   // Third fill all context locals.
-  Handle<Context> function_context(frame_context->closure_context());
+  Handle<Context> function_context(frame_context->declaration_context());
   CopyContextLocalsToScopeObject(scope_info, function_context, local_scope);
 
   // Finally copy any properties from the function context extension.
@@ -477,8 +480,8 @@ MaybeHandle<JSObject> ScopeIterator::MaterializeLocalScope() {
       function_context->has_extension() &&
       !function_context->IsNativeContext()) {
     bool success = CopyContextExtensionToScopeObject(
-        handle(function_context->extension_object(), isolate_), local_scope,
-        INCLUDE_PROTOS);
+        handle(function_context->extension_object(), isolate_),
+        local_scope, JSReceiver::INCLUDE_PROTOS);
     if (!success) return MaybeHandle<JSObject>();
   }
 
@@ -507,7 +510,8 @@ Handle<JSObject> ScopeIterator::MaterializeClosure() {
   // be variables introduced by eval.
   if (context->has_extension()) {
     bool success = CopyContextExtensionToScopeObject(
-        handle(context->extension_object(), isolate_), closure_scope, OWN_ONLY);
+        handle(context->extension_object(), isolate_), closure_scope,
+        JSReceiver::OWN_ONLY);
     DCHECK(success);
     USE(success);
   }
@@ -555,7 +559,8 @@ Handle<JSObject> ScopeIterator::MaterializeBlockScope() {
     // Fill all extension variables.
     if (context->extension_object() != nullptr) {
       bool success = CopyContextExtensionToScopeObject(
-          handle(context->extension_object()), block_scope, OWN_ONLY);
+          handle(context->extension_object()), block_scope,
+          JSReceiver::OWN_ONLY);
       DCHECK(success);
       USE(success);
     }
@@ -793,9 +798,10 @@ void ScopeIterator::CopyContextLocalsToScopeObject(
   }
 }
 
+
 bool ScopeIterator::CopyContextExtensionToScopeObject(
     Handle<JSObject> extension, Handle<JSObject> scope_object,
-    KeyCollectionType type) {
+    JSReceiver::KeyCollectionType type) {
   Handle<FixedArray> keys;
   ASSIGN_RETURN_ON_EXCEPTION_VALUE(
       isolate_, keys, JSReceiver::GetKeys(extension, type, ENUMERABLE_STRINGS),

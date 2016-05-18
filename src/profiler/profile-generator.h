@@ -192,8 +192,7 @@ class ProfileTree {
 
   ProfileNode* AddPathFromEnd(
       const Vector<CodeEntry*>& path,
-      int src_line = v8::CpuProfileNode::kNoLineNumberInfo,
-      bool update_stats = true);
+      int src_line = v8::CpuProfileNode::kNoLineNumberInfo);
   ProfileNode* root() const { return root_; }
   unsigned next_node_id() { return next_node_id_++; }
   unsigned GetFunctionId(const ProfileNode* node);
@@ -226,7 +225,7 @@ class CpuProfile {
 
   // Add pc -> ... -> main() call path to the profile.
   void AddPath(base::TimeTicks timestamp, const Vector<CodeEntry*>& path,
-               int src_line, bool update_stats);
+               int src_line);
   void CalculateTotalTicksAndSamplingRate();
 
   const char* title() const { return title_; }
@@ -334,8 +333,7 @@ class CpuProfilesCollection {
 
   // Called from profile generator thread.
   void AddPathToCurrentProfiles(base::TimeTicks timestamp,
-                                const Vector<CodeEntry*>& path, int src_line,
-                                bool update_stats);
+                                const Vector<CodeEntry*>& path, int src_line);
 
   // Limits the number of profiles that can be simultaneously collected.
   static const int kMaxSimultaneousProfiles = 100;
