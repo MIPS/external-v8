@@ -334,15 +334,15 @@ void LAccessArgumentsAt::PrintDataTo(StringStream* stream) {
 int LPlatformChunk::GetNextSpillIndex(RegisterKind kind) {
   if (kind == DOUBLE_REGISTERS && kDoubleSize == 2 * kPointerSize) {
     // Skip a slot if for a double-width slot for x32 port.
-    current_frame_slots_++;
+    spill_slot_count_++;
     // The spill slot's address is at rbp - (index + 1) * kPointerSize -
     // StandardFrameConstants::kFixedFrameSizeFromFp. kFixedFrameSizeFromFp is
     // 2 * kPointerSize, if rbp is aligned at 8-byte boundary, the below "|= 1"
     // will make sure the spilled doubles are aligned at 8-byte boundary.
     // TODO(haitao): make sure rbp is aligned at 8-byte boundary for x32 port.
-    current_frame_slots_ |= 1;
+    spill_slot_count_ |= 1;
   }
-  return current_frame_slots_++;
+  return spill_slot_count_++;
 }
 
 
@@ -1511,18 +1511,10 @@ LInstruction* LChunkBuilder::DoMul(HMul* instr) {
     DCHECK(instr->left()->representation().Equals(instr->representation()));
     DCHECK(instr->right()->representation().Equals(instr->representation()));
     LOperand* left = UseRegisterAtStart(instr->BetterLeftOperand());
-    HValue* h_right = instr->BetterRightOperand();
-    LOperand* right = UseOrConstant(h_right);
+    LOperand* right = UseOrConstant(instr->BetterRightOperand());
     LMulI* mul = new(zone()) LMulI(left, right);
-    int constant_value =
-        h_right->IsConstant() ? HConstant::cast(h_right)->Integer32Value() : 0;
-    // |needs_environment| must mirror the cases where LCodeGen::DoMulI calls
-    // |DeoptimizeIf|.
-    bool needs_environment =
-        instr->CheckFlag(HValue::kCanOverflow) ||
-        (instr->CheckFlag(HValue::kBailoutOnMinusZero) &&
-         (!right->IsConstantOperand() || constant_value <= 0));
-    if (needs_environment) {
+    if (instr->CheckFlag(HValue::kCanOverflow) ||
+        instr->CheckFlag(HValue::kBailoutOnMinusZero)) {
       AssignEnvironment(mul);
     }
     return DefineSameAsFirst(mul);
@@ -1702,6 +1694,13 @@ LInstruction* LChunkBuilder::DoCompareHoleAndBranch(
 }
 
 
+LInstruction* LChunkBuilder::DoCompareMinusZeroAndBranch(
+    HCompareMinusZeroAndBranch* instr) {
+  LOperand* value = UseRegister(instr->value());
+  return new(zone()) LCompareMinusZeroAndBranch(value);
+}
+
+
 LInstruction* LChunkBuilder::DoIsStringAndBranch(HIsStringAndBranch* instr) {
   DCHECK(instr->value()->representation().IsTagged());
   LOperand* value = UseRegisterAtStart(instr->value());
@@ -1771,6 +1770,12 @@ LInstruction* LChunkBuilder::DoClassOfTestAndBranch(
   return new(zone()) LClassOfTestAndBranch(value,
                                            TempRegister(),
                                            TempRegister());
+}
+
+
+LInstruction* LChunkBuilder::DoMapEnumLength(HMapEnumLength* instr) {
+  LOperand* map = UseRegisterAtStart(instr->value());
+  return DefineAsRegister(new(zone()) LMapEnumLength(map));
 }
 
 
@@ -2480,7 +2485,8 @@ LInstruction* LChunkBuilder::DoParameter(HParameter* instr) {
     return DefineAsSpilled(result, spill_index);
   } else {
     DCHECK(info()->IsStub());
-    CallInterfaceDescriptor descriptor = graph()->descriptor();
+    CallInterfaceDescriptor descriptor =
+        info()->code_stub()->GetCallInterfaceDescriptor();
     int index = static_cast<int>(instr->index());
     Register reg = descriptor.GetRegisterParameter(index);
     return DefineFixed(result, reg);
@@ -2501,9 +2507,15 @@ LInstruction* LChunkBuilder::DoUnknownOSRValue(HUnknownOSRValue* instr) {
       Retry(kTooManySpillSlotsNeededForOSR);
       spill_index = 0;
     }
-    spill_index += StandardFrameConstants::kFixedSlotCount;
   }
   return DefineAsSpilled(new(zone()) LUnknownOSRValue, spill_index);
+}
+
+
+LInstruction* LChunkBuilder::DoCallStub(HCallStub* instr) {
+  LOperand* context = UseFixed(instr->context(), rsi);
+  LCallStub* result = new(zone()) LCallStub(context);
+  return MarkAsCall(DefineFixed(result, rax), instr);
 }
 
 
@@ -2654,6 +2666,16 @@ LInstruction* LChunkBuilder::DoLoadFieldByIndex(HLoadFieldByIndex* instr) {
 LInstruction* LChunkBuilder::DoStoreFrameContext(HStoreFrameContext* instr) {
   LOperand* context = UseRegisterAtStart(instr->context());
   return new(zone()) LStoreFrameContext(context);
+}
+
+
+LInstruction* LChunkBuilder::DoAllocateBlockContext(
+    HAllocateBlockContext* instr) {
+  LOperand* context = UseFixed(instr->context(), rsi);
+  LOperand* function = UseRegisterAtStart(instr->function());
+  LAllocateBlockContext* result =
+      new(zone()) LAllocateBlockContext(context, function);
+  return MarkAsCall(DefineFixed(result, rsi), instr);
 }
 
 

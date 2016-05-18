@@ -92,4 +92,5 @@ for (var i = 0; i < 5; i++) {
 }
 
 
+assertFalse(undetectable == %GetUndetectable());
 assertFalse(undetectable === %GetUndetectable());
