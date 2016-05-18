@@ -50,9 +50,6 @@ void DebugCodegen::PatchDebugBreakSlot(Isolate* isolate, Address pc,
   DCHECK_EQ(kSize, patcher.masm()->SizeOfCodeGeneratedSince(&check_codesize));
 }
 
-bool DebugCodegen::DebugBreakSlotIsPatched(Address pc) {
-  return !Assembler::IsNop(pc);
-}
 
 void DebugCodegen::GenerateDebugBreakStub(MacroAssembler* masm,
                                           DebugBreakCallHelperMode mode) {

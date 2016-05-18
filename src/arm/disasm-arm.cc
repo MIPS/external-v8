@@ -1188,13 +1188,7 @@ void Decoder::DecodeType3(Instruction* instr) {
                   }
                 }
               } else {
-                // PU == 0b01, BW == 0b11, Bits(9, 6) != 0b0001
-                if ((instr->Bits(20, 16) == 0x1f) &&
-                    (instr->Bits(11, 4) == 0xf3)) {
-                  Format(instr, "rbit'cond 'rd, 'rm");
-                } else {
-                  UNREACHABLE();
-                }
+                UNREACHABLE();
               }
               break;
           }
@@ -1695,12 +1689,6 @@ void Decoder::DecodeType6CoprocessorIns(Instruction* instr) {
 }
 
 
-static const char* const barrier_option_names[] = {
-    "invalid", "oshld", "oshst", "osh", "invalid", "nshld", "nshst", "nsh",
-    "invalid", "ishld", "ishst", "ish", "invalid", "ld",    "st",    "sy",
-};
-
-
 void Decoder::DecodeSpecialCondition(Instruction* instr) {
   switch (instr->SpecialValue()) {
     case 5:
@@ -1776,24 +1764,6 @@ void Decoder::DecodeSpecialCondition(Instruction* instr) {
         } else {
           out_buffer_pos_ += SNPrintF(out_buffer_ + out_buffer_pos_,
                                       "pld [r%d, #+%d]", Rn, offset);
-        }
-      } else if (instr->SpecialValue() == 0xA && instr->Bits(22, 20) == 7) {
-        int option = instr->Bits(3, 0);
-        switch (instr->Bits(7, 4)) {
-          case 4:
-            out_buffer_pos_ += SNPrintF(out_buffer_ + out_buffer_pos_,
-                                        "dsb %s", barrier_option_names[option]);
-            break;
-          case 5:
-            out_buffer_pos_ += SNPrintF(out_buffer_ + out_buffer_pos_,
-                                        "dmb %s", barrier_option_names[option]);
-            break;
-          case 6:
-            out_buffer_pos_ += SNPrintF(out_buffer_ + out_buffer_pos_,
-                                        "isb %s", barrier_option_names[option]);
-            break;
-          default:
-            Unknown(instr);
         }
       } else {
         Unknown(instr);

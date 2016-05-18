@@ -75,6 +75,60 @@ function MathLog(x) {
   return %_MathLogRT(TO_NUMBER(x));
 }
 
+// ECMA 262 - 15.8.2.11
+function MathMax(arg1, arg2) {  // length == 2
+  var length = %_ArgumentsLength();
+  if (length == 2) {
+    arg1 = TO_NUMBER(arg1);
+    arg2 = TO_NUMBER(arg2);
+    if (arg2 > arg1) return arg2;
+    if (arg1 > arg2) return arg1;
+    if (arg1 == arg2) {
+      // Make sure -0 is considered less than +0.
+      return (arg1 === 0 && %_IsMinusZero(arg1)) ? arg2 : arg1;
+    }
+    // All comparisons failed, one of the arguments must be NaN.
+    return NaN;
+  }
+  var r = -INFINITY;
+  for (var i = 0; i < length; i++) {
+    var n = %_Arguments(i);
+    n = TO_NUMBER(n);
+    // Make sure +0 is considered greater than -0.
+    if (NUMBER_IS_NAN(n) || n > r || (r === 0 && n === 0 && %_IsMinusZero(r))) {
+      r = n;
+    }
+  }
+  return r;
+}
+
+// ECMA 262 - 15.8.2.12
+function MathMin(arg1, arg2) {  // length == 2
+  var length = %_ArgumentsLength();
+  if (length == 2) {
+    arg1 = TO_NUMBER(arg1);
+    arg2 = TO_NUMBER(arg2);
+    if (arg2 > arg1) return arg1;
+    if (arg1 > arg2) return arg2;
+    if (arg1 == arg2) {
+      // Make sure -0 is considered less than +0.
+      return (arg1 === 0 && %_IsMinusZero(arg1)) ? arg1 : arg2;
+    }
+    // All comparisons failed, one of the arguments must be NaN.
+    return NaN;
+  }
+  var r = INFINITY;
+  for (var i = 0; i < length; i++) {
+    var n = %_Arguments(i);
+    n = TO_NUMBER(n);
+    // Make sure -0 is considered less than +0.
+    if (NUMBER_IS_NAN(n) || n < r || (r === 0 && n === 0 && %_IsMinusZero(n))) {
+      r = n;
+    }
+  }
+  return r;
+}
+
 // ECMA 262 - 15.8.2.13
 function MathPowJS(x, y) {
   return %_MathPow(TO_NUMBER(x), TO_NUMBER(y));
@@ -164,14 +218,17 @@ function MathHypot(x, y) {  // Function length is 2.
   // We may want to introduce fast paths for two arguments and when
   // normalization to avoid overflow is not necessary.  For now, we
   // simply assume the general case.
-  var length = arguments.length;
+  var length = %_ArgumentsLength();
+  var args = new InternalArray(length);
   var max = 0;
   for (var i = 0; i < length; i++) {
-    var n = MathAbs(arguments[i]);
+    var n = %_Arguments(i);
+    n = TO_NUMBER(n);
+    if (n === INFINITY || n === -INFINITY) return INFINITY;
+    n = MathAbs(n);
     if (n > max) max = n;
-    arguments[i] = n;
+    args[i] = n;
   }
-  if (max === INFINITY) return INFINITY;
 
   // Kahan summation to avoid rounding errors.
   // Normalize the numbers to the largest one to avoid overflow.
@@ -179,7 +236,7 @@ function MathHypot(x, y) {  // Function length is 2.
   var sum = 0;
   var compensation = 0;
   for (var i = 0; i < length; i++) {
-    var n = arguments[i] / max;
+    var n = args[i] / max;
     var summand = n * n - compensation;
     var preliminary = sum + summand;
     compensation = (preliminary - sum) - summand;
@@ -257,6 +314,8 @@ utils.InstallFunctions(GlobalMath, DONT_ENUM, [
   "sqrt", MathSqrtJS,
   "atan2", MathAtan2JS,
   "pow", MathPowJS,
+  "max", MathMax,
+  "min", MathMin,
   "imul", MathImul,
   "sign", MathSign,
   "trunc", MathTrunc,
@@ -290,6 +349,8 @@ utils.Export(function(to) {
   to.MathExp = MathExp;
   to.MathFloor = MathFloorJS;
   to.IntRandom = MathRandomRaw;
+  to.MathMax = MathMax;
+  to.MathMin = MathMin;
 });
 
 })

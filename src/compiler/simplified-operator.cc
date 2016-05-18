@@ -7,7 +7,7 @@
 #include "src/base/lazy-instance.h"
 #include "src/compiler/opcodes.h"
 #include "src/compiler/operator.h"
-#include "src/types.h"
+#include "src/types-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -187,7 +187,6 @@ const ElementAccess& ElementAccessOf(const Operator* op) {
   V(ChangeBoolToBit, Operator::kNoProperties, 1)         \
   V(ChangeBitToBool, Operator::kNoProperties, 1)         \
   V(ObjectIsNumber, Operator::kNoProperties, 1)          \
-  V(ObjectIsReceiver, Operator::kNoProperties, 1)        \
   V(ObjectIsSmi, Operator::kNoProperties, 1)
 
 #define NO_THROW_OP_LIST(V)                 \
@@ -254,6 +253,7 @@ NO_THROW_OP_LIST(GET_FROM_CACHE)
 
 
 const Operator* SimplifiedOperatorBuilder::ReferenceEqual(Type* type) {
+  // TODO(titzer): What about the type parameter?
   return new (zone()) Operator(IrOpcode::kReferenceEqual,
                                Operator::kCommutative | Operator::kPure,
                                "ReferenceEqual", 2, 0, 0, 1, 0, 0);
