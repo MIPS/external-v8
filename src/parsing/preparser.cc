@@ -94,10 +94,11 @@ PreParserExpression PreParserTraits::ParseFunctionLiteral(
     PreParserIdentifier name, Scanner::Location function_name_location,
     FunctionNameValidity function_name_validity, FunctionKind kind,
     int function_token_position, FunctionLiteral::FunctionType type,
+    FunctionLiteral::ArityRestriction arity_restriction,
     LanguageMode language_mode, bool* ok) {
   return pre_parser_->ParseFunctionLiteral(
       name, function_name_location, function_name_validity, kind,
-      function_token_position, type, language_mode, ok);
+      function_token_position, type, arity_restriction, language_mode, ok);
 }
 
 
@@ -450,7 +451,8 @@ PreParser::Statement PreParser::ParseFunctionDeclaration(bool* ok) {
                                           : kFunctionNameValidityUnknown,
                        is_generator ? FunctionKind::kGeneratorFunction
                                     : FunctionKind::kNormalFunction,
-                       pos, FunctionLiteral::kDeclaration, language_mode(),
+                       pos, FunctionLiteral::kDeclaration,
+                       FunctionLiteral::kNormalArity, language_mode(),
                        CHECK_OK);
   return Statement::FunctionDeclaration();
 }
@@ -573,7 +575,7 @@ PreParser::Statement PreParser::ParseVariableDeclarations(
     int decl_pos = peek_position();
     PreParserExpression pattern = PreParserExpression::Default();
     {
-      ExpressionClassifier pattern_classifier(this);
+      ExpressionClassifier pattern_classifier;
       Token::Value next = peek();
       pattern = ParsePrimaryExpression(&pattern_classifier, CHECK_OK);
 
@@ -589,12 +591,17 @@ PreParser::Statement PreParser::ParseVariableDeclarations(
       }
     }
 
-    is_pattern = pattern.IsObjectLiteral() || pattern.IsArrayLiteral();
+    is_pattern = (pattern.IsObjectLiteral() || pattern.IsArrayLiteral()) &&
+                 !pattern.is_parenthesized();
+
+    bool is_for_iteration_variable =
+        var_context == kForStatement &&
+        (peek() == Token::IN || PeekContextualKeyword(CStrVector("of")));
 
     Scanner::Location variable_loc = scanner()->location();
     nvars++;
     if (Check(Token::ASSIGN)) {
-      ExpressionClassifier classifier(this);
+      ExpressionClassifier classifier;
       ParseAssignmentExpression(var_context != kForStatement, &classifier,
                                 CHECK_OK);
       ValidateExpression(&classifier, CHECK_OK);
@@ -604,7 +611,7 @@ PreParser::Statement PreParser::ParseVariableDeclarations(
         *first_initializer_loc = variable_loc;
       }
     } else if ((require_initializer || is_pattern) &&
-               (var_context != kForStatement || !PeekInOrOf())) {
+               !is_for_iteration_variable) {
       PreParserTraits::ReportMessageAt(
           Scanner::Location(decl_pos, scanner()->location().end_pos),
           MessageTemplate::kDeclarationMissingInitializer,
@@ -648,7 +655,7 @@ PreParser::Statement PreParser::ParseExpressionOrLabelledStatement(bool* ok) {
           IsClassConstructor(function_state_->kind())) {
         bool is_this = peek() == Token::THIS;
         Expression expr = Expression::Default();
-        ExpressionClassifier classifier(this);
+        ExpressionClassifier classifier;
         if (is_this) {
           expr = ParseStrongInitializationExpression(&classifier, CHECK_OK);
         } else {
@@ -684,7 +691,7 @@ PreParser::Statement PreParser::ParseExpressionOrLabelledStatement(bool* ok) {
   }
 
   bool starts_with_identifier = peek_any_identifier();
-  ExpressionClassifier classifier(this);
+  ExpressionClassifier classifier;
   Expression expr = ParseExpression(true, &classifier, CHECK_OK);
   ValidateExpression(&classifier, CHECK_OK);
 
@@ -917,40 +924,40 @@ PreParser::Statement PreParser::ParseForStatement(bool* ok) {
       ParseVariableDeclarations(kForStatement, &decl_count, &is_lexical,
                                 &is_binding_pattern, &first_initializer_loc,
                                 &bindings_loc, CHECK_OK);
-      if (CheckInOrOf(&mode, ok)) {
+      bool accept_IN = decl_count >= 1;
+      if (accept_IN && CheckInOrOf(&mode, ok)) {
         if (!*ok) return Statement::Default();
         if (decl_count != 1) {
+          const char* loop_type =
+              mode == ForEachStatement::ITERATE ? "for-of" : "for-in";
           PreParserTraits::ReportMessageAt(
               bindings_loc, MessageTemplate::kForInOfLoopMultiBindings,
-              ForEachStatement::VisitModeString(mode));
+              loop_type);
           *ok = false;
           return Statement::Default();
         }
         if (first_initializer_loc.IsValid() &&
             (is_strict(language_mode()) || mode == ForEachStatement::ITERATE ||
              is_lexical || is_binding_pattern)) {
-          PreParserTraits::ReportMessageAt(
-              first_initializer_loc, MessageTemplate::kForInOfLoopInitializer,
-              ForEachStatement::VisitModeString(mode));
+          if (mode == ForEachStatement::ITERATE) {
+            ReportMessageAt(first_initializer_loc,
+                            MessageTemplate::kForOfLoopInitializer);
+          } else {
+            // TODO(caitp): This should be an error in sloppy mode, too.
+            ReportMessageAt(first_initializer_loc,
+                            MessageTemplate::kForInLoopInitializer);
+          }
           *ok = false;
           return Statement::Default();
         }
-
-        if (mode == ForEachStatement::ITERATE) {
-          ExpressionClassifier classifier(this);
-          ParseAssignmentExpression(true, &classifier, CHECK_OK);
-          RewriteNonPattern(&classifier, CHECK_OK);
-        } else {
-          ParseExpression(true, CHECK_OK);
-        }
-
+        ParseExpression(true, CHECK_OK);
         Expect(Token::RPAREN, CHECK_OK);
         ParseSubStatement(CHECK_OK);
         return Statement::Default();
       }
     } else {
       int lhs_beg_pos = peek_position();
-      ExpressionClassifier classifier(this);
+      ExpressionClassifier classifier;
       Expression lhs = ParseExpression(false, &classifier, CHECK_OK);
       int lhs_end_pos = scanner()->location().end_pos;
       is_let_identifier_expression =
@@ -973,15 +980,7 @@ PreParser::Statement PreParser::ParseForStatement(bool* ok) {
               lhs, lhs_beg_pos, lhs_end_pos, MessageTemplate::kInvalidLhsInFor,
               kSyntaxError, CHECK_OK);
         }
-
-        if (mode == ForEachStatement::ITERATE) {
-          ExpressionClassifier classifier(this);
-          ParseAssignmentExpression(true, &classifier, CHECK_OK);
-          RewriteNonPattern(&classifier, CHECK_OK);
-        } else {
-          ParseExpression(true, CHECK_OK);
-        }
-
+        ParseExpression(true, CHECK_OK);
         Expect(Token::RPAREN, CHECK_OK);
         ParseSubStatement(CHECK_OK);
         return Statement::Default();
@@ -1055,7 +1054,7 @@ PreParser::Statement PreParser::ParseTryStatement(bool* ok) {
   if (tok == Token::CATCH) {
     Consume(Token::CATCH);
     Expect(Token::LPAREN, CHECK_OK);
-    ExpressionClassifier pattern_classifier(this);
+    ExpressionClassifier pattern_classifier;
     ParsePrimaryExpression(&pattern_classifier, CHECK_OK);
     ValidateBindingPattern(&pattern_classifier, CHECK_OK);
     Expect(Token::RPAREN, CHECK_OK);
@@ -1100,6 +1099,7 @@ PreParser::Expression PreParser::ParseFunctionLiteral(
     Identifier function_name, Scanner::Location function_name_location,
     FunctionNameValidity function_name_validity, FunctionKind kind,
     int function_token_pos, FunctionLiteral::FunctionType function_type,
+    FunctionLiteral::ArityRestriction arity_restriction,
     LanguageMode language_mode, bool* ok) {
   // Function ::
   //   '(' FormalParameterList? ')' '{' FunctionBody '}'
@@ -1112,7 +1112,7 @@ PreParser::Expression PreParser::ParseFunctionLiteral(
   FunctionState function_state(&function_state_, &scope_, function_scope, kind,
                                &factory);
   DuplicateFinder duplicate_finder(scanner()->unicode_cache());
-  ExpressionClassifier formals_classifier(this, &duplicate_finder);
+  ExpressionClassifier formals_classifier(&duplicate_finder);
 
   Expect(Token::LPAREN, CHECK_OK);
   int start_position = scanner()->location().beg_pos;
@@ -1122,7 +1122,8 @@ PreParser::Expression PreParser::ParseFunctionLiteral(
   Expect(Token::RPAREN, CHECK_OK);
   int formals_end_position = scanner()->location().end_pos;
 
-  CheckArityRestrictions(formals.arity, kind, formals.has_rest, start_position,
+  CheckArityRestrictions(formals.arity, arity_restriction,
+                         formals.has_rest, start_position,
                          formals_end_position, CHECK_OK);
 
   // See Parser::ParseFunctionLiteral for more information about lazy parsing
@@ -1218,7 +1219,7 @@ PreParserExpression PreParser::ParseClassLiteral(
 
   bool has_extends = Check(Token::EXTENDS);
   if (has_extends) {
-    ExpressionClassifier classifier(this);
+    ExpressionClassifier classifier;
     ParseLeftHandSideExpression(&classifier, CHECK_OK);
     ValidateExpression(&classifier, CHECK_OK);
   }
@@ -1234,7 +1235,7 @@ PreParserExpression PreParser::ParseClassLiteral(
     bool is_computed_name = false;  // Classes do not care about computed
                                     // property names here.
     Identifier name;
-    ExpressionClassifier classifier(this);
+    ExpressionClassifier classifier;
     ParsePropertyDefinition(&checker, in_class, has_extends, is_static,
                             &is_computed_name, &has_seen_constructor,
                             &classifier, &name, CHECK_OK);
@@ -1258,7 +1259,7 @@ PreParser::Expression PreParser::ParseV8Intrinsic(bool* ok) {
   // Allow "eval" or "arguments" for backward compatibility.
   ParseIdentifier(kAllowRestrictedIdentifiers, CHECK_OK);
   Scanner::Location spread_pos;
-  ExpressionClassifier classifier(this);
+  ExpressionClassifier classifier;
   ParseArguments(&spread_pos, &classifier, ok);
   ValidateExpression(&classifier, CHECK_OK);
 

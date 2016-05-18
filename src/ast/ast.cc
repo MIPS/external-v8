@@ -5,8 +5,6 @@
 #include "src/ast/ast.h"
 
 #include <cmath>  // For isfinite.
-
-#include "src/ast/prettyprinter.h"
 #include "src/ast/scopes.h"
 #include "src/builtins.h"
 #include "src/code-stubs.h"
@@ -33,25 +31,6 @@ AST_NODE_LIST(DECL_ACCEPT)
 
 // ----------------------------------------------------------------------------
 // Implementation of other node functionality.
-
-#ifdef DEBUG
-
-void AstNode::Print() { Print(Isolate::Current()); }
-
-
-void AstNode::Print(Isolate* isolate) {
-  AstPrinter::PrintOut(isolate, this);
-}
-
-
-void AstNode::PrettyPrint() { PrettyPrint(Isolate::Current()); }
-
-
-void AstNode::PrettyPrint(Isolate* isolate) {
-  PrettyPrinter::PrintOut(isolate, this);
-}
-
-#endif  // DEBUG
 
 
 bool Expression::IsSmiLiteral() const {
@@ -275,21 +254,14 @@ ObjectLiteralProperty::ObjectLiteralProperty(AstValueFactory* ast_value_factory,
   }
 }
 
-bool ObjectLiteralProperty::NeedsSetFunctionName() const {
-  return is_computed_name_ &&
-         (value_->IsAnonymousFunctionDefinition() ||
-          (value_->IsFunctionLiteral() &&
-           IsConciseMethod(value_->AsFunctionLiteral()->kind())));
-}
 
 void ClassLiteral::AssignFeedbackVectorSlots(Isolate* isolate,
                                              FeedbackVectorSpec* spec,
                                              FeedbackVectorSlotCache* cache) {
   // This logic that computes the number of slots needed for vector store
   // ICs must mirror FullCodeGenerator::VisitClassLiteral.
-  prototype_slot_ = spec->AddLoadICSlot();
   if (NeedsProxySlot()) {
-    proxy_slot_ = spec->AddStoreICSlot();
+    slot_ = spec->AddStoreICSlot();
   }
 
   for (int i = 0; i < properties()->length(); i++) {
@@ -504,11 +476,10 @@ void ObjectLiteral::BuildConstantProperties(Isolate* isolate) {
 
 
 void ArrayLiteral::BuildConstantElements(Isolate* isolate) {
-  DCHECK_LT(first_spread_index_, 0);
-
   if (!constant_elements_.is_null()) return;
 
-  int constants_length = values()->length();
+  int constants_length =
+      first_spread_index_ >= 0 ? first_spread_index_ : values()->length();
 
   // Allocate a fixed array to hold all the object literals.
   Handle<JSArray> array = isolate->factory()->NewJSArray(
@@ -516,7 +487,7 @@ void ArrayLiteral::BuildConstantElements(Isolate* isolate) {
       Strength::WEAK, INITIALIZE_ARRAY_ELEMENTS_WITH_HOLE);
 
   // Fill in the literals.
-  bool is_simple = true;
+  bool is_simple = (first_spread_index_ < 0);
   int depth_acc = 1;
   bool is_holey = false;
   int array_index = 0;
@@ -582,7 +553,7 @@ void ArrayLiteral::AssignFeedbackVectorSlots(Isolate* isolate,
   int array_index = 0;
   for (; array_index < values()->length(); array_index++) {
     Expression* subexpr = values()->at(array_index);
-    DCHECK(!subexpr->IsSpread());
+    if (subexpr->IsSpread()) break;
     if (CompileTimeValue::IsCompileTimeValue(subexpr)) continue;
 
     // We'll reuse the same literal slot for all of the non-constant
@@ -826,12 +797,14 @@ void AstVisitor::VisitExpressions(ZoneList<Expression*>* expressions) {
   }
 }
 
+
 CaseClause::CaseClause(Zone* zone, Expression* label,
                        ZoneList<Statement*>* statements, int pos)
     : Expression(zone, pos),
       label_(label),
       statements_(statements),
-      compare_type_(Type::None()) {}
+      compare_type_(Type::None(zone)) {}
+
 
 uint32_t Literal::Hash() {
   return raw_value()->IsString()

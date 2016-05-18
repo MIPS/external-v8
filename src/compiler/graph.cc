@@ -42,15 +42,17 @@ void Graph::RemoveDecorator(GraphDecorator* decorator) {
   decorators_.erase(it);
 }
 
-Node* Graph::NewNode(const Operator* op, int input_count, Node* const* inputs,
+
+Node* Graph::NewNode(const Operator* op, int input_count, Node** inputs,
                      bool incomplete) {
   Node* node = NewNodeUnchecked(op, input_count, inputs, incomplete);
   Verifier::VerifyNode(node);
   return node;
 }
 
+
 Node* Graph::NewNodeUnchecked(const Operator* op, int input_count,
-                              Node* const* inputs, bool incomplete) {
+                              Node** inputs, bool incomplete) {
   Node* const node =
       Node::New(zone(), NextNodeId(), op, input_count, inputs, incomplete);
   Decorate(node);

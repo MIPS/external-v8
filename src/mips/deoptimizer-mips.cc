@@ -80,6 +80,27 @@ void Deoptimizer::PatchCodeForDeoptimization(Isolate* isolate, Code* code) {
 }
 
 
+void Deoptimizer::FillInputFrame(Address tos, JavaScriptFrame* frame) {
+  // Set the register values. The values are not important as there are no
+  // callee saved registers in JavaScript frames, so all registers are
+  // spilled. Registers fp and sp are set to the correct values though.
+
+  for (int i = 0; i < Register::kNumRegisters; i++) {
+    input_->SetRegister(i, i * 4);
+  }
+  input_->SetRegister(sp.code(), reinterpret_cast<intptr_t>(frame->sp()));
+  input_->SetRegister(fp.code(), reinterpret_cast<intptr_t>(frame->fp()));
+  for (int i = 0; i < DoubleRegister::kMaxNumRegisters; i++) {
+    input_->SetDoubleRegister(i, 0.0);
+  }
+
+  // Fill the frame content from the actual data on the frame.
+  for (unsigned i = 0; i < input_->GetFrameSize(); i += kPointerSize) {
+    input_->SetFrameSlot(i, Memory::uint32_at(tos + i));
+  }
+}
+
+
 void Deoptimizer::SetPlatformCompiledStubRegisters(
     FrameDescription* output_frame, CodeStubDescriptor* descriptor) {
   ApiFunction function(descriptor->deoptimization_handler());
@@ -98,7 +119,8 @@ void Deoptimizer::CopyDoubleRegisters(FrameDescription* output_frame) {
   }
 }
 
-bool Deoptimizer::HasAlignmentPadding(SharedFunctionInfo* shared) {
+
+bool Deoptimizer::HasAlignmentPadding(JSFunction* function) {
   // There is no dynamic alignment padding on MIPS in the input frame.
   return false;
 }
@@ -246,7 +268,8 @@ void Deoptimizer::TableEntryGenerator::Generate() {
   // a1 = one past the last FrameDescription**.
   __ lw(a1, MemOperand(a0, Deoptimizer::output_count_offset()));
   __ lw(t0, MemOperand(a0, Deoptimizer::output_offset()));  // t0 is output_.
-  __ Lsa(a1, t0, a1, kPointerSizeLog2);
+  __ sll(a1, a1, kPointerSizeLog2);  // Count to offset.
+  __ addu(a1, t0, a1);  // a1 = one past the last FrameDescription**.
   __ BranchShort(&outer_loop_header);
   __ bind(&outer_push_loop);
   // Inner loop state: a2 = current FrameDescription*, a3 = loop index.

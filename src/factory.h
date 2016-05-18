@@ -70,7 +70,7 @@ class Factory final {
   Handle<String> InternalizeUtf8String(const char* str) {
     return InternalizeUtf8String(CStrVector(str));
   }
-
+  Handle<String> InternalizeString(Handle<String> str);
   Handle<String> InternalizeOneByteString(Vector<const uint8_t> str);
   Handle<String> InternalizeOneByteString(
       Handle<SeqOneByteString>, int from, int length);
@@ -80,16 +80,8 @@ class Factory final {
   template<class StringTableKey>
   Handle<String> InternalizeStringWithKey(StringTableKey* key);
 
-  // Internalized strings are created in the old generation (data space).
-  Handle<String> InternalizeString(Handle<String> string) {
-    if (string->IsInternalizedString()) return string;
-    return StringTable::LookupString(isolate(), string);
-  }
+  Handle<Name> InternalizeName(Handle<Name> name);
 
-  Handle<Name> InternalizeName(Handle<Name> name) {
-    if (name->IsUniqueName()) return name;
-    return StringTable::LookupString(isolate(), Handle<String>::cast(name));
-  }
 
   // String creation functions.  Most of the string creation functions take
   // a Heap::PretenureFlag argument to optionally request that they be
@@ -270,7 +262,7 @@ class Factory final {
   Handle<AliasedArgumentsEntry> NewAliasedArgumentsEntry(
       int aliased_context_slot);
 
-  Handle<AccessorInfo> NewAccessorInfo();
+  Handle<ExecutableAccessorInfo> NewExecutableAccessorInfo();
 
   Handle<Script> NewScript(Handle<String> source);
 
@@ -330,9 +322,6 @@ class Factory final {
   Handle<FixedArray> CopyFixedArrayAndGrow(
       Handle<FixedArray> array, int grow_by,
       PretenureFlag pretenure = NOT_TENURED);
-
-  Handle<FixedArray> CopyFixedArrayUpTo(Handle<FixedArray> array, int new_len,
-                                        PretenureFlag pretenure = NOT_TENURED);
 
   Handle<FixedArray> CopyFixedArray(Handle<FixedArray> array);
 
@@ -405,6 +394,11 @@ class Factory final {
                                Handle<ScopeInfo> scope_info);
 
   // JS arrays are pretenured when allocated by the parser.
+
+  // Create a JSArray with no elements.
+  Handle<JSArray> NewJSArray(ElementsKind elements_kind,
+                             Strength strength = Strength::WEAK,
+                             PretenureFlag pretenure = NOT_TENURED);
 
   // Create a JSArray with a specified length and elements initialized
   // according to the specified mode.
@@ -480,6 +474,11 @@ class Factory final {
   Handle<JSMapIterator> NewJSMapIterator();
   Handle<JSSetIterator> NewJSSetIterator();
 
+  // Creates a new JSIteratorResult object with the arguments {value} and
+  // {done}.  Implemented according to ES6 section 7.4.7 CreateIterResultObject.
+  Handle<JSIteratorResult> NewJSIteratorResult(Handle<Object> value,
+                                               Handle<Object> done);
+
   // Allocates a bound function.
   MaybeHandle<JSBoundFunction> NewJSBoundFunction(
       Handle<JSReceiver> target_function, Handle<Object> bound_this,
@@ -548,8 +547,6 @@ class Factory final {
   Handle<Code> CopyCode(Handle<Code> code);
 
   Handle<Code> CopyCode(Handle<Code> code, Vector<byte> reloc_info);
-
-  Handle<BytecodeArray> CopyBytecodeArray(Handle<BytecodeArray>);
 
   // Interface for creating error objects.
   Handle<Object> NewError(Handle<JSFunction> constructor,
@@ -707,11 +704,6 @@ class Factory final {
                                  Handle<SharedFunctionInfo> info,
                                  Handle<Context> context,
                                  PretenureFlag pretenure = TENURED);
-
-  // Create a JSArray with no elements and no length.
-  Handle<JSArray> NewJSArray(ElementsKind elements_kind,
-                             Strength strength = Strength::WEAK,
-                             PretenureFlag pretenure = NOT_TENURED);
 };
 
 }  // namespace internal
