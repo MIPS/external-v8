@@ -228,7 +228,7 @@ TEST(jump_tables4) {
   CcTest::InitializeVM();
   Isolate* isolate = CcTest::i_isolate();
   HandleScope scope(isolate);
-  MacroAssembler assembler(isolate, nullptr, 0,
+  MacroAssembler assembler(isolate, NULL, 0,
                            v8::internal::CodeObjectRequired::kYes);
   MacroAssembler* masm = &assembler;
 
@@ -236,9 +236,11 @@ TEST(jump_tables4) {
   int values[kNumCases];
   isolate->random_number_generator()->NextBytes(values, sizeof(values));
   Label labels[kNumCases];
-  Label near_start, end, done;
+  Label near_start, end;
 
-  __ Push(ra);
+  __ daddiu(sp, sp, -8);
+  __ sd(ra, MemOperand(sp));
+
   __ mov(v0, zero_reg);
 
   __ Branch(&end);
@@ -250,17 +252,36 @@ TEST(jump_tables4) {
     __ addiu(v0, v0, 1);
   }
 
-  __ GenerateSwitchTable(a0, kNumCases,
-                         [&labels](size_t i) { return labels + i; });
+  __ Align(8);
+  Label done;
+  {
+    __ BlockTrampolinePoolFor(kNumCases * 2 + 6);
+    PredictableCodeSizeScope predictable(
+        masm, (kNumCases * 2 + 6) * Assembler::kInstrSize);
+    Label here;
+
+    __ bal(&here);
+    __ dsll(at, a0, 3);  // In delay slot.
+    __ bind(&here);
+    __ daddu(at, at, ra);
+    __ ld(at, MemOperand(at, 4 * Assembler::kInstrSize));
+    __ jr(at);
+    __ nop();  // Branch delay slot nop.
+    for (int i = 0; i < kNumCases; ++i) {
+      __ dd(&labels[i]);
+    }
+  }
 
   for (int i = 0; i < kNumCases; ++i) {
     __ bind(&labels[i]);
-    __ li(v0, values[i]);
+    __ lui(v0, (values[i] >> 16) & 0xffff);
+    __ ori(v0, v0, values[i] & 0xffff);
     __ Branch(&done);
   }
 
   __ bind(&done);
-  __ Pop(ra);
+  __ ld(ra, MemOperand(sp));
+  __ daddiu(sp, sp, 8);
   __ jr(ra);
   __ nop();
 
@@ -302,22 +323,21 @@ TEST(jump_tables5) {
   Label labels[kNumCases];
   Label done;
 
-  __ Push(ra);
+  __ daddiu(sp, sp, -8);
+  __ sd(ra, MemOperand(sp));
 
-  // Opposite of Align(8) as we have unaligned number of instructions in the
-  // following block before the first dd().
-  if ((masm->pc_offset() & 7) == 0) {
-    __ nop();
-  }
-
+  __ Align(8);
   {
-    __ BlockTrampolinePoolFor(kNumCases * 2 + 6 + 1);
+    __ BlockTrampolinePoolFor(kNumCases * 2 + 7 + 1);
     PredictableCodeSizeScope predictable(
-        masm, kNumCases * kPointerSize + ((6 + 1) * Assembler::kInstrSize));
+        masm, kNumCases * kPointerSize + ((7 + 1) * Assembler::kInstrSize));
+    Label here;
 
-    __ addiupc(at, 6 + 1);
-    __ dlsa(at, at, a0, 3);
-    __ ld(at, MemOperand(at));
+    __ bal(&here);
+    __ dsll(at, a0, 3);  // In delay slot.
+    __ bind(&here);
+    __ daddu(at, at, ra);
+    __ ld(at, MemOperand(at, 6 * Assembler::kInstrSize));
     __ jalr(at);
     __ nop();  // Branch delay slot nop.
     __ bc(&done);
@@ -331,13 +351,15 @@ TEST(jump_tables5) {
 
   for (int i = 0; i < kNumCases; ++i) {
     __ bind(&labels[i]);
-    __ li(v0, values[i]);
+    __ lui(v0, (values[i] >> 16) & 0xffff);
+    __ ori(v0, v0, values[i] & 0xffff);
     __ jr(ra);
     __ nop();
   }
 
   __ bind(&done);
-  __ Pop(ra);
+  __ ld(ra, MemOperand(sp));
+  __ daddiu(sp, sp, 8);
   __ jr(ra);
   __ nop();
 

@@ -5,7 +5,6 @@
 #ifndef V8_V8_PLATFORM_H_
 #define V8_V8_PLATFORM_H_
 
-#include <stddef.h>
 #include <stdint.h>
 
 namespace v8 {
@@ -55,15 +54,6 @@ class Platform {
   };
 
   virtual ~Platform() {}
-
-  /**
-   * Gets the number of threads that are used to execute background tasks. Is
-   * used to estimate the number of tasks a work package should be split into.
-   * A return value of 0 means that there are no background threads available.
-   * Note that a value of 0 won't prohibit V8 from posting tasks using
-   * |CallOnBackgroundThread|.
-   */
-  virtual size_t NumberOfAvailableBackgroundThreads() { return 0; }
 
   /**
    * Schedules a task to be invoked on a background thread. |expected_runtime|
