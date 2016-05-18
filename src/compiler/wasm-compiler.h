@@ -35,12 +35,12 @@ namespace compiler {
 // Compiles a single function, producing a code object.
 Handle<Code> CompileWasmFunction(wasm::ErrorThrower& thrower, Isolate* isolate,
                                  wasm::ModuleEnv* module_env,
-                                 const wasm::WasmFunction& function);
+                                 const wasm::WasmFunction& function, int index);
 
 // Wraps a JS function, producing a code object that can be called from WASM.
 Handle<Code> CompileWasmToJSWrapper(Isolate* isolate, wasm::ModuleEnv* module,
                                     Handle<JSFunction> function,
-                                    wasm::FunctionSig* sig, const char* name);
+                                    uint32_t index);
 
 // Wraps a given wasm code object, producing a JSFunction that can be called
 // from JavaScript.
@@ -100,7 +100,6 @@ class WasmGraphBuilder {
   Node* Unreachable();
 
   Node* CallDirect(uint32_t index, Node** args);
-  Node* CallImport(uint32_t index, Node** args);
   Node* CallIndirect(uint32_t index, Node** args);
   void BuildJSToWasmWrapper(Handle<Code> wasm_code, wasm::FunctionSig* sig);
   void BuildWasmToJSWrapper(Handle<JSFunction> function,
@@ -133,8 +132,6 @@ class WasmGraphBuilder {
 
   wasm::FunctionSig* GetFunctionSignature() { return function_signature_; }
 
-  void Int64LoweringForTesting();
-
  private:
   static const int kDefaultBufferSize = 16;
   friend class WasmTrapHelper;
@@ -162,7 +159,6 @@ class WasmGraphBuilder {
   Node* MemBuffer(uint32_t offset);
   void BoundsCheckMem(MachineType memtype, Node* index, uint32_t offset);
 
-  Node* BuildCCall(MachineSignature* sig, Node** args);
   Node* BuildWasmCall(wasm::FunctionSig* sig, Node** args);
   Node* BuildF32Neg(Node* input);
   Node* BuildF64Neg(Node* input);
@@ -180,16 +176,6 @@ class WasmGraphBuilder {
   Node* BuildI32Popcnt(Node* input);
   Node* BuildI64Ctz(Node* input);
   Node* BuildI64Popcnt(Node* input);
-  Node* BuildRoundingInstruction(Node* input, ExternalReference ref,
-                                 MachineType type);
-  Node* BuildF32Trunc(Node* input);
-  Node* BuildF32Floor(Node* input);
-  Node* BuildF32Ceil(Node* input);
-  Node* BuildF32NearestInt(Node* input);
-  Node* BuildF64Trunc(Node* input);
-  Node* BuildF64Floor(Node* input);
-  Node* BuildF64Ceil(Node* input);
-  Node* BuildF64NearestInt(Node* input);
 
   Node** Realloc(Node** buffer, size_t count) {
     Node** buf = Buffer(count);

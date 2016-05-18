@@ -48,9 +48,6 @@ from testrunner.local import verbose
 from testrunner.objects import context
 
 
-# Base dir of the v8 checkout to be used as cwd.
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
 ARCH_GUESS = utils.DefaultArch()
 DEFAULT_TESTS = ["mjsunit", "webkit"]
 TIMEOUT_DEFAULT = 60
@@ -293,9 +290,6 @@ def ShardTests(tests, shard_count, shard_run):
 
 
 def Main():
-  # Use the v8 root as cwd as some test cases use "load" with relative paths.
-  os.chdir(BASE_DIR)
-
   parser = BuildOptions()
   (options, args) = parser.parse_args()
   if not ProcessOptions(options):
@@ -303,8 +297,9 @@ def Main():
     return 1
 
   exit_code = 0
+  workspace = os.path.abspath(join(os.path.dirname(sys.argv[0]), ".."))
 
-  suite_paths = utils.GetSuitePaths(join(BASE_DIR, "test"))
+  suite_paths = utils.GetSuitePaths(join(workspace, "test"))
 
   if len(args) == 0:
     suite_paths = [ s for s in suite_paths if s in DEFAULT_TESTS ]
@@ -319,7 +314,7 @@ def Main():
   suites = []
   for root in suite_paths:
     suite = testsuite.TestSuite.LoadTestSuite(
-        os.path.join(BASE_DIR, "test", root))
+        os.path.join(workspace, "test", root))
     if suite:
       suite.SetupWorkingDirectory()
       suites.append(suite)
@@ -331,7 +326,7 @@ def Main():
   for mode in options.mode:
     for arch in options.arch:
       try:
-        code = Execute(arch, mode, args, options, suites, BASE_DIR)
+        code = Execute(arch, mode, args, options, suites, workspace)
         exit_code = exit_code or code
       except KeyboardInterrupt:
         return 2

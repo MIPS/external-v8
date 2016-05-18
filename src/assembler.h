@@ -38,6 +38,7 @@
 #include "src/allocation.h"
 #include "src/builtins.h"
 #include "src/isolate.h"
+#include "src/parsing/token.h"
 #include "src/runtime/runtime.h"
 
 namespace v8 {
@@ -48,6 +49,7 @@ class ApiFunction;
 namespace internal {
 
 // Forward declarations.
+class SourcePosition;
 class StatsCounter;
 
 // -----------------------------------------------------------------------------
@@ -223,14 +225,9 @@ class CpuFeatures : public AllStatic {
 
   static inline bool SupportsCrankshaft();
 
-  static inline unsigned icache_line_size() {
-    DCHECK(icache_line_size_ != 0);
-    return icache_line_size_;
-  }
-
-  static inline unsigned dcache_line_size() {
-    DCHECK(dcache_line_size_ != 0);
-    return dcache_line_size_;
+  static inline unsigned cache_line_size() {
+    DCHECK(cache_line_size_ != 0);
+    return cache_line_size_;
   }
 
   static void PrintTarget();
@@ -246,8 +243,7 @@ class CpuFeatures : public AllStatic {
   static void ProbeImpl(bool cross_compile);
 
   static unsigned supported_;
-  static unsigned icache_line_size_;
-  static unsigned dcache_line_size_;
+  static unsigned cache_line_size_;
   static bool initialized_;
   DISALLOW_COPY_AND_ASSIGN(CpuFeatures);
 };
@@ -618,9 +614,13 @@ class RelocInfo {
   template<typename StaticVisitor> inline void Visit(Heap* heap);
   inline void Visit(Isolate* isolate, ObjectVisitor* v);
 
+  // Check whether this return sequence has been patched
+  // with a call to the debugger.
+  INLINE(bool IsPatchedReturnSequence());
+
   // Check whether this debug break slot has been patched with a call to the
   // debugger.
-  bool IsPatchedDebugBreakSlotSequence();
+  INLINE(bool IsPatchedDebugBreakSlotSequence());
 
 #ifdef DEBUG
   // Check whether the given code contains relocation information that
@@ -819,14 +819,6 @@ class ExternalReference BASE_EMBEDDED {
     // Object* f(v8::internal::Arguments).
     BUILTIN_CALL,  // default
 
-    // Builtin call returning object pair.
-    // ObjectPair f(v8::internal::Arguments).
-    BUILTIN_CALL_PAIR,
-
-    // Builtin call that returns .
-    // ObjectTriple f(v8::internal::Arguments).
-    BUILTIN_CALL_TRIPLE,
-
     // Builtin that takes float arguments and returns an int.
     // int f(double, double).
     BUILTIN_COMPARE_CALL,
@@ -893,11 +885,7 @@ class ExternalReference BASE_EMBEDDED {
   // pattern. This means that they have to be added to the
   // ExternalReferenceTable in serialize.cc manually.
 
-  static ExternalReference interpreter_dispatch_table_address(Isolate* isolate);
-
   static ExternalReference incremental_marking_record_write_function(
-      Isolate* isolate);
-  static ExternalReference incremental_marking_record_write_code_entry_function(
       Isolate* isolate);
   static ExternalReference store_buffer_overflow_function(
       Isolate* isolate);
@@ -912,15 +900,6 @@ class ExternalReference BASE_EMBEDDED {
   // Deoptimization support.
   static ExternalReference new_deoptimizer_function(Isolate* isolate);
   static ExternalReference compute_output_frames_function(Isolate* isolate);
-
-  static ExternalReference f32_trunc_wrapper_function(Isolate* isolate);
-  static ExternalReference f32_floor_wrapper_function(Isolate* isolate);
-  static ExternalReference f32_ceil_wrapper_function(Isolate* isolate);
-  static ExternalReference f32_nearest_int_wrapper_function(Isolate* isolate);
-  static ExternalReference f64_trunc_wrapper_function(Isolate* isolate);
-  static ExternalReference f64_floor_wrapper_function(Isolate* isolate);
-  static ExternalReference f64_ceil_wrapper_function(Isolate* isolate);
-  static ExternalReference f64_nearest_int_wrapper_function(Isolate* isolate);
 
   // Log support.
   static ExternalReference log_enter_external_function(Isolate* isolate);
@@ -954,6 +933,7 @@ class ExternalReference BASE_EMBEDDED {
 
   // Static variable Heap::NewSpaceStart()
   static ExternalReference new_space_start(Isolate* isolate);
+  static ExternalReference new_space_mask(Isolate* isolate);
 
   // Write barrier.
   static ExternalReference store_buffer_top(Isolate* isolate);
@@ -1139,6 +1119,8 @@ inline int NumberOfBitsSet(uint32_t x) {
   }
   return num_bits_set;
 }
+
+bool EvalComparison(Token::Value op, double op1, double op2);
 
 // Computes pow(x, y) with the special cases in the spec for Math.pow.
 double power_helper(Isolate* isolate, double x, double y);

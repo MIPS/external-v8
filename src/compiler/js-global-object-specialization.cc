@@ -27,10 +27,11 @@ struct JSGlobalObjectSpecialization::ScriptContextTableLookupResult {
 
 
 JSGlobalObjectSpecialization::JSGlobalObjectSpecialization(
-    Editor* editor, JSGraph* jsgraph,
+    Editor* editor, JSGraph* jsgraph, Flags flags,
     MaybeHandle<Context> native_context, CompilationDependencies* dependencies)
     : AdvancedReducer(editor),
       jsgraph_(jsgraph),
+      flags_(flags),
       native_context_(native_context),
       dependencies_(dependencies),
       type_cache_(TypeCache::Get()) {}
@@ -47,6 +48,7 @@ Reduction JSGlobalObjectSpecialization::Reduce(Node* node) {
   }
   return NoChange();
 }
+
 
 Reduction JSGlobalObjectSpecialization::ReduceJSLoadGlobal(Node* node) {
   DCHECK_EQ(IrOpcode::kJSLoadGlobal, node->opcode());
@@ -86,36 +88,47 @@ Reduction JSGlobalObjectSpecialization::ReduceJSLoadGlobal(Node* node) {
     return Replace(value);
   }
 
-  // Record a code dependency on the cell if we can benefit from the
-  // additional feedback, or the global property is configurable (i.e.
-  // can be deleted or reconfigured to an accessor property).
-  if (property_details.cell_type() != PropertyCellType::kMutable ||
-      property_details.IsConfigurable()) {
-    dependencies()->AssumePropertyCell(property_cell);
-  }
-
-  // Load from constant/undefined global property can be constant-folded.
-  if (property_details.cell_type() == PropertyCellType::kConstant ||
-      property_details.cell_type() == PropertyCellType::kUndefined) {
-    Node* value = jsgraph()->Constant(property_cell_value);
-    ReplaceWithValue(node, value);
-    return Replace(value);
-  }
-
-  // Load from constant type cell can benefit from type feedback.
+  // Load from non-configurable, data property on the global can be lowered to
+  // a field load, even without deoptimization, because the property cannot be
+  // deleted or reconfigured to an accessor/interceptor property.  Yet, if
+  // deoptimization support is available, we can constant-fold certain global
+  // properties or at least lower them to field loads annotated with more
+  // precise type feedback.
   Type* property_cell_value_type = Type::Tagged();
-  if (property_details.cell_type() == PropertyCellType::kConstantType) {
-    // Compute proper type based on the current value in the cell.
-    if (property_cell_value->IsSmi()) {
-      property_cell_value_type = type_cache_.kSmi;
-    } else if (property_cell_value->IsNumber()) {
-      property_cell_value_type = type_cache_.kHeapNumber;
-    } else {
-      Handle<Map> property_cell_value_map(
-          Handle<HeapObject>::cast(property_cell_value)->map(), isolate());
-      property_cell_value_type =
-          Type::Class(property_cell_value_map, graph()->zone());
+  if (flags() & kDeoptimizationEnabled) {
+    // Record a code dependency on the cell if we can benefit from the
+    // additional feedback, or the global property is configurable (i.e.
+    // can be deleted or reconfigured to an accessor property).
+    if (property_details.cell_type() != PropertyCellType::kMutable ||
+        property_details.IsConfigurable()) {
+      dependencies()->AssumePropertyCell(property_cell);
     }
+
+    // Load from constant/undefined global property can be constant-folded.
+    if ((property_details.cell_type() == PropertyCellType::kConstant ||
+         property_details.cell_type() == PropertyCellType::kUndefined)) {
+      Node* value = jsgraph()->Constant(property_cell_value);
+      ReplaceWithValue(node, value);
+      return Replace(value);
+    }
+
+    // Load from constant type cell can benefit from type feedback.
+    if (property_details.cell_type() == PropertyCellType::kConstantType) {
+      // Compute proper type based on the current value in the cell.
+      if (property_cell_value->IsSmi()) {
+        property_cell_value_type = type_cache_.kSmi;
+      } else if (property_cell_value->IsNumber()) {
+        property_cell_value_type = type_cache_.kHeapNumber;
+      } else {
+        Handle<Map> property_cell_value_map(
+            Handle<HeapObject>::cast(property_cell_value)->map(), isolate());
+        property_cell_value_type =
+            Type::Class(property_cell_value_map, graph()->zone());
+      }
+    }
+  } else if (property_details.IsConfigurable()) {
+    // Access to configurable global properties requires deoptimization support.
+    return NoChange();
   }
   Node* value = effect = graph()->NewNode(
       simplified()->LoadField(
@@ -165,8 +178,9 @@ Reduction JSGlobalObjectSpecialization::ReduceJSStoreGlobal(Node* node) {
       return NoChange();
     }
     case PropertyCellType::kConstant: {
-      // Record a code dependency on the cell, and just deoptimize if the new
-      // value doesn't match the previous value stored inside the cell.
+      // Store to constant property cell requires deoptimization support,
+      // because we might even need to eager deoptimize for mismatch.
+      if (!(flags() & kDeoptimizationEnabled)) return NoChange();
       dependencies()->AssumePropertyCell(property_cell);
       Node* check =
           graph()->NewNode(simplified()->ReferenceEqual(Type::Tagged()), value,
@@ -179,13 +193,13 @@ Reduction JSGlobalObjectSpecialization::ReduceJSStoreGlobal(Node* node) {
                            frame_state, effect, if_false);
       // TODO(bmeurer): This should be on the AdvancedReducer somehow.
       NodeProperties::MergeControlToEnd(graph(), common(), deoptimize);
-      Revisit(graph()->end());
       control = graph()->NewNode(common()->IfTrue(), branch);
       break;
     }
     case PropertyCellType::kConstantType: {
-      // Record a code dependency on the cell, and just deoptimize if the new
-      // values' type doesn't match the type of the previous value in the cell.
+      // Store to constant-type property cell requires deoptimization support,
+      // because we might even need to eager deoptimize for mismatch.
+      if (!(flags() & kDeoptimizationEnabled)) return NoChange();
       dependencies()->AssumePropertyCell(property_cell);
       Node* check = graph()->NewNode(simplified()->ObjectIsSmi(), value);
       Type* property_cell_value_type = Type::TaggedSigned();
@@ -199,7 +213,6 @@ Reduction JSGlobalObjectSpecialization::ReduceJSStoreGlobal(Node* node) {
                              frame_state, effect, if_true);
         // TODO(bmeurer): This should be on the AdvancedReducer somehow.
         NodeProperties::MergeControlToEnd(graph(), common(), deoptimize);
-        Revisit(graph()->end());
         control = graph()->NewNode(common()->IfFalse(), branch);
 
         // Load the {value} map check against the {property_cell} map.
@@ -221,7 +234,6 @@ Reduction JSGlobalObjectSpecialization::ReduceJSStoreGlobal(Node* node) {
                            frame_state, effect, if_false);
       // TODO(bmeurer): This should be on the AdvancedReducer somehow.
       NodeProperties::MergeControlToEnd(graph(), common(), deoptimize);
-      Revisit(graph()->end());
       control = graph()->NewNode(common()->IfTrue(), branch);
       effect = graph()->NewNode(
           simplified()->StoreField(
@@ -231,11 +243,13 @@ Reduction JSGlobalObjectSpecialization::ReduceJSStoreGlobal(Node* node) {
     }
     case PropertyCellType::kMutable: {
       // Store to non-configurable, data property on the global can be lowered
-      // to a field store, even without recording a code dependency on the cell,
-      // because the property cannot be deleted or reconfigured to an accessor
-      // or interceptor property.
+      // to a field store, even without deoptimization, because the property
+      // cannot be deleted or reconfigured to an accessor/interceptor property.
       if (property_details.IsConfigurable()) {
-        // Protect lowering by recording a code dependency on the cell.
+        // With deoptimization support, we can lower stores even to configurable
+        // data properties on the global object, by adding a code dependency on
+        // the cell.
+        if (!(flags() & kDeoptimizationEnabled)) return NoChange();
         dependencies()->AssumePropertyCell(property_cell);
       }
       effect = graph()->NewNode(

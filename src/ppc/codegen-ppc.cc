@@ -58,7 +58,9 @@ UnaryMathFunctionWithIsolate CreateExpFunction(Isolate* isolate) {
 
   CodeDesc desc;
   masm.GetCode(&desc);
-  DCHECK(ABI_USES_FUNCTION_DESCRIPTORS || !RelocInfo::RequiresRelocation(desc));
+#if !ABI_USES_FUNCTION_DESCRIPTORS
+  DCHECK(!RelocInfo::RequiresRelocation(desc));
+#endif
 
   Assembler::FlushICache(isolate, buffer, actual_size);
   base::OS::ProtectCode(buffer, actual_size);
@@ -94,7 +96,9 @@ UnaryMathFunctionWithIsolate CreateSqrtFunction(Isolate* isolate) {
 
   CodeDesc desc;
   masm.GetCode(&desc);
-  DCHECK(ABI_USES_FUNCTION_DESCRIPTORS || !RelocInfo::RequiresRelocation(desc));
+#if !ABI_USES_FUNCTION_DESCRIPTORS
+  DCHECK(!RelocInfo::RequiresRelocation(desc));
+#endif
 
   Assembler::FlushICache(isolate, buffer, actual_size);
   base::OS::ProtectCode(buffer, actual_size);

@@ -66,9 +66,6 @@ struct MemoryAccess {
 };
 
 typedef Signature<LocalType> FunctionSig;
-std::ostream& operator<<(std::ostream& os, const FunctionSig& function);
-
-// TODO(titzer): Renumber all the opcodes to fill in holes.
 
 // Control expressions and blocks.
 #define FOREACH_CONTROL_OPCODE(V) \
@@ -83,6 +80,7 @@ std::ostream& operator<<(std::ostream& os, const FunctionSig& function);
   V(TableSwitch, 0x08, _)         \
   V(Return, 0x14, _)              \
   V(Unreachable, 0x15, _)
+// TODO(titzer): numbering
 
 // Constants, locals, globals, and calls.
 #define FOREACH_MISC_OPCODE(V) \
@@ -96,8 +94,7 @@ std::ostream& operator<<(std::ostream& os, const FunctionSig& function);
   V(LoadGlobal, 0x10, _)       \
   V(StoreGlobal, 0x11, _)      \
   V(CallFunction, 0x12, _)     \
-  V(CallIndirect, 0x13, _)     \
-  V(CallImport, 0x1F, _)
+  V(CallIndirect, 0x13, _)
 
 // Load memory expressions.
 #define FOREACH_LOAD_MEM_OPCODE(V) \
@@ -401,6 +398,7 @@ class WasmOpcodes {
     }
   }
 
+  // TODO(titzer): remove this method
   static WasmOpcode LoadStoreOpcodeOf(MachineType type, bool store) {
     if (type == MachineType::Int8()) {
       return store ? kExprI32StoreMem8 : kExprI32LoadMem8S;

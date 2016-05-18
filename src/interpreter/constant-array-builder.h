@@ -12,15 +12,13 @@
 namespace v8 {
 namespace internal {
 
+class Factory;
 class Isolate;
 
 namespace interpreter {
 
-// A helper class for constructing constant arrays for the
-// interpreter. Each instance of this class is intended to be used to
-// generate exactly one FixedArray of constants via the ToFixedArray
-// method.
-class ConstantArrayBuilder final BASE_EMBEDDED {
+// A helper class for constructing constant arrays for the interpreter.
+class ConstantArrayBuilder final : public ZoneObject {
  public:
   // Capacity of the 8-bit operand slice.
   static const size_t kLowCapacity = 1u << kBitsPerByte;
@@ -34,7 +32,7 @@ class ConstantArrayBuilder final BASE_EMBEDDED {
   ConstantArrayBuilder(Isolate* isolate, Zone* zone);
 
   // Generate a fixed array of constants based on inserted objects.
-  Handle<FixedArray> ToFixedArray();
+  Handle<FixedArray> ToFixedArray(Factory* factory) const;
 
   // Returns the object in the constant pool array that at index
   // |index|.
@@ -85,8 +83,6 @@ class ConstantArrayBuilder final BASE_EMBEDDED {
 
     DISALLOW_COPY_AND_ASSIGN(ConstantArraySlice);
   };
-
-  IdentityMap<index_t>* constants_map() { return &constants_map_; }
 
   Isolate* isolate_;
   ConstantArraySlice idx8_slice_;
