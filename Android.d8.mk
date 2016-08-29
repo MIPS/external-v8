@@ -51,6 +51,9 @@ LOCAL_CFLAGS := \
 	-std=gnu++0x \
 	-O0
 
+# Bug: http://b/31101212  WAR LLVM bug until next Clang update
+LOCAL_CFLAGS_mips += -O2
+
 LOCAL_MODULE_TARGET_ARCH_WARN := $(V8_SUPPORTED_ARCH)
 
 include $(BUILD_EXECUTABLE)
