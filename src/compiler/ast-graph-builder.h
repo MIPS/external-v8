@@ -32,11 +32,14 @@ class TypeHintAnalysis;
 // underlying AST. The produced graph can either be compiled into a
 // stand-alone function or be wired into another graph for the purposes
 // of function inlining.
-class AstGraphBuilder : public AstVisitor {
+// This AstVistor is not final, and provides the AstVisitor methods as virtual
+// methods so they can be specialized by subclasses.
+class AstGraphBuilder : public AstVisitor<AstGraphBuilder> {
  public:
   AstGraphBuilder(Zone* local_zone, CompilationInfo* info, JSGraph* jsgraph,
                   LoopAssignmentAnalysis* loop_assignment = nullptr,
                   TypeHintAnalysis* type_hint_analysis = nullptr);
+  virtual ~AstGraphBuilder() {}
 
   // Creates a graph by visiting the entire AST.
   bool CreateGraph(bool stack_check = true);
@@ -51,13 +54,13 @@ class AstGraphBuilder : public AstVisitor {
   }
 
  protected:
-#define DECLARE_VISIT(type) void Visit##type(type* node) override;
+#define DECLARE_VISIT(type) virtual void Visit##type(type* node);
   // Visiting functions for AST nodes make this an AstVisitor.
   AST_NODE_LIST(DECLARE_VISIT)
 #undef DECLARE_VISIT
 
   // Visiting function for declarations list is overridden.
-  void VisitDeclarations(ZoneList<Declaration*>* declarations) override;
+  void VisitDeclarations(ZoneList<Declaration*>* declarations);
 
  private:
   class AstContext;
@@ -71,7 +74,6 @@ class AstGraphBuilder : public AstVisitor {
   class ControlScopeForCatch;
   class ControlScopeForFinally;
   class Environment;
-  class FrameStateBeforeAndAfter;
   friend class ControlBuilder;
 
   Isolate* isolate_;
@@ -96,7 +98,6 @@ class AstGraphBuilder : public AstVisitor {
   SetOncePointer<Node> new_target_;
 
   // Tracks how many try-blocks are currently entered.
-  int try_catch_nesting_level_;
   int try_nesting_level_;
 
   // Temporary storage for building node input lists.
@@ -414,7 +415,8 @@ class AstGraphBuilder : public AstVisitor {
   void VisitForValues(ZoneList<Expression*>* exprs);
 
   // Common for all IterationStatement bodies.
-  void VisitIterationBody(IterationStatement* stmt, LoopBuilder* loop);
+  void VisitIterationBody(IterationStatement* stmt, LoopBuilder* loop,
+                          BailoutId stack_check_id);
 
   // Dispatched from VisitCall.
   void VisitCallSuper(Call* expr);
@@ -445,15 +447,11 @@ class AstGraphBuilder : public AstVisitor {
   // Dispatched from VisitForInStatement.
   void VisitForInAssignment(Expression* expr, Node* value,
                             const VectorSlotPair& feedback,
-                            BailoutId bailout_id_before,
-                            BailoutId bailout_id_after);
+                            BailoutId bailout_id);
 
   // Dispatched from VisitObjectLiteral.
   void VisitObjectLiteralAccessor(Node* home_object,
                                   ObjectLiteralProperty* property);
-
-  // Dispatched from VisitClassLiteral.
-  void VisitClassLiteralContents(ClassLiteral* expr);
 
   DEFINE_AST_VISITOR_SUBCLASS_MEMBERS();
   DISALLOW_COPY_AND_ASSIGN(AstGraphBuilder);
@@ -470,7 +468,8 @@ class AstGraphBuilder : public AstVisitor {
 //
 class AstGraphBuilder::Environment : public ZoneObject {
  public:
-  Environment(AstGraphBuilder* builder, Scope* scope, Node* control_dependency);
+  Environment(AstGraphBuilder* builder, DeclarationScope* scope,
+              Node* control_dependency);
 
   int parameters_count() const { return parameters_count_; }
   int locals_count() const { return locals_count_; }
@@ -538,6 +537,10 @@ class AstGraphBuilder::Environment : public ZoneObject {
   Node* Checkpoint(BailoutId ast_id, OutputFrameStateCombine combine =
                                          OutputFrameStateCombine::Ignore(),
                    bool node_has_exception = false);
+
+  // Inserts a loop exit control node and renames the environment.
+  // This is useful for loop peeling to insert phis at loop exits.
+  void PrepareForLoopExit(Node* loop, BitVector* assigned_variables);
 
   // Control dependency tracked by this environment.
   Node* GetControlDependency() { return control_dependency_; }

@@ -76,6 +76,7 @@ void BodyDescriptorBase::IterateBodyImpl(Heap* heap, HeapObject* obj,
 
 
 template <typename ObjectVisitor>
+DISABLE_CFI_PERF
 void BodyDescriptorBase::IteratePointers(HeapObject* obj, int start_offset,
                                          int end_offset, ObjectVisitor* v) {
   v->VisitPointers(HeapObject::RawField(obj, start_offset),
@@ -84,6 +85,7 @@ void BodyDescriptorBase::IteratePointers(HeapObject* obj, int start_offset,
 
 
 template <typename StaticVisitor>
+DISABLE_CFI_PERF
 void BodyDescriptorBase::IteratePointers(Heap* heap, HeapObject* obj,
                                          int start_offset, int end_offset) {
   StaticVisitor::VisitPointers(heap, obj,
@@ -355,6 +357,8 @@ class Code::BodyDescriptor final : public BodyDescriptorBase {
   STATIC_ASSERT(kHandlerTableOffset + kPointerSize ==
                 kDeoptimizationDataOffset);
   STATIC_ASSERT(kDeoptimizationDataOffset + kPointerSize ==
+                kSourcePositionTableOffset);
+  STATIC_ASSERT(kSourcePositionTableOffset + kPointerSize ==
                 kTypeFeedbackInfoOffset);
   STATIC_ASSERT(kTypeFeedbackInfoOffset + kPointerSize == kNextCodeLinkOffset);
 

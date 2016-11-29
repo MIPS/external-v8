@@ -6,7 +6,9 @@
 #define V8_INTERPRETER_BYTECODE_PIPELINE_H_
 
 #include "src/interpreter/bytecode-register-allocator.h"
+#include "src/interpreter/bytecode-register.h"
 #include "src/interpreter/bytecodes.h"
+#include "src/objects.h"
 #include "src/zone-containers.h"
 
 namespace v8 {
@@ -45,7 +47,7 @@ class BytecodePipelineStage {
 
   // Flush the pipeline and generate a bytecode array.
   virtual Handle<BytecodeArray> ToBytecodeArray(
-      int fixed_register_count, int parameter_count,
+      Isolate* isolate, int fixed_register_count, int parameter_count,
       Handle<FixedArray> handler_table) = 0;
 };
 
@@ -151,8 +153,35 @@ class BytecodeNode final : ZoneObject {
   BytecodeNode(const BytecodeNode& other);
   BytecodeNode& operator=(const BytecodeNode& other);
 
-  void set_bytecode(Bytecode bytecode);
-  void set_bytecode(Bytecode bytecode, uint32_t operand0);
+  // Replace the bytecode of this node with |bytecode| and keep the operands.
+  void replace_bytecode(Bytecode bytecode) {
+    DCHECK_EQ(Bytecodes::NumberOfOperands(bytecode_),
+              Bytecodes::NumberOfOperands(bytecode));
+    bytecode_ = bytecode;
+  }
+  void set_bytecode(Bytecode bytecode) {
+    DCHECK_EQ(Bytecodes::NumberOfOperands(bytecode), 0);
+    bytecode_ = bytecode;
+  }
+  void set_bytecode(Bytecode bytecode, uint32_t operand0) {
+    DCHECK_EQ(Bytecodes::NumberOfOperands(bytecode), 1);
+    bytecode_ = bytecode;
+    operands_[0] = operand0;
+  }
+  void set_bytecode(Bytecode bytecode, uint32_t operand0, uint32_t operand1) {
+    DCHECK_EQ(Bytecodes::NumberOfOperands(bytecode), 2);
+    bytecode_ = bytecode;
+    operands_[0] = operand0;
+    operands_[1] = operand1;
+  }
+  void set_bytecode(Bytecode bytecode, uint32_t operand0, uint32_t operand1,
+                    uint32_t operand2) {
+    DCHECK_EQ(Bytecodes::NumberOfOperands(bytecode), 3);
+    bytecode_ = bytecode;
+    operands_[0] = operand0;
+    operands_[1] = operand1;
+    operands_[2] = operand2;
+  }
 
   // Clone |other|.
   void Clone(const BytecodeNode* const other);
@@ -183,10 +212,9 @@ class BytecodeNode final : ZoneObject {
 
  private:
   static const int kInvalidPosition = kMinInt;
-  static const size_t kMaxOperands = 4;
 
   Bytecode bytecode_;
-  uint32_t operands_[kMaxOperands];
+  uint32_t operands_[Bytecodes::kMaxOperands];
   BytecodeSourceInfo source_info_;
 };
 

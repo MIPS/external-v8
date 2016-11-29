@@ -49,7 +49,7 @@ RUNTIME_FUNCTION(Runtime_FunctionRemovePrototype) {
 
   CONVERT_ARG_CHECKED(JSFunction, f, 0);
   CHECK(f->RemovePrototype());
-  f->shared()->set_construct_stub(
+  f->shared()->SetConstructStub(
       *isolate->builtins()->ConstructedNonConstructable());
 
   return isolate->heap()->undefined_value();
@@ -90,16 +90,6 @@ RUNTIME_FUNCTION(Runtime_FunctionGetScriptSourcePosition) {
   CONVERT_ARG_CHECKED(JSFunction, fun, 0);
   int pos = fun->shared()->start_position();
   return Smi::FromInt(pos);
-}
-
-
-RUNTIME_FUNCTION(Runtime_FunctionGetPositionForOffset) {
-  SealHandleScope shs(isolate);
-  DCHECK(args.length() == 2);
-
-  CONVERT_ARG_CHECKED(AbstractCode, abstract_code, 0);
-  CONVERT_NUMBER_CHECKED(int, offset, Int32, args[1]);
-  return Smi::FromInt(abstract_code->SourcePosition(offset));
 }
 
 RUNTIME_FUNCTION(Runtime_FunctionGetContextData) {
