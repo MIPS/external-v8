@@ -683,7 +683,6 @@ void RestoreRegistersStateStub::Generate(MacroAssembler* masm) {
   __ Ret(return_address);
 }
 
-
 void MathPowStub::Generate(MacroAssembler* masm) {
   // Stack on entry:
   // jssp[0]: Exponent (as a tagged value).
@@ -691,14 +690,10 @@ void MathPowStub::Generate(MacroAssembler* masm) {
   //
   // The (tagged) result will be returned in x0, as a heap number.
 
-  Register result_tagged = x0;
-  Register base_tagged = x10;
   Register exponent_tagged = MathPowTaggedDescriptor::exponent();
   DCHECK(exponent_tagged.is(x11));
   Register exponent_integer = MathPowIntegerDescriptor::exponent();
   DCHECK(exponent_integer.is(x12));
-  Register scratch1 = x14;
-  Register scratch0 = x15;
   Register saved_lr = x19;
   FPRegister result_double = d0;
   FPRegister base_double = d0;
@@ -709,37 +704,11 @@ void MathPowStub::Generate(MacroAssembler* masm) {
 
   // A fast-path for integer exponents.
   Label exponent_is_smi, exponent_is_integer;
-  // Bail out to runtime.
-  Label call_runtime;
   // Allocate a heap number for the result, and return it.
   Label done;
 
   // Unpack the inputs.
-  if (exponent_type() == ON_STACK) {
-    Label base_is_smi;
-    Label unpack_exponent;
-
-    __ Pop(exponent_tagged, base_tagged);
-
-    __ JumpIfSmi(base_tagged, &base_is_smi);
-    __ JumpIfNotHeapNumber(base_tagged, &call_runtime);
-    // base_tagged is a heap number, so load its double value.
-    __ Ldr(base_double, FieldMemOperand(base_tagged, HeapNumber::kValueOffset));
-    __ B(&unpack_exponent);
-    __ Bind(&base_is_smi);
-    // base_tagged is a SMI, so untag it and convert it to a double.
-    __ SmiUntagToDouble(base_double, base_tagged);
-
-    __ Bind(&unpack_exponent);
-    //  x10   base_tagged       The tagged base (input).
-    //  x11   exponent_tagged   The tagged exponent (input).
-    //  d1    base_double       The base as a double.
-    __ JumpIfSmi(exponent_tagged, &exponent_is_smi);
-    __ JumpIfNotHeapNumber(exponent_tagged, &call_runtime);
-    // exponent_tagged is a heap number, so load its double value.
-    __ Ldr(exponent_double,
-           FieldMemOperand(exponent_tagged, HeapNumber::kValueOffset));
-  } else if (exponent_type() == TAGGED) {
+  if (exponent_type() == TAGGED) {
     __ JumpIfSmi(exponent_tagged, &exponent_is_smi);
     __ Ldr(exponent_double,
            FieldMemOperand(exponent_tagged, HeapNumber::kValueOffset));
@@ -752,89 +721,11 @@ void MathPowStub::Generate(MacroAssembler* masm) {
     __ TryRepresentDoubleAsInt64(exponent_integer, exponent_double,
                                  scratch0_double, &exponent_is_integer);
 
-    if (exponent_type() == ON_STACK) {
-      FPRegister  half_double = d3;
-      FPRegister  minus_half_double = d4;
-      // Detect square root case. Crankshaft detects constant +/-0.5 at compile
-      // time and uses DoMathPowHalf instead. We then skip this check for
-      // non-constant cases of +/-0.5 as these hardly occur.
-
-      __ Fmov(minus_half_double, -0.5);
-      __ Fmov(half_double, 0.5);
-      __ Fcmp(minus_half_double, exponent_double);
-      __ Fccmp(half_double, exponent_double, NZFlag, ne);
-      // Condition flags at this point:
-      //    0.5;  nZCv    // Identified by eq && pl
-      //   -0.5:  NZcv    // Identified by eq && mi
-      //  other:  ?z??    // Identified by ne
-      __ B(ne, &call_runtime);
-
-      // The exponent is 0.5 or -0.5.
-
-      // Given that exponent is known to be either 0.5 or -0.5, the following
-      // special cases could apply (according to ECMA-262 15.8.2.13):
-      //
-      //  base.isNaN():                   The result is NaN.
-      //  (base == +INFINITY) || (base == -INFINITY)
-      //    exponent == 0.5:              The result is +INFINITY.
-      //    exponent == -0.5:             The result is +0.
-      //  (base == +0) || (base == -0)
-      //    exponent == 0.5:              The result is +0.
-      //    exponent == -0.5:             The result is +INFINITY.
-      //  (base < 0) && base.isFinite():  The result is NaN.
-      //
-      // Fsqrt (and Fdiv for the -0.5 case) can handle all of those except
-      // where base is -INFINITY or -0.
-
-      // Add +0 to base. This has no effect other than turning -0 into +0.
-      __ Fadd(base_double, base_double, fp_zero);
-      // The operation -0+0 results in +0 in all cases except where the
-      // FPCR rounding mode is 'round towards minus infinity' (RM). The
-      // ARM64 simulator does not currently simulate FPCR (where the rounding
-      // mode is set), so test the operation with some debug code.
-      if (masm->emit_debug_code()) {
-        UseScratchRegisterScope temps(masm);
-        Register temp = temps.AcquireX();
-        __ Fneg(scratch0_double, fp_zero);
-        // Verify that we correctly generated +0.0 and -0.0.
-        //  bits(+0.0) = 0x0000000000000000
-        //  bits(-0.0) = 0x8000000000000000
-        __ Fmov(temp, fp_zero);
-        __ CheckRegisterIsClear(temp, kCouldNotGenerateZero);
-        __ Fmov(temp, scratch0_double);
-        __ Eor(temp, temp, kDSignMask);
-        __ CheckRegisterIsClear(temp, kCouldNotGenerateNegativeZero);
-        // Check that -0.0 + 0.0 == +0.0.
-        __ Fadd(scratch0_double, scratch0_double, fp_zero);
-        __ Fmov(temp, scratch0_double);
-        __ CheckRegisterIsClear(temp, kExpectedPositiveZero);
-      }
-
-      // If base is -INFINITY, make it +INFINITY.
-      //  * Calculate base - base: All infinities will become NaNs since both
-      //    -INFINITY+INFINITY and +INFINITY-INFINITY are NaN in ARM64.
-      //  * If the result is NaN, calculate abs(base).
-      __ Fsub(scratch0_double, base_double, base_double);
-      __ Fcmp(scratch0_double, 0.0);
-      __ Fabs(scratch1_double, base_double);
-      __ Fcsel(base_double, scratch1_double, base_double, vs);
-
-      // Calculate the square root of base.
-      __ Fsqrt(result_double, base_double);
-      __ Fcmp(exponent_double, 0.0);
-      __ B(ge, &done);  // Finish now for exponents of 0.5.
-      // Find the inverse for exponents of -0.5.
-      __ Fmov(scratch0_double, 1.0);
-      __ Fdiv(result_double, scratch0_double, result_double);
-      __ B(&done);
-    }
-
     {
       AllowExternalCallThatCantCauseGC scope(masm);
       __ Mov(saved_lr, lr);
       __ CallCFunction(
-          ExternalReference::power_double_double_function(isolate()),
-          0, 2);
+          ExternalReference::power_double_double_function(isolate()), 0, 2);
       __ Mov(lr, saved_lr);
       __ B(&done);
     }
@@ -903,33 +794,16 @@ void MathPowStub::Generate(MacroAssembler* masm) {
   __ Fcmp(result_double, 0.0);
   __ B(&done, ne);
 
-  if (exponent_type() == ON_STACK) {
-    // Bail out to runtime code.
-    __ Bind(&call_runtime);
-    // Put the arguments back on the stack.
-    __ Push(base_tagged, exponent_tagged);
-    __ TailCallRuntime(Runtime::kMathPowRT);
-
-    // Return.
-    __ Bind(&done);
-    __ AllocateHeapNumber(result_tagged, &call_runtime, scratch0, scratch1,
-                          result_double);
-    DCHECK(result_tagged.is(x0));
-    __ Ret();
-  } else {
-    AllowExternalCallThatCantCauseGC scope(masm);
-    __ Mov(saved_lr, lr);
-    __ Fmov(base_double, base_double_copy);
-    __ Scvtf(exponent_double, exponent_integer);
-    __ CallCFunction(
-        ExternalReference::power_double_double_function(isolate()),
-        0, 2);
-    __ Mov(lr, saved_lr);
-    __ Bind(&done);
-    __ Ret();
-  }
+  AllowExternalCallThatCantCauseGC scope(masm);
+  __ Mov(saved_lr, lr);
+  __ Fmov(base_double, base_double_copy);
+  __ Scvtf(exponent_double, exponent_integer);
+  __ CallCFunction(ExternalReference::power_double_double_function(isolate()),
+                   0, 2);
+  __ Mov(lr, saved_lr);
+  __ Bind(&done);
+  __ Ret();
 }
-
 
 void CodeStub::GenerateStubsAheadOfTime(Isolate* isolate) {
   // It is important that the following stubs are generated in this order
@@ -947,7 +821,6 @@ void CodeStub::GenerateStubsAheadOfTime(Isolate* isolate) {
   RestoreRegistersStateStub::GenerateAheadOfTime(isolate);
   BinaryOpICWithAllocationSiteStub::GenerateAheadOfTime(isolate);
   StoreFastElementStub::GenerateAheadOfTime(isolate);
-  TypeofStub::GenerateAheadOfTime(isolate);
 }
 
 
@@ -1050,7 +923,9 @@ void CEntryStub::Generate(MacroAssembler* masm) {
   int extra_stack_space = 3 + (result_size() <= 2 ? 0 : result_size());
   // Enter the exit frame.
   FrameScope scope(masm, StackFrame::MANUAL);
-  __ EnterExitFrame(save_doubles(), x10, extra_stack_space);
+  __ EnterExitFrame(
+      save_doubles(), x10, extra_stack_space,
+      is_builtin_exit() ? StackFrame::BUILTIN_EXIT : StackFrame::EXIT);
   DCHECK(csp.Is(__ StackPointer()));
 
   // Poke callee-saved registers into reserved space.
@@ -1338,12 +1213,6 @@ void JSEntryStub::Generate(MacroAssembler* masm) {
   // returns control to the code after the B(&invoke) above, which
   // restores all callee-saved registers (including cp and fp) to their
   // saved values before returning a failure to C.
-
-  // Clear any pending exceptions.
-  __ Mov(x10, Operand(isolate()->factory()->the_hole_value()));
-  __ Mov(x11, Operand(ExternalReference(Isolate::kPendingExceptionAddress,
-                                        isolate())));
-  __ Str(x10, MemOperand(x11));
 
   // Invoke the function by calling through the JS entry trampoline builtin.
   // Notice that we cannot store a reference to the trampoline code directly in
@@ -1779,15 +1648,15 @@ void RegExpExecStub::Generate(MacroAssembler* masm) {
   __ Add(x10, x10, x10);
   __ Add(number_of_capture_registers, x10, 2);
 
-  // Check that the fourth object is a JSArray object.
+  // Check that the fourth object is a JSObject.
   DCHECK(jssp.Is(__ StackPointer()));
   __ Peek(x10, kLastMatchInfoOffset);
   __ JumpIfSmi(x10, &runtime);
-  __ JumpIfNotObjectType(x10, x11, x11, JS_ARRAY_TYPE, &runtime);
+  __ JumpIfNotObjectType(x10, x11, x11, JS_OBJECT_TYPE, &runtime);
 
-  // Check that the JSArray is the fast case.
+  // Check that the object has fast elements.
   __ Ldr(last_match_info_elements,
-         FieldMemOperand(x10, JSArray::kElementsOffset));
+         FieldMemOperand(x10, JSObject::kElementsOffset));
   __ Ldr(x10,
          FieldMemOperand(last_match_info_elements, HeapObject::kMapOffset));
   __ JumpIfNotRoot(x10, Heap::kFixedArrayMapRootIndex, &runtime);
@@ -1950,10 +1819,12 @@ static void CallStubInRecordCallTarget(MacroAssembler* masm, CodeStub* stub,
   // Number-of-arguments register must be smi-tagged to call out.
   __ SmiTag(argc);
   __ Push(argc, function, feedback_vector, index);
+  __ Push(cp);
 
   DCHECK(feedback_vector.Is(x2) && index.Is(x3));
   __ CallStub(stub);
 
+  __ Pop(cp);
   __ Pop(index, feedback_vector, function, argc);
   __ SmiUntag(argc);
 }
@@ -2285,9 +2156,9 @@ void CallICStub::Generate(MacroAssembler* masm) {
   {
     FrameScope scope(masm, StackFrame::INTERNAL);
     CreateWeakCellStub create_stub(masm->isolate());
-    __ Push(function);
+    __ Push(cp, function);
     __ CallStub(&create_stub);
-    __ Pop(function);
+    __ Pop(cp, function);
   }
 
   __ B(&call_function);
@@ -3588,11 +3459,8 @@ void LoadICStub::GenerateImpl(MacroAssembler* masm, bool in_frame) {
 
   __ Bind(&not_array);
   __ JumpIfNotRoot(feedback, Heap::kmegamorphic_symbolRootIndex, &miss);
-  Code::Flags code_flags =
-      Code::RemoveHolderFromFlags(Code::ComputeHandlerFlags(Code::LOAD_IC));
-  masm->isolate()->stub_cache()->GenerateProbe(masm, Code::LOAD_IC, code_flags,
-                                               receiver, name, feedback,
-                                               receiver_map, scratch1, x7);
+  masm->isolate()->load_stub_cache()->GenerateProbe(
+      masm, receiver, name, feedback, receiver_map, scratch1, x7);
 
   __ Bind(&miss);
   LoadIC::GenerateMiss(masm);
@@ -3670,37 +3538,30 @@ void KeyedLoadICStub::GenerateImpl(MacroAssembler* masm, bool in_frame) {
   __ jmp(&compare_map);
 }
 
-
-void VectorStoreICTrampolineStub::Generate(MacroAssembler* masm) {
-  __ EmitLoadTypeFeedbackVector(VectorStoreICDescriptor::VectorRegister());
-  VectorStoreICStub stub(isolate(), state());
+void StoreICTrampolineStub::Generate(MacroAssembler* masm) {
+  __ EmitLoadTypeFeedbackVector(StoreWithVectorDescriptor::VectorRegister());
+  StoreICStub stub(isolate(), state());
   stub.GenerateForTrampoline(masm);
 }
 
-
-void VectorKeyedStoreICTrampolineStub::Generate(MacroAssembler* masm) {
-  __ EmitLoadTypeFeedbackVector(VectorStoreICDescriptor::VectorRegister());
-  VectorKeyedStoreICStub stub(isolate(), state());
+void KeyedStoreICTrampolineStub::Generate(MacroAssembler* masm) {
+  __ EmitLoadTypeFeedbackVector(StoreWithVectorDescriptor::VectorRegister());
+  KeyedStoreICStub stub(isolate(), state());
   stub.GenerateForTrampoline(masm);
 }
 
+void StoreICStub::Generate(MacroAssembler* masm) { GenerateImpl(masm, false); }
 
-void VectorStoreICStub::Generate(MacroAssembler* masm) {
-  GenerateImpl(masm, false);
-}
-
-
-void VectorStoreICStub::GenerateForTrampoline(MacroAssembler* masm) {
+void StoreICStub::GenerateForTrampoline(MacroAssembler* masm) {
   GenerateImpl(masm, true);
 }
 
-
-void VectorStoreICStub::GenerateImpl(MacroAssembler* masm, bool in_frame) {
-  Register receiver = VectorStoreICDescriptor::ReceiverRegister();  // x1
-  Register key = VectorStoreICDescriptor::NameRegister();           // x2
-  Register vector = VectorStoreICDescriptor::VectorRegister();      // x3
-  Register slot = VectorStoreICDescriptor::SlotRegister();          // x4
-  DCHECK(VectorStoreICDescriptor::ValueRegister().is(x0));          // x0
+void StoreICStub::GenerateImpl(MacroAssembler* masm, bool in_frame) {
+  Register receiver = StoreWithVectorDescriptor::ReceiverRegister();  // x1
+  Register key = StoreWithVectorDescriptor::NameRegister();           // x2
+  Register vector = StoreWithVectorDescriptor::VectorRegister();      // x3
+  Register slot = StoreWithVectorDescriptor::SlotRegister();          // x4
+  DCHECK(StoreWithVectorDescriptor::ValueRegister().is(x0));          // x0
   Register feedback = x5;
   Register receiver_map = x6;
   Register scratch1 = x7;
@@ -3724,11 +3585,8 @@ void VectorStoreICStub::GenerateImpl(MacroAssembler* masm, bool in_frame) {
 
   __ Bind(&not_array);
   __ JumpIfNotRoot(feedback, Heap::kmegamorphic_symbolRootIndex, &miss);
-  Code::Flags code_flags =
-      Code::RemoveHolderFromFlags(Code::ComputeHandlerFlags(Code::STORE_IC));
-  masm->isolate()->stub_cache()->GenerateProbe(masm, Code::STORE_IC, code_flags,
-                                               receiver, key, feedback,
-                                               receiver_map, scratch1, x8);
+  masm->isolate()->store_stub_cache()->GenerateProbe(
+      masm, receiver, key, feedback, receiver_map, scratch1, x8);
 
   __ Bind(&miss);
   StoreIC::GenerateMiss(masm);
@@ -3738,13 +3596,11 @@ void VectorStoreICStub::GenerateImpl(MacroAssembler* masm, bool in_frame) {
   __ jmp(&compare_map);
 }
 
-
-void VectorKeyedStoreICStub::Generate(MacroAssembler* masm) {
+void KeyedStoreICStub::Generate(MacroAssembler* masm) {
   GenerateImpl(masm, false);
 }
 
-
-void VectorKeyedStoreICStub::GenerateForTrampoline(MacroAssembler* masm) {
+void KeyedStoreICStub::GenerateForTrampoline(MacroAssembler* masm) {
   GenerateImpl(masm, true);
 }
 
@@ -3813,13 +3669,12 @@ static void HandlePolymorphicStoreCase(MacroAssembler* masm, Register feedback,
   __ jmp(miss);
 }
 
-
-void VectorKeyedStoreICStub::GenerateImpl(MacroAssembler* masm, bool in_frame) {
-  Register receiver = VectorStoreICDescriptor::ReceiverRegister();  // x1
-  Register key = VectorStoreICDescriptor::NameRegister();           // x2
-  Register vector = VectorStoreICDescriptor::VectorRegister();      // x3
-  Register slot = VectorStoreICDescriptor::SlotRegister();          // x4
-  DCHECK(VectorStoreICDescriptor::ValueRegister().is(x0));          // x0
+void KeyedStoreICStub::GenerateImpl(MacroAssembler* masm, bool in_frame) {
+  Register receiver = StoreWithVectorDescriptor::ReceiverRegister();  // x1
+  Register key = StoreWithVectorDescriptor::NameRegister();           // x2
+  Register vector = StoreWithVectorDescriptor::VectorRegister();      // x3
+  Register slot = StoreWithVectorDescriptor::SlotRegister();          // x4
+  DCHECK(StoreWithVectorDescriptor::ValueRegister().is(x0));          // x0
   Register feedback = x5;
   Register receiver_map = x6;
   Register scratch1 = x7;

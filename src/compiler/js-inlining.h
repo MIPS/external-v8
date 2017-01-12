@@ -36,6 +36,9 @@ class JSInliner final : public AdvancedReducer {
   Reduction ReduceJSCall(Node* node, Handle<JSFunction> function);
 
  private:
+  CommonOperatorBuilder* common() const;
+  JSOperatorBuilder* javascript() const;
+  SimplifiedOperatorBuilder* simplified() const;
   Graph* graph() const;
   JSGraph* jsgraph() const { return jsgraph_; }
 

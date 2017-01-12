@@ -5,7 +5,7 @@
 #include "src/interpreter/bytecode-pipeline.h"
 
 #include <iomanip>
-#include "src/interpreter/source-position-table.h"
+#include "src/source-position-table.h"
 
 namespace v8 {
 namespace internal {
@@ -57,17 +57,6 @@ BytecodeNode::BytecodeNode(const BytecodeNode& other) {
 BytecodeNode& BytecodeNode::operator=(const BytecodeNode& other) {
   memcpy(this, &other, sizeof(other));
   return *this;
-}
-
-void BytecodeNode::set_bytecode(Bytecode bytecode) {
-  DCHECK_EQ(Bytecodes::NumberOfOperands(bytecode), 0);
-  bytecode_ = bytecode;
-}
-
-void BytecodeNode::set_bytecode(Bytecode bytecode, uint32_t operand0) {
-  DCHECK_EQ(Bytecodes::NumberOfOperands(bytecode), 1);
-  bytecode_ = bytecode;
-  operands_[0] = operand0;
 }
 
 void BytecodeNode::Clone(const BytecodeNode* const other) {

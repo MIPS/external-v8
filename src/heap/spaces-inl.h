@@ -35,22 +35,6 @@ NewSpacePageRange::NewSpacePageRange(Address start, Address limit)
 }
 
 // -----------------------------------------------------------------------------
-// Bitmap
-
-void Bitmap::Clear(MemoryChunk* chunk) {
-  Bitmap* bitmap = chunk->markbits();
-  for (int i = 0; i < bitmap->CellsCount(); i++) bitmap->cells()[i] = 0;
-  chunk->ResetLiveBytes();
-}
-
-void Bitmap::SetAllBits(MemoryChunk* chunk) {
-  Bitmap* bitmap = chunk->markbits();
-  for (int i = 0; i < bitmap->CellsCount(); i++)
-    bitmap->cells()[i] = 0xffffffff;
-}
-
-
-// -----------------------------------------------------------------------------
 // SemiSpaceIterator
 
 HeapObject* SemiSpaceIterator::Next() {
@@ -257,7 +241,6 @@ void MemoryChunk::ResetLiveBytes() {
 }
 
 void MemoryChunk::IncrementLiveBytes(int by) {
-  if (IsFlagSet(BLACK_PAGE)) return;
   if (FLAG_trace_live_bytes) {
     PrintIsolate(
         heap()->isolate(), "live-bytes: update page=%p delta=%d %d->%d\n",
@@ -458,6 +441,12 @@ AllocationResult PagedSpace::AllocateRawUnaligned(
     object = free_list_.Allocate(size_in_bytes);
     if (object == NULL) {
       object = SlowAllocateRaw(size_in_bytes);
+    }
+    if (object != NULL) {
+      if (heap()->incremental_marking()->black_allocation()) {
+        Marking::MarkBlack(ObjectMarking::MarkBitFrom(object));
+        MemoryChunk::IncrementLiveBytesFromGC(object, size_in_bytes);
+      }
     }
   }
 

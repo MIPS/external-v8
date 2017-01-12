@@ -35,6 +35,7 @@
     'v8_extra_library_files%': [],
     'v8_experimental_extra_library_files%': [],
     'mksnapshot_exec': '<(PRODUCT_DIR)/<(EXECUTABLE_PREFIX)mksnapshot<(EXECUTABLE_SUFFIX)',
+    'mkpeephole_exec': '<(PRODUCT_DIR)/<(EXECUTABLE_PREFIX)mkpeephole<(EXECUTABLE_SUFFIX)',
   },
   'includes': ['../gypfiles/toolchain.gypi', '../gypfiles/features.gypi'],
   'targets': [
@@ -178,6 +179,7 @@
       ],
       'include_dirs+': [
         '..',
+        '<(DEPTH)',
       ],
       'sources': [
         '<(SHARED_INTERMEDIATE_DIR)/libraries.cc',
@@ -236,6 +238,7 @@
       ],
       'include_dirs+': [
         '..',
+        '<(DEPTH)',
       ],
       'sources': [
         '<(SHARED_INTERMEDIATE_DIR)/libraries.cc',
@@ -298,6 +301,7 @@
           ],
           'include_dirs+': [
             '..',
+            '<(DEPTH)',
           ],
           'sources': [
             'snapshot/natives-external.cc',
@@ -382,13 +386,22 @@
         'v8_libbase',
         'v8_libsampler',
       ],
+      'objs': ['foo.o'],
       'variables': {
         'optimize': 'max',
       },
       'include_dirs+': [
         '..',
         '<(DEPTH)',
+        '<(SHARED_INTERMEDIATE_DIR)'
       ],
+      'actions':[{
+        'action_name': 'run mkpeephole',
+        'inputs': ['<(mkpeephole_exec)'],
+        'outputs': ['<(INTERMEDIATE_DIR)/bytecode-peephole-table.cc'],
+        'action': ['<(mkpeephole_exec)', '<(INTERMEDIATE_DIR)/bytecode-peephole-table.cc' ],
+        'process_outputs_as_sources': 1,
+      }],
       'sources': [  ### gcmole(all) ###
         '../include/v8-debug.h',
         '../include/v8-experimental.h',
@@ -418,23 +431,32 @@
         'api-natives.h',
         'arguments.cc',
         'arguments.h',
+        'asmjs/asm-js.cc',
+        'asmjs/asm-js.h',
+        'asmjs/asm-typer.cc',
+        'asmjs/asm-typer.h',
+        'asmjs/asm-types.cc',
+        'asmjs/asm-types.h',
+        'asmjs/asm-wasm-builder.cc',
+        'asmjs/asm-wasm-builder.h',
         'assembler.cc',
         'assembler.h',
         'assert-scope.h',
         'assert-scope.cc',
         'ast/ast-expression-rewriter.cc',
         'ast/ast-expression-rewriter.h',
-        'ast/ast-expression-visitor.cc',
-        'ast/ast-expression-visitor.h',
         'ast/ast-literal-reindexer.cc',
         'ast/ast-literal-reindexer.h',
         'ast/ast-numbering.cc',
         'ast/ast-numbering.h',
+        'ast/ast-traversal-visitor.h',
         'ast/ast-type-bounds.h',
         'ast/ast-value-factory.cc',
         'ast/ast-value-factory.h',
         'ast/ast.cc',
         'ast/ast.h',
+        'ast/context-slot-cache.cc',
+        'ast/context-slot-cache.h',
         'ast/modules.cc',
         'ast/modules.h',
         'ast/prettyprinter.cc',
@@ -459,8 +481,36 @@
         'bit-vector.h',
         'bootstrapper.cc',
         'bootstrapper.h',
-        'builtins.cc',
-        'builtins.h',
+        'builtins/builtins-api.cc',
+        'builtins/builtins-arraybuffer.cc',
+        'builtins/builtins-array.cc',
+        'builtins/builtins-boolean.cc',
+        'builtins/builtins-call.cc',
+        'builtins/builtins-callsite.cc',
+        'builtins/builtins-conversion.cc',
+        'builtins/builtins-dataview.cc',
+        'builtins/builtins-date.cc',
+        'builtins/builtins-debug.cc',
+        'builtins/builtins-error.cc',
+        'builtins/builtins-function.cc',
+        'builtins/builtins-generator.cc',
+        'builtins/builtins-global.cc',
+        'builtins/builtins-handler.cc',
+        'builtins/builtins-internal.cc',
+        'builtins/builtins-interpreter.cc',
+        'builtins/builtins-json.cc',
+        'builtins/builtins-math.cc',
+        'builtins/builtins-number.cc',
+        'builtins/builtins-object.cc',
+        'builtins/builtins-proxy.cc',
+        'builtins/builtins-reflect.cc',
+        'builtins/builtins-sharedarraybuffer.cc',
+        'builtins/builtins-string.cc',
+        'builtins/builtins-symbol.cc',
+        'builtins/builtins-typedarray.cc',
+        'builtins/builtins-utils.h',
+        'builtins/builtins.cc',
+        'builtins/builtins.h',
         'cached-powers.cc',
         'cached-powers.h',
         'cancelable-task.cc',
@@ -504,6 +554,8 @@
         'compiler/bytecode-branch-analysis.h',
         'compiler/bytecode-graph-builder.cc',
         'compiler/bytecode-graph-builder.h',
+        'compiler/bytecode-loop-analysis.cc',
+        'compiler/bytecode-loop-analysis.h',
         'compiler/c-linkage.cc',
         'compiler/checkpoint-elimination.cc',
         'compiler/checkpoint-elimination.h',
@@ -603,6 +655,8 @@
         'compiler/loop-analysis.h',
         'compiler/loop-peeling.cc',
         'compiler/loop-peeling.h',
+        'compiler/loop-variable-optimizer.cc',
+        'compiler/loop-variable-optimizer.h',
         'compiler/machine-operator-reducer.cc',
         'compiler/machine-operator-reducer.h',
         'compiler/machine-operator.cc',
@@ -672,6 +726,7 @@
         'compiler/type-hints.h',
         'compiler/typer.cc',
         'compiler/typer.h',
+        'compiler/unwinding-info-writer.h',
         'compiler/value-numbering-reducer.cc',
         'compiler/value-numbering-reducer.h',
         'compiler/verifier.cc',
@@ -681,6 +736,10 @@
         'compiler/wasm-linkage.cc',
         'compiler/zone-pool.cc',
         'compiler/zone-pool.h',
+        'compiler-dispatcher/compiler-dispatcher-job.cc',
+        'compiler-dispatcher/compiler-dispatcher-job.h',
+        'compiler-dispatcher/optimizing-compile-dispatcher.cc',
+        'compiler-dispatcher/optimizing-compile-dispatcher.h',
         'compiler.cc',
         'compiler.h',
         'context-measure.cc',
@@ -772,6 +831,8 @@
         'debug/debug.h',
         'debug/liveedit.cc',
         'debug/liveedit.h',
+        'deoptimize-reason.cc',
+        'deoptimize-reason.h',
         'deoptimizer.cc',
         'deoptimizer.h',
         'disasm.h',
@@ -839,6 +900,8 @@
         'heap/array-buffer-tracker-inl.h',
         'heap/array-buffer-tracker.cc',
         'heap/array-buffer-tracker.h',
+        'heap/code-stats.cc',
+        'heap/code-stats.h',
         'heap/memory-reducer.cc',
         'heap/memory-reducer.h',
         'heap/gc-idle-time-handler.cc',
@@ -856,6 +919,7 @@
         'heap/mark-compact-inl.h',
         'heap/mark-compact.cc',
         'heap/mark-compact.h',
+        'heap/marking.h',
         'heap/object-stats.cc',
         'heap/object-stats.h',
         'heap/objects-visiting-inl.h',
@@ -906,13 +970,21 @@
         'interpreter/bytecode-array-writer.h',
         'interpreter/bytecode-dead-code-optimizer.cc',
         'interpreter/bytecode-dead-code-optimizer.h',
-        'interpreter/bytecode-label.h',
+        'interpreter/bytecode-decoder.cc',
+        'interpreter/bytecode-decoder.h',
+        'interpreter/bytecode-flags.cc',
+        'interpreter/bytecode-flags.h',
         'interpreter/bytecode-generator.cc',
         'interpreter/bytecode-generator.h',
+        'interpreter/bytecode-label.cc',
+        'interpreter/bytecode-label.h',
         'interpreter/bytecode-peephole-optimizer.cc',
         'interpreter/bytecode-peephole-optimizer.h',
+        'interpreter/bytecode-peephole-table.h',
         'interpreter/bytecode-pipeline.cc',
         'interpreter/bytecode-pipeline.h',
+        'interpreter/bytecode-register.cc',
+        'interpreter/bytecode-register.h',
         'interpreter/bytecode-register-allocator.cc',
         'interpreter/bytecode-register-allocator.h',
         'interpreter/bytecode-register-optimizer.cc',
@@ -930,8 +1002,6 @@
         'interpreter/interpreter-assembler.h',
         'interpreter/interpreter-intrinsics.cc',
         'interpreter/interpreter-intrinsics.h',
-        'interpreter/source-position-table.cc',
-        'interpreter/source-position-table.h',
         'isolate-inl.h',
         'isolate.cc',
         'isolate.h',
@@ -968,8 +1038,6 @@
         'objects-printer.cc',
         'objects.cc',
         'objects.h',
-        'optimizing-compile-dispatcher.cc',
-        'optimizing-compile-dispatcher.h',
         'ostreams.cc',
         'ostreams.h',
         'parsing/expression-classifier.h',
@@ -977,6 +1045,8 @@
         'parsing/func-name-inferrer.h',
         'parsing/parameter-initializer-rewriter.cc',
         'parsing/parameter-initializer-rewriter.h',
+        'parsing/parse-info.cc',
+        'parsing/parse-info.h',
         'parsing/parser-base.h',
         'parsing/parser.cc',
         'parsing/parser.h',
@@ -1061,6 +1131,7 @@
         'runtime/runtime-debug.cc',
         'runtime/runtime-forin.cc',
         'runtime/runtime-function.cc',
+        'runtime/runtime-error.cc',
         'runtime/runtime-futex.cc',
         'runtime/runtime-generator.cc',
         'runtime/runtime-i18n.cc',
@@ -1081,6 +1152,7 @@
         'runtime/runtime-test.cc',
         'runtime/runtime-typedarray.cc',
         'runtime/runtime-utils.h',
+        'runtime/runtime-wasm.cc',
         'runtime/runtime.cc',
         'runtime/runtime.h',
         'safepoint-table.cc',
@@ -1106,6 +1178,8 @@
         'snapshot/snapshot-source-sink.h',
         'snapshot/startup-serializer.cc',
         'snapshot/startup-serializer.h',
+        'source-position-table.cc',
+        'source-position-table.h',
         'source-position.h',
         'splay-tree.h',
         'splay-tree-inl.h',
@@ -1134,8 +1208,6 @@
         'type-info.h',
         'types.cc',
         'types.h',
-        'typing-asm.cc',
-        'typing-asm.h',
         'unicode-inl.h',
         'unicode.cc',
         'unicode.h',
@@ -1153,15 +1225,13 @@
         'v8memory.h',
         'v8threads.cc',
         'v8threads.h',
+        'value-serializer.cc',
+        'value-serializer.h',
         'vector.h',
         'version.cc',
         'version.h',
         'vm-state-inl.h',
         'vm-state.h',
-        'wasm/asm-types.cc',
-        'wasm/asm-types.h',
-        'wasm/asm-wasm-builder.cc',
-        'wasm/asm-wasm-builder.h',
         'wasm/ast-decoder.cc',
         'wasm/ast-decoder.h',
         'wasm/decoder.h',
@@ -1200,12 +1270,16 @@
         }, {
           'toolsets': ['target'],
         }],
+        ['want_separate_host_toolset_mkpeephole==1', {
+          'dependencies': ['mkpeephole#host'],
+        }, {
+          'dependencies': ['mkpeephole'],
+        }],
         ['v8_target_arch=="arm"', {
           'sources': [  ### gcmole(arch:arm) ###
             'arm/assembler-arm-inl.h',
             'arm/assembler-arm.cc',
             'arm/assembler-arm.h',
-            'arm/builtins-arm.cc',
             'arm/code-stubs-arm.cc',
             'arm/code-stubs-arm.h',
             'arm/codegen-arm.cc',
@@ -1223,10 +1297,14 @@
             'arm/macro-assembler-arm.h',
             'arm/simulator-arm.cc',
             'arm/simulator-arm.h',
+            'arm/eh-frame-arm.cc',
+            'builtins/arm/builtins-arm.cc',
             'compiler/arm/code-generator-arm.cc',
             'compiler/arm/instruction-codes-arm.h',
             'compiler/arm/instruction-scheduler-arm.cc',
             'compiler/arm/instruction-selector-arm.cc',
+            'compiler/arm/unwinding-info-writer-arm.h',
+            'compiler/arm/unwinding-info-writer-arm.cc',
             'crankshaft/arm/lithium-arm.cc',
             'crankshaft/arm/lithium-arm.h',
             'crankshaft/arm/lithium-codegen-arm.cc',
@@ -1249,7 +1327,6 @@
             'arm64/assembler-arm64.cc',
             'arm64/assembler-arm64.h',
             'arm64/assembler-arm64-inl.h',
-            'arm64/builtins-arm64.cc',
             'arm64/codegen-arm64.cc',
             'arm64/codegen-arm64.h',
             'arm64/code-stubs-arm64.cc',
@@ -1277,10 +1354,14 @@
             'arm64/simulator-arm64.h',
             'arm64/utils-arm64.cc',
             'arm64/utils-arm64.h',
+            'arm64/eh-frame-arm64.cc',
+            'builtins/arm64/builtins-arm64.cc',
             'compiler/arm64/code-generator-arm64.cc',
             'compiler/arm64/instruction-codes-arm64.h',
             'compiler/arm64/instruction-scheduler-arm64.cc',
             'compiler/arm64/instruction-selector-arm64.cc',
+            'compiler/arm64/unwinding-info-writer-arm64.h',
+            'compiler/arm64/unwinding-info-writer-arm64.cc',
             'crankshaft/arm64/delayed-masm-arm64.cc',
             'crankshaft/arm64/delayed-masm-arm64.h',
             'crankshaft/arm64/delayed-masm-arm64-inl.h',
@@ -1306,7 +1387,6 @@
             'ia32/assembler-ia32-inl.h',
             'ia32/assembler-ia32.cc',
             'ia32/assembler-ia32.h',
-            'ia32/builtins-ia32.cc',
             'ia32/code-stubs-ia32.cc',
             'ia32/code-stubs-ia32.h',
             'ia32/codegen-ia32.cc',
@@ -1319,6 +1399,7 @@
             'ia32/interface-descriptors-ia32.cc',
             'ia32/macro-assembler-ia32.cc',
             'ia32/macro-assembler-ia32.h',
+            'builtins/ia32/builtins-ia32.cc',
             'compiler/ia32/code-generator-ia32.cc',
             'compiler/ia32/instruction-codes-ia32.h',
             'compiler/ia32/instruction-scheduler-ia32.cc',
@@ -1345,7 +1426,6 @@
             'x87/assembler-x87-inl.h',
             'x87/assembler-x87.cc',
             'x87/assembler-x87.h',
-            'x87/builtins-x87.cc',
             'x87/code-stubs-x87.cc',
             'x87/code-stubs-x87.h',
             'x87/codegen-x87.cc',
@@ -1358,6 +1438,7 @@
             'x87/interface-descriptors-x87.cc',
             'x87/macro-assembler-x87.cc',
             'x87/macro-assembler-x87.h',
+            'builtins/x87/builtins-x87.cc',
             'compiler/x87/code-generator-x87.cc',
             'compiler/x87/instruction-codes-x87.h',
             'compiler/x87/instruction-scheduler-x87.cc',
@@ -1384,7 +1465,6 @@
             'mips/assembler-mips.cc',
             'mips/assembler-mips.h',
             'mips/assembler-mips-inl.h',
-            'mips/builtins-mips.cc',
             'mips/codegen-mips.cc',
             'mips/codegen-mips.h',
             'mips/code-stubs-mips.cc',
@@ -1401,6 +1481,7 @@
             'mips/macro-assembler-mips.h',
             'mips/simulator-mips.cc',
             'mips/simulator-mips.h',
+            'builtins/mips/builtins-mips.cc',
             'compiler/mips/code-generator-mips.cc',
             'compiler/mips/instruction-codes-mips.h',
             'compiler/mips/instruction-scheduler-mips.cc',
@@ -1427,7 +1508,6 @@
             'mips64/assembler-mips64.cc',
             'mips64/assembler-mips64.h',
             'mips64/assembler-mips64-inl.h',
-            'mips64/builtins-mips64.cc',
             'mips64/codegen-mips64.cc',
             'mips64/codegen-mips64.h',
             'mips64/code-stubs-mips64.cc',
@@ -1444,6 +1524,7 @@
             'mips64/macro-assembler-mips64.h',
             'mips64/simulator-mips64.cc',
             'mips64/simulator-mips64.h',
+            'builtins/mips64/builtins-mips64.cc',
             'compiler/mips64/code-generator-mips64.cc',
             'compiler/mips64/instruction-codes-mips64.h',
             'compiler/mips64/instruction-scheduler-mips64.cc',
@@ -1467,6 +1548,7 @@
         }],
         ['v8_target_arch=="x64" or v8_target_arch=="x32"', {
           'sources': [  ### gcmole(arch:x64) ###
+            'builtins/x64/builtins-x64.cc',
             'crankshaft/x64/lithium-codegen-x64.cc',
             'crankshaft/x64/lithium-codegen-x64.h',
             'crankshaft/x64/lithium-gap-resolver-x64.cc',
@@ -1476,7 +1558,6 @@
             'x64/assembler-x64-inl.h',
             'x64/assembler-x64.cc',
             'x64/assembler-x64.h',
-            'x64/builtins-x64.cc',
             'x64/code-stubs-x64.cc',
             'x64/code-stubs-x64.h',
             'x64/codegen-x64.cc',
@@ -1506,10 +1587,14 @@
             'compiler/x64/instruction-codes-x64.h',
             'compiler/x64/instruction-scheduler-x64.cc',
             'compiler/x64/instruction-selector-x64.cc',
+            'compiler/x64/unwinding-info-writer-x64.h',
+            'compiler/x64/unwinding-info-writer-x64.cc',
+            'x64/eh-frame-x64.cc',
           ],
         }],
         ['v8_target_arch=="ppc" or v8_target_arch=="ppc64"', {
           'sources': [  ### gcmole(arch:ppc) ###
+            'builtins/ppc/builtins-ppc.cc',
             'compiler/ppc/code-generator-ppc.cc',
             'compiler/ppc/instruction-codes-ppc.h',
             'compiler/ppc/instruction-scheduler-ppc.cc',
@@ -1530,7 +1615,6 @@
             'ppc/assembler-ppc-inl.h',
             'ppc/assembler-ppc.cc',
             'ppc/assembler-ppc.h',
-            'ppc/builtins-ppc.cc',
             'ppc/code-stubs-ppc.cc',
             'ppc/code-stubs-ppc.h',
             'ppc/codegen-ppc.cc',
@@ -1553,6 +1637,7 @@
         }],
         ['v8_target_arch=="s390" or v8_target_arch=="s390x"', {
           'sources': [  ### gcmole(arch:s390) ###
+            'builtins/s390/builtins-s390.cc',
             'compiler/s390/code-generator-s390.cc',
             'compiler/s390/instruction-codes-s390.h',
             'compiler/s390/instruction-scheduler-s390.cc',
@@ -1575,7 +1660,6 @@
             's390/assembler-s390.cc',
             's390/assembler-s390.h',
             's390/assembler-s390-inl.h',
-            's390/builtins-s390.cc',
             's390/codegen-s390.cc',
             's390/codegen-s390.h',
             's390/code-stubs-s390.cc',
@@ -1667,7 +1751,6 @@
         'base/atomicops_internals_mac.h',
         'base/atomicops_internals_mips_gcc.h',
         'base/atomicops_internals_mips64_gcc.h',
-        'base/atomicops_internals_portable.h',
         'base/atomicops_internals_ppc_gcc.h',
         'base/atomicops_internals_s390_gcc.h',
         'base/atomicops_internals_tsan.h',
@@ -1682,10 +1765,13 @@
         'base/cpu.h',
         'base/division-by-constant.cc',
         'base/division-by-constant.h',
+        'base/debug/stack_trace.cc',
+        'base/debug/stack_trace.h',
         'base/file-utils.cc',
         'base/file-utils.h',
         'base/flags.h',
         'base/format-macros.h',
+        'base/free_deleter.h',
         'base/functional.cc',
         'base/functional.h',
         'base/hashmap.h',
@@ -1712,42 +1798,36 @@
         'base/safe_conversions_impl.h',
         'base/safe_math.h',
         'base/safe_math_impl.h',
-        'base/smart-pointers.h',
         'base/sys-info.cc',
         'base/sys-info.h',
         'base/utils/random-number-generator.cc',
         'base/utils/random-number-generator.h',
       ],
       'conditions': [
-        ['want_separate_host_toolset==1', {
+        ['want_separate_host_toolset==1 or \
+          want_separate_host_toolset_mkpeephole==1', {
           'toolsets': ['host', 'target'],
         }, {
           'toolsets': ['target'],
         }],
         ['OS=="linux"', {
-            'conditions': [
-              ['nacl_target_arch=="none"', {
-                'link_settings': {
-                  'libraries': [
-                    '-ldl',
-                    '-lrt'
-                  ],
-                },
-              }, {
-                'defines': [
-                  'V8_LIBRT_NOT_AVAILABLE=1',
-                ],
-              }],
-            ],
+            'link_settings': {
+              'libraries': [
+                '-ldl',
+                '-lrt'
+              ],
+            },
             'sources': [
+              'base/debug/stack_trace_posix.cc',
               'base/platform/platform-linux.cc',
-              'base/platform/platform-posix.cc'
+              'base/platform/platform-posix.cc',
             ],
           }
         ],
         ['OS=="android"', {
             'sources': [
-              'base/platform/platform-posix.cc'
+              'base/debug/stack_trace_android.cc',
+              'base/platform/platform-posix.cc',
             ],
             'link_settings': {
               'target_conditions': [
@@ -1801,8 +1881,9 @@
               ],
             },
             'sources': [
+              'base/debug/stack_trace_posix.cc',
               'base/platform/platform-posix.cc',
-              'base/qnx-math.h',
+              'base/qnx-math.h'
             ],
             'target_conditions': [
               ['_toolset=="host" and host_os=="linux"', {
@@ -1829,8 +1910,9 @@
                 '-L/usr/local/lib -lexecinfo',
             ]},
             'sources': [
+              'base/debug/stack_trace_posix.cc',
               'base/platform/platform-freebsd.cc',
-              'base/platform/platform-posix.cc'
+              'base/platform/platform-posix.cc',
             ],
           }
         ],
@@ -1851,13 +1933,15 @@
                 '-L/usr/pkg/lib -Wl,-R/usr/pkg/lib -lexecinfo',
             ]},
             'sources': [
+              'base/debug/stack_trace_posix.cc',
               'base/platform/platform-openbsd.cc',
-              'base/platform/platform-posix.cc'
+              'base/platform/platform-posix.cc',
             ],
           }
         ],
         ['OS=="aix"', {
           'sources': [
+            'base/debug/stack_trace_posix.cc',
             'base/platform/platform-aix.cc',
             'base/platform/platform-posix.cc'
           ]},
@@ -1868,15 +1952,17 @@
                 '-lnsl -lrt',
             ]},
             'sources': [
+              'base/debug/stack_trace_posix.cc',
               'base/platform/platform-solaris.cc',
-              'base/platform/platform-posix.cc'
+              'base/platform/platform-posix.cc',
             ],
           }
         ],
         ['OS=="mac"', {
           'sources': [
+            'base/debug/stack_trace_posix.cc',
             'base/platform/platform-macos.cc',
-            'base/platform/platform-posix.cc'
+            'base/platform/platform-posix.cc',
           ]},
         ],
         ['OS=="win"', {
@@ -1894,11 +1980,13 @@
               'conditions': [
                 ['build_env=="Cygwin"', {
                   'sources': [
+                    'base/debug/stack_trace_posix.cc',
                     'base/platform/platform-cygwin.cc',
-                    'base/platform/platform-posix.cc'
+                    'base/platform/platform-posix.cc',
                   ],
                 }, {
                   'sources': [
+                    'base/debug/stack_trace_win.cc',
                     'base/platform/platform-win32.cc',
                     'base/win32-headers.h',
                   ],
@@ -1909,12 +1997,18 @@
               },
             }, {
               'sources': [
+                'base/debug/stack_trace_win.cc',
                 'base/platform/platform-win32.cc',
                 'base/win32-headers.h',
               ],
               'msvs_disabled_warnings': [4351, 4355, 4800],
               'link_settings':  {
-                'libraries': [ '-lwinmm.lib', '-lws2_32.lib' ],
+                'libraries': [
+                  '-ldbghelp.lib',
+                  '-lshlwapi.lib',
+                  '-lwinmm.lib',
+                  '-lws2_32.lib'
+                ],
               },
             }],
           ],
@@ -1932,14 +2026,23 @@
       ],
       'include_dirs+': [
         '..',
+        '<(DEPTH)',
         '../include',
       ],
       'sources': [
         '../include/libplatform/libplatform.h',
+        '../include/libplatform/v8-tracing.h',
         'libplatform/default-platform.cc',
         'libplatform/default-platform.h',
         'libplatform/task-queue.cc',
         'libplatform/task-queue.h',
+        'libplatform/tracing/trace-buffer.cc',
+        'libplatform/tracing/trace-buffer.h',
+        'libplatform/tracing/trace-config.cc',
+        'libplatform/tracing/trace-object.cc',
+        'libplatform/tracing/trace-writer.cc',
+        'libplatform/tracing/trace-writer.h',
+        'libplatform/tracing/tracing-controller.cc',
         'libplatform/worker-thread.cc',
         'libplatform/worker-thread.h',
       ],
@@ -1970,8 +2073,8 @@
         '../include',
       ],
       'sources': [
-        'libsampler/v8-sampler.cc',
-        'libsampler/v8-sampler.h'
+        'libsampler/sampler.cc',
+        'libsampler/sampler.h'
       ],
       'conditions': [
         ['want_separate_host_toolset==1', {
@@ -2065,7 +2168,6 @@
           'js/array.js',
           'js/string.js',
           'js/math.js',
-          'third_party/fdlibm/fdlibm.js',
           'js/regexp.js',
           'js/arraybuffer.js',
           'js/typedarray.js',
@@ -2088,10 +2190,8 @@
           'js/macros.py',
           'messages.h',
           'js/harmony-atomics.js',
-          'js/harmony-sharedarraybuffer.js',
           'js/harmony-simd.js',
           'js/harmony-string-padding.js',
-          'js/promise-extra.js',
           'js/harmony-async-await.js'
         ],
         'libraries_bin_file': '<(SHARED_INTERMEDIATE_DIR)/libraries.bin',
@@ -2275,6 +2375,7 @@
       'dependencies': ['v8_base', 'v8_nosnapshot', 'v8_libplatform'],
       'include_dirs+': [
         '..',
+        '<(DEPTH)',
       ],
       'sources': [
         'snapshot/mksnapshot.cc',
@@ -2287,6 +2388,27 @@
           ]
         }],
         ['want_separate_host_toolset==1', {
+          'toolsets': ['host'],
+        }, {
+          'toolsets': ['target'],
+        }],
+      ],
+    },
+    {
+      'target_name': 'mkpeephole',
+      'type': 'executable',
+      'dependencies': [ 'v8_libbase' ],
+      'include_dirs+': [
+        '..',
+       ],
+      'sources': [
+        'interpreter/bytecode-peephole-table.h',
+        'interpreter/bytecodes.h',
+        'interpreter/bytecodes.cc',
+        'interpreter/mkpeephole.cc'
+      ],
+      'conditions': [
+        ['want_separate_host_toolset_mkpeephole==1', {
           'toolsets': ['host'],
         }, {
           'toolsets': ['target'],
