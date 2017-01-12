@@ -8,13 +8,12 @@
 #include "src/accessors.h"
 #include "src/allocation.h"
 #include "src/ast/ast-type-bounds.h"
-#include "src/ast/ast.h"
-#include "src/ast/scopes.h"
 #include "src/bailout-reason.h"
 #include "src/compiler.h"
 #include "src/crankshaft/compilation-phase.h"
 #include "src/crankshaft/hydrogen-instructions.h"
-#include "src/parsing/parser.h"
+#include "src/globals.h"
+#include "src/parsing/parse-info.h"
 #include "src/zone.h"
 
 namespace v8 {
@@ -31,6 +30,7 @@ class HTracer;
 class LAllocator;
 class LChunk;
 class LiveRange;
+class Scope;
 
 class HCompilationJob final : public CompilationJob {
  public:
@@ -43,9 +43,9 @@ class HCompilationJob final : public CompilationJob {
         chunk_(nullptr) {}
 
  protected:
-  virtual Status CreateGraphImpl();
-  virtual Status OptimizeGraphImpl();
-  virtual Status GenerateCodeImpl();
+  virtual Status PrepareJobImpl();
+  virtual Status ExecuteJobImpl();
+  virtual Status FinalizeJobImpl();
 
  private:
   Zone zone_;
@@ -1516,7 +1516,7 @@ class HGraphBuilder {
   HValue* EnforceNumberType(HValue* number, Type* expected);
   HValue* TruncateToNumber(HValue* value, Type** expected);
 
-  void FinishExitWithHardDeoptimization(Deoptimizer::DeoptReason reason);
+  void FinishExitWithHardDeoptimization(DeoptimizeReason reason);
 
   void AddIncrementCounter(StatsCounter* counter);
 
@@ -1665,12 +1665,12 @@ class HGraphBuilder {
     void End();
     void EndUnreachable();
 
-    void Deopt(Deoptimizer::DeoptReason reason);
-    void ThenDeopt(Deoptimizer::DeoptReason reason) {
+    void Deopt(DeoptimizeReason reason);
+    void ThenDeopt(DeoptimizeReason reason) {
       Then();
       Deopt(reason);
     }
-    void ElseDeopt(Deoptimizer::DeoptReason reason) {
+    void ElseDeopt(DeoptimizeReason reason) {
       Else();
       Deopt(reason);
     }
@@ -1778,57 +1778,6 @@ class HGraphBuilder {
 
   HValue* BuildNewElementsCapacity(HValue* old_capacity);
 
-  class JSArrayBuilder final {
-   public:
-    JSArrayBuilder(HGraphBuilder* builder,
-                   ElementsKind kind,
-                   HValue* allocation_site_payload,
-                   HValue* constructor_function,
-                   AllocationSiteOverrideMode override_mode);
-
-    JSArrayBuilder(HGraphBuilder* builder,
-                   ElementsKind kind,
-                   HValue* constructor_function = NULL);
-
-    enum FillMode {
-      DONT_FILL_WITH_HOLE,
-      FILL_WITH_HOLE
-    };
-
-    ElementsKind kind() { return kind_; }
-    HAllocate* elements_location() { return elements_location_; }
-
-    HAllocate* AllocateEmptyArray();
-    HAllocate* AllocateArray(HValue* capacity,
-                             HValue* length_field,
-                             FillMode fill_mode = FILL_WITH_HOLE);
-    HValue* GetElementsLocation() { return elements_location_; }
-    HValue* EmitMapCode();
-
-   private:
-    Zone* zone() const { return builder_->zone(); }
-    int elements_size() const {
-      return IsFastDoubleElementsKind(kind_) ? kDoubleSize : kPointerSize;
-    }
-    HGraphBuilder* builder() { return builder_; }
-    HGraph* graph() { return builder_->graph(); }
-    int initial_capacity() {
-      STATIC_ASSERT(JSArray::kPreallocatedArrayElements > 0);
-      return JSArray::kPreallocatedArrayElements;
-    }
-
-    HValue* EmitInternalMapCode();
-
-    HGraphBuilder* builder_;
-    ElementsKind kind_;
-    AllocationSiteMode mode_;
-    HValue* allocation_site_payload_;
-    HValue* constructor_function_;
-    HAllocate* elements_location_;
-  };
-
-  HValue* BuildAllocateArrayFromLength(JSArrayBuilder* array_builder,
-                                       HValue* length_argument);
   HValue* BuildCalculateElementsSize(ElementsKind kind,
                                      HValue* capacity);
   HAllocate* AllocateJSArrayObject(AllocationSiteMode mode);
@@ -1923,7 +1872,7 @@ class HGraphBuilder {
 
  protected:
   void SetSourcePosition(int position) {
-    if (position != RelocInfo::kNoPosition) {
+    if (position != kNoSourcePosition) {
       position_.set_position(position - start_position_);
     }
     // Otherwise position remains unknown.
@@ -1940,7 +1889,7 @@ class HGraphBuilder {
   // the SourcePosition assuming that this position corresponds to the
   // same function as current position_.
   SourcePosition ScriptPositionToSourcePosition(int position) {
-    if (position == RelocInfo::kNoPosition) {
+    if (position == kNoSourcePosition) {
       return SourcePosition::Unknown();
     }
     SourcePosition pos = position_;
@@ -1978,10 +1927,9 @@ class HGraphBuilder {
   int start_position_;
 };
 
-
 template <>
 inline HDeoptimize* HGraphBuilder::Add<HDeoptimize>(
-    Deoptimizer::DeoptReason reason, Deoptimizer::BailoutType type) {
+    DeoptimizeReason reason, Deoptimizer::BailoutType type) {
   if (type == Deoptimizer::SOFT) {
     isolate()->counters()->soft_deopts_requested()->Increment();
     if (FLAG_always_opt) return NULL;
@@ -1998,10 +1946,9 @@ inline HDeoptimize* HGraphBuilder::Add<HDeoptimize>(
   return instr;
 }
 
-
 template <>
 inline HInstruction* HGraphBuilder::AddUncasted<HDeoptimize>(
-    Deoptimizer::DeoptReason reason, Deoptimizer::BailoutType type) {
+    DeoptimizeReason reason, Deoptimizer::BailoutType type) {
   return Add<HDeoptimize>(reason, type);
 }
 
@@ -2112,8 +2059,10 @@ inline HContext* HGraphBuilder::New<HContext>() {
   return HContext::New(zone());
 }
 
-
-class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
+// This AstVistor is not final, and provides the AstVisitor methods as virtual
+// methods so they can be specialized by subclasses.
+class HOptimizedGraphBuilder : public HGraphBuilder,
+                               public AstVisitor<HOptimizedGraphBuilder> {
  public:
   // A class encapsulating (lazily-allocated) break and continue blocks for
   // a breakable statement.  Separated from BreakAndContinueScope so that it
@@ -2193,7 +2142,7 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
 
   FunctionState* function_state() const { return function_state_; }
 
-  void VisitDeclarations(ZoneList<Declaration*>* declarations) override;
+  void VisitDeclarations(ZoneList<Declaration*>* declarations);
 
   AstTypeBounds* bounds() { return &bounds_; }
 
@@ -2265,16 +2214,13 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
   F(IsJSProxy)                         \
   F(Call)                              \
   F(NewObject)                         \
-  F(ValueOf)                           \
   F(StringCharFromCode)                \
   F(ToInteger)                         \
-  F(ToName)                            \
   F(ToObject)                          \
   F(ToString)                          \
   F(ToLength)                          \
   F(ToNumber)                          \
   F(IsJSReceiver)                      \
-  F(MathPow)                           \
   F(HasCachedArrayIndex)               \
   F(GetCachedArrayIndex)               \
   F(DebugBreakInOptimizedCode)         \
@@ -2295,9 +2241,6 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
   F(TypedArrayGetLength)               \
   /* ArrayBuffer */                    \
   F(ArrayBufferGetByteLength)          \
-  /* Maths */                          \
-  F(DoubleHi)                          \
-  F(DoubleLo)                          \
   /* ES6 Collections */                \
   F(MapClear)                          \
   F(MapInitialize)                     \
@@ -2326,7 +2269,7 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
   void VisitLogicalExpression(BinaryOperation* expr);
   void VisitArithmeticExpression(BinaryOperation* expr);
 
-  void VisitLoopBody(IterationStatement* stmt,
+  void VisitLoopBody(IterationStatement* stmt, BailoutId stack_check_id,
                      HBasicBlock* loop_entry);
 
   void BuildForInBody(ForInStatement* stmt, Variable* each_var,
@@ -2352,7 +2295,7 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
   HBasicBlock* BuildLoopEntry(IterationStatement* statement);
 
   HBasicBlock* JoinContinue(IterationStatement* statement,
-                            HBasicBlock* exit_block,
+                            BailoutId continue_id, HBasicBlock* exit_block,
                             HBasicBlock* continue_block);
 
   HValue* Top() const { return environment()->Top(); }
@@ -2407,7 +2350,7 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
                        HBasicBlock* false_block);
 
   // Visit a list of expressions from left to right, each in a value context.
-  void VisitExpressions(ZoneList<Expression*>* exprs) override;
+  void VisitExpressions(ZoneList<Expression*>* exprs);
   void VisitExpressions(ZoneList<Expression*>* exprs,
                         ArgumentsAllowedFlag flag);
 
@@ -2416,10 +2359,10 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
   template <class Instruction> HInstruction* PreProcessCall(Instruction* call);
   void PushArgumentsFromEnvironment(int count);
 
-  void SetUpScope(Scope* scope);
-  void VisitStatements(ZoneList<Statement*>* statements) override;
+  void SetUpScope(DeclarationScope* scope);
+  void VisitStatements(ZoneList<Statement*>* statements);
 
-#define DECLARE_VISIT(type) void Visit##type(type* node) override;
+#define DECLARE_VISIT(type) virtual void Visit##type(type* node);
   AST_NODE_LIST(DECLARE_VISIT)
 #undef DECLARE_VISIT
 
@@ -2443,10 +2386,8 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
   void BuildFunctionApply(Call* expr);
   void BuildFunctionCall(Call* expr);
 
-  bool TryHandleArrayCall(Call* expr, HValue* function);
-  bool TryHandleArrayCallNew(CallNew* expr, HValue* function);
-  void BuildArrayCall(Expression* expr, int arguments_count, HValue* function,
-                      Handle<AllocationSite> cell);
+  template <class T>
+  bool TryHandleArrayCall(T* expr, HValue* function);
 
   enum ArrayIndexOfMode { kFirstIndexOf, kLastIndexOf };
   HValue* BuildArrayIndexOf(HValue* receiver,
@@ -2558,9 +2499,8 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
     return handle(isolate()->native_context()->array_function());
   }
 
-  bool IsCallArrayInlineable(int argument_count, Handle<AllocationSite> site);
-  void BuildInlinedCallArray(Expression* expression, int argument_count,
-                             Handle<AllocationSite> site);
+  bool TryInlineArrayCall(Expression* expression, int argument_count,
+                          Handle<AllocationSite> site);
 
   void BuildInitializeInobjectProperties(HValue* receiver,
                                          Handle<Map> initial_map);

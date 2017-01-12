@@ -22,6 +22,11 @@ void CallInterfaceDescriptor::DefaultInitializePlatformSpecific(
                                    default_stub_registers);
 }
 
+const Register FastNewFunctionContextDescriptor::FunctionRegister() {
+  return r1;
+}
+const Register FastNewFunctionContextDescriptor::SlotsRegister() { return r0; }
+
 const Register LoadDescriptor::ReceiverRegister() { return r1; }
 const Register LoadDescriptor::NameRegister() { return r2; }
 const Register LoadDescriptor::SlotRegister() { return r0; }
@@ -33,13 +38,9 @@ const Register LoadWithVectorDescriptor::VectorRegister() { return r3; }
 const Register StoreDescriptor::ReceiverRegister() { return r1; }
 const Register StoreDescriptor::NameRegister() { return r2; }
 const Register StoreDescriptor::ValueRegister() { return r0; }
+const Register StoreDescriptor::SlotRegister() { return r4; }
 
-
-const Register VectorStoreICTrampolineDescriptor::SlotRegister() { return r4; }
-
-
-const Register VectorStoreICDescriptor::VectorRegister() { return r3; }
-
+const Register StoreWithVectorDescriptor::VectorRegister() { return r3; }
 
 const Register VectorStoreTransitionDescriptor::SlotRegister() { return r4; }
 const Register VectorStoreTransitionDescriptor::VectorRegister() { return r3; }
@@ -74,13 +75,6 @@ const Register GrowArrayElementsDescriptor::KeyRegister() { return r3; }
 void FastNewClosureDescriptor::InitializePlatformSpecific(
     CallInterfaceDescriptorData* data) {
   Register registers[] = {r2};
-  data->InitializePlatformSpecific(arraysize(registers), registers);
-}
-
-
-void FastNewContextDescriptor::InitializePlatformSpecific(
-    CallInterfaceDescriptorData* data) {
-  Register registers[] = {r1};
   data->InitializePlatformSpecific(arraysize(registers), registers);
 }
 
@@ -300,6 +294,17 @@ void BinaryOpDescriptor::InitializePlatformSpecific(
 void BinaryOpWithAllocationSiteDescriptor::InitializePlatformSpecific(
     CallInterfaceDescriptorData* data) {
   Register registers[] = {r2, r1, r0};
+  data->InitializePlatformSpecific(arraysize(registers), registers);
+}
+
+void BinaryOpWithVectorDescriptor::InitializePlatformSpecific(
+    CallInterfaceDescriptorData* data) {
+  // register state
+  // r1 -- lhs
+  // r0 -- rhs
+  // r4 -- slot id
+  // r3 -- vector
+  Register registers[] = {r1, r0, r4, r3};
   data->InitializePlatformSpecific(arraysize(registers), registers);
 }
 

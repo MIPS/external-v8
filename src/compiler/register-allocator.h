@@ -695,8 +695,8 @@ class SpillRange final : public ZoneObject {
     return live_ranges_;
   }
   ZoneVector<TopLevelLiveRange*>& live_ranges() { return live_ranges_; }
+  // Spill slots can be 4, 8, or 16 bytes wide.
   int byte_width() const { return byte_width_; }
-  RegisterKind kind() const { return kind_; }
   void Print() const;
 
  private:
@@ -710,7 +710,6 @@ class SpillRange final : public ZoneObject {
   LifetimePosition end_position_;
   int assigned_slot_;
   int byte_width_;
-  RegisterKind kind_;
 
   DISALLOW_COPY_AND_ASSIGN(SpillRange);
 };
@@ -766,12 +765,6 @@ class RegisterAllocationData final : public ZoneObject {
   }
   ZoneVector<TopLevelLiveRange*>& fixed_live_ranges() {
     return fixed_live_ranges_;
-  }
-  ZoneVector<TopLevelLiveRange*>& fixed_float_live_ranges() {
-    return fixed_float_live_ranges_;
-  }
-  const ZoneVector<TopLevelLiveRange*>& fixed_float_live_ranges() const {
-    return fixed_float_live_ranges_;
   }
   ZoneVector<TopLevelLiveRange*>& fixed_double_live_ranges() {
     return fixed_double_live_ranges_;
@@ -840,7 +833,6 @@ class RegisterAllocationData final : public ZoneObject {
   ZoneVector<BitVector*> live_out_sets_;
   ZoneVector<TopLevelLiveRange*> live_ranges_;
   ZoneVector<TopLevelLiveRange*> fixed_live_ranges_;
-  ZoneVector<TopLevelLiveRange*> fixed_float_live_ranges_;
   ZoneVector<TopLevelLiveRange*> fixed_double_live_ranges_;
   ZoneVector<SpillRange*> spill_ranges_;
   DelayedReferences delayed_references_;

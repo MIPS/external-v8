@@ -272,8 +272,7 @@ template <typename T, class P = FreeStoreAllocationPolicy> class List;
 
 // The Strict Mode (ECMA-262 5th edition, 4.2.2).
 
-enum LanguageMode { SLOPPY, STRICT, LANGUAGE_END = 3 };
-
+enum LanguageMode : uint32_t { SLOPPY, STRICT, LANGUAGE_END };
 
 inline std::ostream& operator<<(std::ostream& os, const LanguageMode& mode) {
   switch (mode) {
@@ -304,6 +303,11 @@ inline LanguageMode construct_language_mode(bool strict_bit) {
   return static_cast<LanguageMode>(strict_bit);
 }
 
+// This constant is used as an undefined value when passing source positions.
+const int kNoSourcePosition = -1;
+
+// This constant is used to indicate missing deoptimization information.
+const int kNoDeoptimizationId = -1;
 
 // Mask for the sign bit in a smi.
 const intptr_t kSmiSignMask = kIntptrSignBit;
@@ -424,6 +428,8 @@ class OldSpace;
 class ParameterCount;
 class Foreign;
 class Scope;
+class DeclarationScope;
+class ModuleScope;
 class ScopeInfo;
 class Script;
 class Smi;
@@ -644,18 +650,6 @@ typedef void (*StoreBufferCallback)(Heap* heap,
                                     MemoryChunk* page,
                                     StoreBufferEvent event);
 
-
-// Union used for fast testing of specific double values.
-union DoubleRepresentation {
-  double  value;
-  int64_t bits;
-  DoubleRepresentation(double x) { value = x; }
-  bool operator==(const DoubleRepresentation& other) const {
-    return bits == other.bits;
-  }
-};
-
-
 // Union used for customized checking of the IEEE double types
 // inlined within v8 runtime, rather than going to the underlying
 // platform headers and libraries
@@ -742,7 +736,6 @@ enum CpuFeature {
   ARMv7,
   ARMv8,
   SUDIV,
-  UNALIGNED_ACCESSES,
   MOVW_MOVT_IMMEDIATE_LOADS,
   VFP32DREGS,
   NEON,
@@ -762,6 +755,9 @@ enum CpuFeature {
   DISTINCT_OPS,
   GENERAL_INSTR_EXT,
   FLOATING_POINT_EXT,
+  // PPC/S390
+  UNALIGNED_ACCESSES,
+
   NUMBER_OF_CPU_FEATURES
 };
 
@@ -804,6 +800,14 @@ inline std::ostream& operator<<(std::ostream& os, TailCallMode mode) {
   UNREACHABLE();
   return os;
 }
+
+// Valid hints for the abstract operation OrdinaryToPrimitive,
+// implemented according to ES6, section 7.1.1.
+enum class OrdinaryToPrimitiveHint { kNumber, kString };
+
+// Valid hints for the abstract operation ToPrimitive,
+// implemented according to ES6, section 7.1.1.
+enum class ToPrimitiveHint { kDefault, kNumber, kString };
 
 // Defines specifics about arguments object or rest parameter creation.
 enum class CreateArgumentsType : uint8_t {
@@ -853,8 +857,10 @@ enum ScopeType {
 // Use mips sNaN which is a not used qNaN in x87 port as sNaN to workaround this
 // issue
 // for some test cases.
-#if (V8_TARGET_ARCH_MIPS && !defined(_MIPS_ARCH_MIPS32R6)) ||   \
-    (V8_TARGET_ARCH_MIPS64 && !defined(_MIPS_ARCH_MIPS64R6)) || \
+#if (V8_TARGET_ARCH_MIPS && !defined(_MIPS_ARCH_MIPS32R6) &&           \
+     (!defined(USE_SIMULATOR) || !defined(_MIPS_TARGET_SIMULATOR))) || \
+    (V8_TARGET_ARCH_MIPS64 && !defined(_MIPS_ARCH_MIPS64R6) &&         \
+     (!defined(USE_SIMULATOR) || !defined(_MIPS_TARGET_SIMULATOR))) || \
     (V8_TARGET_ARCH_X87)
 const uint32_t kHoleNanUpper32 = 0xFFFF7FFF;
 const uint32_t kHoleNanLower32 = 0xFFFF7FFF;
@@ -918,7 +924,6 @@ inline bool IsImmutableVariableMode(VariableMode mode) {
   return mode == CONST || mode == CONST_LEGACY;
 }
 
-
 enum class VariableLocation {
   // Before and during variable allocation, a variable whose location is
   // not yet determined.  After allocation, a variable looked up as a
@@ -949,9 +954,11 @@ enum class VariableLocation {
   // A named slot in a heap context.  name() is the variable name in the
   // context object on the heap, with lookup starting at the current
   // context.  index() is invalid.
-  LOOKUP
-};
+  LOOKUP,
 
+  // A named slot in a module's export table.
+  MODULE
+};
 
 // ES6 Draft Rev3 10.2 specifies declarative environment records with mutable
 // and immutable bindings that can be in two states: initialized and
@@ -1005,7 +1012,7 @@ enum MinusZeroMode {
 
 enum Signedness { kSigned, kUnsigned };
 
-enum FunctionKind {
+enum FunctionKind : uint16_t {
   kNormalFunction = 0,
   kArrowFunction = 1 << 0,
   kGeneratorFunction = 1 << 1,
@@ -1119,6 +1126,20 @@ inline bool IsConstructable(FunctionKind kind, LanguageMode mode) {
   return true;
 }
 
+enum class CallableType : unsigned { kJSFunction, kAny };
+
+inline size_t hash_value(CallableType type) { return bit_cast<unsigned>(type); }
+
+inline std::ostream& operator<<(std::ostream& os, CallableType function_type) {
+  switch (function_type) {
+    case CallableType::kJSFunction:
+      return os << "JSFunction";
+    case CallableType::kAny:
+      return os << "Any";
+  }
+  UNREACHABLE();
+  return os;
+}
 
 inline uint32_t ObjectHash(Address address) {
   // All objects are at least pointer aligned, so we can remove the trailing
@@ -1126,6 +1147,15 @@ inline uint32_t ObjectHash(Address address) {
   return static_cast<uint32_t>(bit_cast<uintptr_t>(address) >>
                                kPointerSizeLog2);
 }
+
+// Type feedback is encoded in such a way that, we can combine the feedback
+// at different points by performing an 'OR' operation. Type feedback moves
+// to a more generic type when we combine feedback.
+// kSignedSmall -> kNumber  -> kAny
+class BinaryOperationFeedback {
+ public:
+  enum { kNone = 0x00, kSignedSmall = 0x01, kNumber = 0x3, kAny = 0x7 };
+};
 
 }  // namespace internal
 }  // namespace v8

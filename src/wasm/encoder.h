@@ -8,8 +8,6 @@
 #include "src/signature.h"
 #include "src/zone-containers.h"
 
-#include "src/base/smart-pointers.h"
-
 #include "src/wasm/leb-helper.h"
 #include "src/wasm/wasm-macro-gen.h"
 #include "src/wasm/wasm-module.h"
@@ -36,25 +34,13 @@ class ZoneBuffer : public ZoneObject {
 
   void write_u16(uint16_t x) {
     EnsureSpace(2);
-#if V8_TARGET_LITTLE_ENDIAN
-    WriteUnalignedUInt16(pos_, x);
-#else
-    pos_[0] = x & 0xff;
-    pos_[1] = (x >> 8) & 0xff;
-#endif
+    WriteLittleEndianValue<uint16_t>(pos_, x);
     pos_ += 2;
   }
 
   void write_u32(uint32_t x) {
     EnsureSpace(4);
-#if V8_TARGET_LITTLE_ENDIAN
-    WriteUnalignedUInt32(pos_, x);
-#else
-    pos_[0] = x & 0xff;
-    pos_[1] = (x >> 8) & 0xff;
-    pos_[2] = (x >> 16) & 0xff;
-    pos_[3] = (x >> 24) & 0xff;
-#endif
+    WriteLittleEndianValue<uint32_t>(pos_, x);
     pos_ += 4;
   }
 
@@ -182,7 +168,7 @@ class WasmModuleBuilder : public ZoneObject {
 
   // Building methods.
   uint32_t AddFunction();
-  uint32_t AddGlobal(MachineType type, bool exported);
+  uint32_t AddGlobal(LocalType type, bool exported);
   WasmFunctionBuilder* FunctionAt(size_t index);
   void AddDataSegment(WasmDataSegmentEncoder* data);
   uint32_t AddSignature(FunctionSig* sig);
@@ -207,7 +193,7 @@ class WasmModuleBuilder : public ZoneObject {
   ZoneVector<WasmFunctionBuilder*> functions_;
   ZoneVector<WasmDataSegmentEncoder*> data_segments_;
   ZoneVector<uint32_t> indirect_functions_;
-  ZoneVector<std::pair<MachineType, bool>> globals_;
+  ZoneVector<std::pair<LocalType, bool>> globals_;
   SignatureMap signature_map_;
   int start_function_index_;
 };

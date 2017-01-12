@@ -72,9 +72,6 @@ static unsigned CpuFeaturesImpliedByCompiler() {
 #ifdef CAN_USE_NEON
   if (FLAG_enable_neon) answer |= 1u << NEON;
 #endif  // CAN_USE_VFP32DREGS
-  if ((answer & (1u << ARMv7)) && FLAG_enable_unaligned_accesses) {
-    answer |= 1u << UNALIGNED_ACCESSES;
-  }
 
   return answer;
 }
@@ -104,7 +101,6 @@ void CpuFeatures::ProbeImpl(bool cross_compile) {
     if (FLAG_enable_movw_movt) supported_ |= 1u << MOVW_MOVT_IMMEDIATE_LOADS;
     if (FLAG_enable_32dregs) supported_ |= 1u << VFP32DREGS;
   }
-  if (FLAG_enable_unaligned_accesses) supported_ |= 1u << UNALIGNED_ACCESSES;
 
 #else  // __arm__
   // Probe for additional features at runtime.
@@ -124,7 +120,6 @@ void CpuFeatures::ProbeImpl(bool cross_compile) {
     if (FLAG_enable_armv8 && cpu.architecture() >= 8) {
       supported_ |= 1u << ARMv8;
     }
-    if (FLAG_enable_unaligned_accesses) supported_ |= 1u << UNALIGNED_ACCESSES;
     // Use movw/movt for QUALCOMM ARMv7 cores.
     if (FLAG_enable_movw_movt && cpu.implementer() == base::CPU::QUALCOMM) {
       supported_ |= 1u << MOVW_MOVT_IMMEDIATE_LOADS;
@@ -202,11 +197,10 @@ void CpuFeatures::PrintTarget() {
 void CpuFeatures::PrintFeatures() {
   printf(
       "ARMv8=%d ARMv7=%d VFP3=%d VFP32DREGS=%d NEON=%d SUDIV=%d "
-      "UNALIGNED_ACCESSES=%d MOVW_MOVT_IMMEDIATE_LOADS=%d",
+      "MOVW_MOVT_IMMEDIATE_LOADS=%d",
       CpuFeatures::IsSupported(ARMv8), CpuFeatures::IsSupported(ARMv7),
       CpuFeatures::IsSupported(VFP3), CpuFeatures::IsSupported(VFP32DREGS),
       CpuFeatures::IsSupported(NEON), CpuFeatures::IsSupported(SUDIV),
-      CpuFeatures::IsSupported(UNALIGNED_ACCESSES),
       CpuFeatures::IsSupported(MOVW_MOVT_IMMEDIATE_LOADS));
 #ifdef __arm__
   bool eabi_hardfloat = base::OS::ArmUsingHardFloat();
@@ -275,7 +269,6 @@ Operand::Operand(Handle<Object> handle) {
   // Verify all Objects referred by code are NOT in new space.
   Object* obj = *handle;
   if (obj->IsHeapObject()) {
-    DCHECK(!HeapObject::cast(obj)->GetHeap()->InNewSpace(obj));
     imm32_ = reinterpret_cast<intptr_t>(handle.location());
     rmode_ = RelocInfo::EMBEDDED_OBJECT;
   } else {
@@ -477,8 +470,7 @@ Assembler::Assembler(Isolate* isolate, void* buffer, int buffer_size)
       recorded_ast_id_(TypeFeedbackId::None()),
       pending_32_bit_constants_(),
       pending_64_bit_constants_(),
-      constant_pool_builder_(kLdrMaxReachBits, kVldrMaxReachBits),
-      positions_recorder_(this) {
+      constant_pool_builder_(kLdrMaxReachBits, kVldrMaxReachBits) {
   pending_32_bit_constants_.reserve(kMinNumPendingConstants);
   pending_64_bit_constants_.reserve(kMinNumPendingConstants);
   reloc_info_writer.Reposition(buffer_ + buffer_size_, pc_);
@@ -498,8 +490,6 @@ Assembler::~Assembler() {
 
 
 void Assembler::GetCode(CodeDesc* desc) {
-  reloc_info_writer.Finish();
-
   // Emit constant pool if necessary.
   int constant_pool_offset = 0;
   if (FLAG_enable_embedded_constant_pool) {
@@ -2168,7 +2158,11 @@ void Assembler::stop(const char* msg, Condition cond, int32_t code) {
     } else {
       svc(kStopCode + kMaxStopCode, cond);
     }
-    emit(reinterpret_cast<Instr>(msg));
+    // Do not embed the message string address! We used to do this, but that
+    // made snapshots created from position-independent executable builds
+    // non-deterministic.
+    // TODO(yangguo): remove this field entirely.
+    nop();
   }
 #else  // def __arm__
   if (cond != al) {
@@ -3912,9 +3906,8 @@ void Assembler::RecordRelocInfo(RelocInfo::Mode rmode, intptr_t data) {
 ConstantPoolEntry::Access Assembler::ConstantPoolAddEntry(int position,
                                                           RelocInfo::Mode rmode,
                                                           intptr_t value) {
-  DCHECK(rmode != RelocInfo::COMMENT && rmode != RelocInfo::POSITION &&
-         rmode != RelocInfo::STATEMENT_POSITION &&
-         rmode != RelocInfo::CONST_POOL && rmode != RelocInfo::NONE64);
+  DCHECK(rmode != RelocInfo::COMMENT && rmode != RelocInfo::CONST_POOL &&
+         rmode != RelocInfo::NONE64);
   bool sharing_ok = RelocInfo::IsNone(rmode) ||
                     !(serializer_enabled() || rmode < RelocInfo::CELL);
   if (FLAG_enable_embedded_constant_pool) {

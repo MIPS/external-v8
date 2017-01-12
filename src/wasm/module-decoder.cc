@@ -44,7 +44,7 @@ class ModuleDecoder : public Decoder {
     pc_ = limit_;  // On error, terminate section decoding loop.
   }
 
-  static void DumpModule(WasmModule* module, ModuleResult result) {
+  static void DumpModule(WasmModule* module, const ModuleResult& result) {
     std::string path;
     if (FLAG_dump_wasm_module_path) {
       path = FLAG_dump_wasm_module_path;
@@ -233,7 +233,8 @@ class ModuleDecoder : public Decoder {
             if (failed()) break;
             TRACE("DecodeGlobal[%d] module+%d\n", i,
                   static_cast<int>(pc_ - start_));
-            module->globals.push_back({0, 0, MachineType::Int32(), 0, false});
+            // Add an uninitialized global and pass a pointer to it.
+            module->globals.push_back({0, 0, kAstStmt, 0, false});
             WasmGlobal* global = &module->globals.back();
             DecodeGlobalInModule(global);
           }
@@ -256,38 +257,19 @@ class ModuleDecoder : public Decoder {
           }
           break;
         }
-        case WasmSection::Code::FunctionTablePad: {
-          if (!FLAG_wasm_jit_prototype) {
-            error("FunctionTablePad section without jiting enabled");
-          }
-          // An indirect function table requires functions first.
-          module->indirect_table_size = consume_u32v("indirect entry count");
-          if (module->indirect_table_size > 0 &&
-              module->indirect_table_size < module->function_table.size()) {
-            error("more predefined indirect entries than table can hold");
-          }
-          break;
-        }
         case WasmSection::Code::FunctionTable: {
           // An indirect function table requires functions first.
           CheckForFunctions(module, section);
-          uint32_t function_table_count = consume_u32v("function table count");
-          module->function_table.reserve(SafeReserve(function_table_count));
+          // Assume only one table for now.
+          static const uint32_t kSupportedTableCount = 1;
+          module->function_tables.reserve(SafeReserve(kSupportedTableCount));
           // Decode function table.
-          for (uint32_t i = 0; i < function_table_count; ++i) {
+          for (uint32_t i = 0; i < kSupportedTableCount; ++i) {
             if (failed()) break;
             TRACE("DecodeFunctionTable[%d] module+%d\n", i,
                   static_cast<int>(pc_ - start_));
-            uint16_t index = consume_u32v();
-            if (index >= module->functions.size()) {
-              error(pc_ - 2, "invalid function index");
-              break;
-            }
-            module->function_table.push_back(index);
-          }
-          if (module->indirect_table_size > 0 &&
-              module->indirect_table_size < module->function_table.size()) {
-            error("more predefined indirect entries than table can hold");
+            module->function_tables.push_back({0, 0, std::vector<uint16_t>()});
+            DecodeFunctionTableInModule(module, &module->function_tables[i]);
           }
           break;
         }
@@ -457,7 +439,7 @@ class ModuleDecoder : public Decoder {
     if (ok()) VerifyFunctionBody(0, module_env, function);
 
     FunctionResult result;
-    result.CopyFrom(result_);  // Copy error code and location.
+    result.MoveFrom(result_);  // Copy error code and location.
     result.val = function;
     return result;
   }
@@ -483,7 +465,7 @@ class ModuleDecoder : public Decoder {
                                  global->name_length)) {
       error("global name is not valid utf8");
     }
-    global->type = mem_type();
+    global->type = consume_local_type();
     global->offset = 0;
     global->exported = consume_u8("exported") != 0;
   }
@@ -521,6 +503,26 @@ class ModuleDecoder : public Decoder {
     consume_bytes(segment->source_size);
   }
 
+  // Decodes a single function table inside a module starting at {pc_}.
+  void DecodeFunctionTableInModule(WasmModule* module,
+                                   WasmIndirectFunctionTable* table) {
+    table->size = consume_u32v("function table entry count");
+    table->max_size = table->size;
+
+    if (table->max_size != table->size) {
+      error("invalid table maximum size");
+    }
+
+    for (uint32_t i = 0; i < table->size; ++i) {
+      uint16_t index = consume_u32v();
+      if (index >= module->functions.size()) {
+        error(pc_ - sizeof(index), "invalid function index");
+        break;
+      }
+      table->values.push_back(index);
+    }
+  }
+
   // Calculate individual global offsets and total size of globals table.
   void CalculateGlobalsOffsets(WasmModule* module) {
     uint32_t offset = 0;
@@ -529,7 +531,8 @@ class ModuleDecoder : public Decoder {
       return;
     }
     for (WasmGlobal& global : module->globals) {
-      byte size = WasmOpcodes::MemSize(global.type);
+      byte size =
+          WasmOpcodes::MemSize(WasmOpcodes::MachineTypeFor(global.type));
       offset = (offset + size - 1) & ~(size - 1);  // align
       global.offset = offset;
       offset += size;
@@ -548,7 +551,7 @@ class ModuleDecoder : public Decoder {
     FunctionBody body = {menv, function->sig, start_,
                          start_ + function->code_start_offset,
                          start_ + function->code_end_offset};
-    TreeResult result = VerifyWasmCode(module_zone->allocator(), body);
+    DecodeResult result = VerifyWasmCode(module_zone->allocator(), body);
     if (result.failed()) {
       // Wrap the error message from the function decoder.
       std::ostringstream str;
@@ -562,8 +565,8 @@ class ModuleDecoder : public Decoder {
       buffer[len - 1] = 0;
 
       // Copy error code and location.
-      result_.CopyFrom(result);
-      result_.error_msg.Reset(buffer);
+      result_.MoveFrom(result);
+      result_.error_msg.reset(buffer);
     }
   }
 
@@ -637,39 +640,6 @@ class ModuleDecoder : public Decoder {
     }
   }
 
-  // Reads a single 8-bit integer, interpreting it as a memory type.
-  MachineType mem_type() {
-    byte val = consume_u8("memory type");
-    MemTypeCode t = static_cast<MemTypeCode>(val);
-    switch (t) {
-      case kMemI8:
-        return MachineType::Int8();
-      case kMemU8:
-        return MachineType::Uint8();
-      case kMemI16:
-        return MachineType::Int16();
-      case kMemU16:
-        return MachineType::Uint16();
-      case kMemI32:
-        return MachineType::Int32();
-      case kMemU32:
-        return MachineType::Uint32();
-      case kMemI64:
-        return MachineType::Int64();
-      case kMemU64:
-        return MachineType::Uint64();
-      case kMemF32:
-        return MachineType::Float32();
-      case kMemF64:
-        return MachineType::Float64();
-      case kMemS128:
-        return MachineType::Simd128();
-      default:
-        error(pc_ - 1, "invalid memory type");
-        return MachineType::None();
-    }
-  }
-
   // Parses a type entry, which is currently limited to functions only.
   FunctionSig* consume_sig() {
     const byte* pos = pc_;
@@ -723,7 +693,7 @@ class ModuleError : public ModuleResult {
     char* result = new char[len];
     strncpy(result, msg, len);
     result[len - 1] = 0;
-    error_msg.Reset(result);
+    error_msg.reset(result);
   }
 };
 
@@ -736,7 +706,7 @@ class FunctionError : public FunctionResult {
     char* result = new char[len];
     strncpy(result, msg, len);
     result[len - 1] = 0;
-    error_msg.Reset(result);
+    error_msg.reset(result);
   }
 };
 
