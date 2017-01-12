@@ -48,7 +48,6 @@ class TemplateHashMapImpl {
     void* key;
     void* value;
     uint32_t hash;  // The full hash value for key
-    int order;      // If you never remove entries this is the insertion order.
   };
 
   // If an entry with matching key is found, returns that entry.
@@ -60,6 +59,9 @@ class TemplateHashMapImpl {
   // corresponding key, key hash, and NULL value.
   Entry* LookupOrInsert(void* key, uint32_t hash,
                         AllocationPolicy allocator = AllocationPolicy());
+
+  Entry* InsertNew(void* key, uint32_t hash,
+                   AllocationPolicy allocator = AllocationPolicy());
 
   // Removes the entry with matching key.
   // It returns the value of the deleted entry
@@ -134,11 +136,21 @@ TemplateHashMapImpl<AllocationPolicy>::LookupOrInsert(
     return p;
   }
 
+  return InsertNew(key, hash, allocator);
+}
+
+template <class AllocationPolicy>
+typename TemplateHashMapImpl<AllocationPolicy>::Entry*
+TemplateHashMapImpl<AllocationPolicy>::InsertNew(void* key, uint32_t hash,
+                                                 AllocationPolicy allocator) {
+  // Find a matching entry.
+  Entry* p = Probe(key, hash);
+  DCHECK(p->key == NULL);
+
   // No entry found; insert one.
   p->key = key;
   p->value = NULL;
   p->hash = hash;
-  p->order = occupancy_;
   occupancy_++;
 
   // Grow the map if we reached >= 80% occupancy.
@@ -286,7 +298,6 @@ void TemplateHashMapImpl<AllocationPolicy>::Resize(AllocationPolicy allocator) {
     if (p->key != NULL) {
       Entry* entry = LookupOrInsert(p->key, p->hash, allocator);
       entry->value = p->value;
-      entry->order = p->order;
       n--;
     }
   }

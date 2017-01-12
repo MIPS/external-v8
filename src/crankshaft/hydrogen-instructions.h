@@ -16,6 +16,7 @@
 #include "src/crankshaft/hydrogen-types.h"
 #include "src/crankshaft/unique.h"
 #include "src/deoptimizer.h"
+#include "src/globals.h"
 #include "src/small-pointer-list.h"
 #include "src/utils.h"
 #include "src/zone.h"
@@ -82,7 +83,6 @@ class LChunkBuilder;
   V(DeclareGlobals)                           \
   V(Deoptimize)                               \
   V(Div)                                      \
-  V(DoubleBits)                               \
   V(DummyUse)                                 \
   V(EnterInlined)                             \
   V(EnvironmentMarker)                        \
@@ -237,6 +237,7 @@ class Range final : public ZoneObject {
     lower_ = Max(lower_, Smi::kMinValue);
     upper_ = Min(upper_, Smi::kMaxValue);
   }
+  void Clear();
   void KeepOrder();
 #ifdef DEBUG
   void Verify() const;
@@ -1113,7 +1114,7 @@ class HInstruction : public HValue {
       : HValue(type),
         next_(NULL),
         previous_(NULL),
-        position_(RelocInfo::kNoPosition) {
+        position_(kNoSourcePosition) {
     SetDependsOnFlag(kOsrEntries);
   }
 
@@ -1301,7 +1302,7 @@ class HGoto final : public HTemplateControlInstruction<1, 0> {
 class HDeoptimize final : public HTemplateControlInstruction<1, 0> {
  public:
   static HDeoptimize* New(Isolate* isolate, Zone* zone, HValue* context,
-                          Deoptimizer::DeoptReason reason,
+                          DeoptimizeReason reason,
                           Deoptimizer::BailoutType type,
                           HBasicBlock* unreachable_continuation) {
     return new(zone) HDeoptimize(reason, type, unreachable_continuation);
@@ -1316,20 +1317,19 @@ class HDeoptimize final : public HTemplateControlInstruction<1, 0> {
     return Representation::None();
   }
 
-  Deoptimizer::DeoptReason reason() const { return reason_; }
+  DeoptimizeReason reason() const { return reason_; }
   Deoptimizer::BailoutType type() { return type_; }
 
   DECLARE_CONCRETE_INSTRUCTION(Deoptimize)
 
  private:
-  explicit HDeoptimize(Deoptimizer::DeoptReason reason,
-                       Deoptimizer::BailoutType type,
+  explicit HDeoptimize(DeoptimizeReason reason, Deoptimizer::BailoutType type,
                        HBasicBlock* unreachable_continuation)
       : reason_(reason), type_(type) {
     SetSuccessorAt(0, unreachable_continuation);
   }
 
-  Deoptimizer::DeoptReason reason_;
+  DeoptimizeReason reason_;
   Deoptimizer::BailoutType type_;
 };
 
@@ -1656,37 +1656,6 @@ class HClampToUint8 final : public HUnaryOperation {
   }
 
   bool IsDeletable() const override { return true; }
-};
-
-
-class HDoubleBits final : public HUnaryOperation {
- public:
-  enum Bits { HIGH, LOW };
-  DECLARE_INSTRUCTION_FACTORY_P2(HDoubleBits, HValue*, Bits);
-
-  Representation RequiredInputRepresentation(int index) override {
-    return Representation::Double();
-  }
-
-  DECLARE_CONCRETE_INSTRUCTION(DoubleBits)
-
-  Bits bits() { return bits_; }
-
- protected:
-  bool DataEquals(HValue* other) override {
-    return other->IsDoubleBits() && HDoubleBits::cast(other)->bits() == bits();
-  }
-
- private:
-  HDoubleBits(HValue* value, Bits bits)
-      : HUnaryOperation(value), bits_(bits) {
-    set_representation(Representation::Integer32());
-    SetFlag(kUseGVN);
-  }
-
-  bool IsDeletable() const override { return true; }
-
-  Bits bits_;
 };
 
 
@@ -2093,13 +2062,16 @@ class HThisFunction final : public HTemplateInstruction<0> {
 
 class HDeclareGlobals final : public HUnaryOperation {
  public:
-  DECLARE_INSTRUCTION_WITH_CONTEXT_FACTORY_P2(HDeclareGlobals,
-                                              Handle<FixedArray>,
-                                              int);
+  DECLARE_INSTRUCTION_WITH_CONTEXT_FACTORY_P3(HDeclareGlobals,
+                                              Handle<FixedArray>, int,
+                                              Handle<TypeFeedbackVector>);
 
   HValue* context() { return OperandAt(0); }
   Handle<FixedArray> pairs() const { return pairs_; }
   int flags() const { return flags_; }
+  Handle<TypeFeedbackVector> feedback_vector() const {
+    return feedback_vector_;
+  }
 
   DECLARE_CONCRETE_INSTRUCTION(DeclareGlobals)
 
@@ -2108,17 +2080,18 @@ class HDeclareGlobals final : public HUnaryOperation {
   }
 
  private:
-  HDeclareGlobals(HValue* context,
-                  Handle<FixedArray> pairs,
-                  int flags)
+  HDeclareGlobals(HValue* context, Handle<FixedArray> pairs, int flags,
+                  Handle<TypeFeedbackVector> feedback_vector)
       : HUnaryOperation(context),
         pairs_(pairs),
+        feedback_vector_(feedback_vector),
         flags_(flags) {
     set_representation(Representation::Tagged());
     SetAllSideEffects();
   }
 
   Handle<FixedArray> pairs_;
+  Handle<TypeFeedbackVector> feedback_vector_;
   int flags_;
 };
 
@@ -4963,7 +4936,7 @@ class HAllocate final : public HTemplateInstruction<3> {
         static_cast<HAllocate::Flags>(flags_ | ALLOCATION_FOLDING_DOMINATOR);
   }
 
-  bool IsAllocationFoldingDominator() {
+  bool IsAllocationFoldingDominator() const {
     return (flags_ & ALLOCATION_FOLDING_DOMINATOR) != 0;
   }
 
@@ -4974,7 +4947,7 @@ class HAllocate final : public HTemplateInstruction<3> {
     SetOperandAt(2, dominator);
   }
 
-  bool IsAllocationFolded() { return (flags_ & ALLOCATION_FOLDED) != 0; }
+  bool IsAllocationFolded() const { return (flags_ & ALLOCATION_FOLDED) != 0; }
 
   bool HandleSideEffectDominator(GVNFlag side_effect,
                                  HValue* dominator) override;

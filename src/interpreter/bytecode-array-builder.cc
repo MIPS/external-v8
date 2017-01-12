@@ -5,6 +5,7 @@
 #include "src/interpreter/bytecode-array-builder.h"
 
 #include "src/compiler.h"
+#include "src/globals.h"
 #include "src/interpreter/bytecode-array-writer.h"
 #include "src/interpreter/bytecode-dead-code-optimizer.h"
 #include "src/interpreter/bytecode-label.h"
@@ -16,21 +17,21 @@ namespace v8 {
 namespace internal {
 namespace interpreter {
 
-BytecodeArrayBuilder::BytecodeArrayBuilder(Isolate* isolate, Zone* zone,
-                                           int parameter_count,
-                                           int context_count, int locals_count,
-                                           FunctionLiteral* literal)
-    : isolate_(isolate),
-      zone_(zone),
+BytecodeArrayBuilder::BytecodeArrayBuilder(
+    Isolate* isolate, Zone* zone, int parameter_count, int context_count,
+    int locals_count, FunctionLiteral* literal,
+    SourcePositionTableBuilder::RecordingMode source_position_mode)
+    : zone_(zone),
       bytecode_generated_(false),
-      constant_array_builder_(isolate, zone),
-      handler_table_builder_(isolate, zone),
+      constant_array_builder_(zone, isolate->factory()->the_hole_value()),
+      handler_table_builder_(zone),
       return_seen_in_block_(false),
       parameter_count_(parameter_count),
       local_register_count_(locals_count),
       context_register_count_(context_count),
       temporary_allocator_(zone, fixed_register_count()),
-      bytecode_array_writer_(isolate, zone, &constant_array_builder_),
+      bytecode_array_writer_(zone, &constant_array_builder_,
+                             source_position_mode),
       pipeline_(&bytecode_array_writer_) {
   DCHECK_GE(parameter_count_, 0);
   DCHECK_GE(context_register_count_, 0);
@@ -41,8 +42,7 @@ BytecodeArrayBuilder::BytecodeArrayBuilder(Isolate* isolate, Zone* zone,
   }
 
   if (FLAG_ignition_peephole) {
-    pipeline_ = new (zone)
-        BytecodePeepholeOptimizer(&constant_array_builder_, pipeline_);
+    pipeline_ = new (zone) BytecodePeepholeOptimizer(pipeline_);
   }
 
   if (FLAG_ignition_reo) {
@@ -52,7 +52,7 @@ BytecodeArrayBuilder::BytecodeArrayBuilder(Isolate* isolate, Zone* zone,
 
   return_position_ =
       literal ? std::max(literal->start_position(), literal->end_position() - 1)
-              : RelocInfo::kNoPosition;
+              : kNoSourcePosition;
 }
 
 Register BytecodeArrayBuilder::first_context_register() const {
@@ -74,14 +74,15 @@ bool BytecodeArrayBuilder::RegisterIsParameterOrLocal(Register reg) const {
   return reg.is_parameter() || reg.index() < locals_count();
 }
 
-Handle<BytecodeArray> BytecodeArrayBuilder::ToBytecodeArray() {
+Handle<BytecodeArray> BytecodeArrayBuilder::ToBytecodeArray(Isolate* isolate) {
   DCHECK(return_seen_in_block_);
   DCHECK(!bytecode_generated_);
   bytecode_generated_ = true;
 
-  Handle<FixedArray> handler_table = handler_table_builder()->ToHandlerTable();
-  return pipeline_->ToBytecodeArray(fixed_register_count(), parameter_count(),
-                                    handler_table);
+  Handle<FixedArray> handler_table =
+      handler_table_builder()->ToHandlerTable(isolate);
+  return pipeline_->ToBytecodeArray(isolate, fixed_register_count(),
+                                    parameter_count(), handler_table);
 }
 
 namespace {
@@ -150,13 +151,16 @@ void BytecodeArrayBuilder::Output(Bytecode bytecode) {
 }
 
 BytecodeArrayBuilder& BytecodeArrayBuilder::BinaryOperation(Token::Value op,
-                                                            Register reg) {
-  Output(BytecodeForBinaryOperation(op), RegisterOperand(reg));
+                                                            Register reg,
+                                                            int feedback_slot) {
+  Output(BytecodeForBinaryOperation(op), RegisterOperand(reg),
+         UnsignedOperand(feedback_slot));
   return *this;
 }
 
-BytecodeArrayBuilder& BytecodeArrayBuilder::CountOperation(Token::Value op) {
-  Output(BytecodeForCountOperation(op));
+BytecodeArrayBuilder& BytecodeArrayBuilder::CountOperation(Token::Value op,
+                                                           int feedback_slot) {
+  Output(BytecodeForCountOperation(op), UnsignedOperand(feedback_slot));
   return *this;
 }
 
@@ -174,6 +178,12 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::TypeOf() {
 BytecodeArrayBuilder& BytecodeArrayBuilder::CompareOperation(Token::Value op,
                                                              Register reg) {
   Output(BytecodeForCompareOperation(op), RegisterOperand(reg));
+  return *this;
+}
+
+BytecodeArrayBuilder& BytecodeArrayBuilder::LoadConstantPoolEntry(
+    size_t entry) {
+  Output(Bytecode::kLdaConstant, UnsignedOperand(entry));
   return *this;
 }
 
@@ -321,11 +331,35 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::StoreKeyedProperty(
   return *this;
 }
 
-BytecodeArrayBuilder& BytecodeArrayBuilder::CreateClosure(
-    Handle<SharedFunctionInfo> shared_info, PretenureFlag tenured) {
-  size_t entry = GetConstantPoolEntry(shared_info);
+BytecodeArrayBuilder& BytecodeArrayBuilder::CreateClosure(size_t entry,
+                                                          int flags) {
   Output(Bytecode::kCreateClosure, UnsignedOperand(entry),
-         UnsignedOperand(static_cast<size_t>(tenured)));
+         UnsignedOperand(flags));
+  return *this;
+}
+
+BytecodeArrayBuilder& BytecodeArrayBuilder::CreateBlockContext(
+    Handle<ScopeInfo> scope_info) {
+  size_t entry = GetConstantPoolEntry(scope_info);
+  Output(Bytecode::kCreateBlockContext, UnsignedOperand(entry));
+  return *this;
+}
+
+BytecodeArrayBuilder& BytecodeArrayBuilder::CreateCatchContext(
+    Register exception, Handle<String> name) {
+  size_t name_index = GetConstantPoolEntry(name);
+  Output(Bytecode::kCreateCatchContext, RegisterOperand(exception),
+         UnsignedOperand(name_index));
+  return *this;
+}
+
+BytecodeArrayBuilder& BytecodeArrayBuilder::CreateFunctionContext(int slots) {
+  Output(Bytecode::kCreateFunctionContext, UnsignedOperand(slots));
+  return *this;
+}
+
+BytecodeArrayBuilder& BytecodeArrayBuilder::CreateWithContext(Register object) {
+    Output(Bytecode::kCreateWithContext, RegisterOperand(object));
   return *this;
 }
 
@@ -357,11 +391,13 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::CreateArrayLiteral(
 }
 
 BytecodeArrayBuilder& BytecodeArrayBuilder::CreateObjectLiteral(
-    Handle<FixedArray> constant_properties, int literal_index, int flags) {
+    Handle<FixedArray> constant_properties, int literal_index, int flags,
+    Register output) {
   size_t constant_properties_entry = GetConstantPoolEntry(constant_properties);
   Output(Bytecode::kCreateObjectLiteral,
          UnsignedOperand(constant_properties_entry),
-         UnsignedOperand(literal_index), UnsignedOperand(flags));
+         UnsignedOperand(literal_index), UnsignedOperand(flags),
+         RegisterOperand(output));
   return *this;
 }
 
@@ -375,18 +411,21 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::PopContext(Register context) {
   return *this;
 }
 
-BytecodeArrayBuilder& BytecodeArrayBuilder::CastAccumulatorToJSObject() {
-  Output(Bytecode::kToObject);
+BytecodeArrayBuilder& BytecodeArrayBuilder::CastAccumulatorToJSObject(
+    Register out) {
+  Output(Bytecode::kToObject, RegisterOperand(out));
   return *this;
 }
 
-BytecodeArrayBuilder& BytecodeArrayBuilder::CastAccumulatorToName() {
-  Output(Bytecode::kToName);
+BytecodeArrayBuilder& BytecodeArrayBuilder::CastAccumulatorToName(
+    Register out) {
+  Output(Bytecode::kToName, RegisterOperand(out));
   return *this;
 }
 
-BytecodeArrayBuilder& BytecodeArrayBuilder::CastAccumulatorToNumber() {
-  Output(Bytecode::kToNumber);
+BytecodeArrayBuilder& BytecodeArrayBuilder::CastAccumulatorToNumber(
+    Register out) {
+  Output(Bytecode::kToNumber, RegisterOperand(out));
   return *this;
 }
 
@@ -443,7 +482,7 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::JumpIfNotHole(
 }
 
 BytecodeArrayBuilder& BytecodeArrayBuilder::StackCheck(int position) {
-  if (position != RelocInfo::kNoPosition) {
+  if (position != kNoSourcePosition) {
     // We need to attach a non-breakable source position to a stack
     // check, so we simply add it as expression position. There can be
     // a prior statement position from constructs like:
@@ -457,6 +496,11 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::StackCheck(int position) {
     latest_source_info_.ForceExpressionPosition(position);
   }
   Output(Bytecode::kStackCheck);
+  return *this;
+}
+
+BytecodeArrayBuilder& BytecodeArrayBuilder::OsrPoll(int loop_depth) {
+  Output(Bytecode::kOsrPoll, UnsignedOperand(loop_depth));
   return *this;
 }
 
@@ -483,8 +527,9 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::Debugger() {
 }
 
 BytecodeArrayBuilder& BytecodeArrayBuilder::ForInPrepare(
-    Register cache_info_triple) {
-  Output(Bytecode::kForInPrepare, RegisterOperand(cache_info_triple));
+    Register receiver, Register cache_info_triple) {
+  Output(Bytecode::kForInPrepare, RegisterOperand(receiver),
+         RegisterOperand(cache_info_triple));
   return *this;
 }
 
@@ -521,12 +566,12 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::ResumeGenerator(
   return *this;
 }
 
-BytecodeArrayBuilder& BytecodeArrayBuilder::MarkHandler(int handler_id,
-                                                        bool will_catch) {
+BytecodeArrayBuilder& BytecodeArrayBuilder::MarkHandler(
+    int handler_id, HandlerTable::CatchPrediction catch_prediction) {
   BytecodeLabel handler;
   Bind(&handler);
   handler_table_builder()->SetHandlerTarget(handler_id, handler.offset());
-  handler_table_builder()->SetPrediction(handler_id, will_catch);
+  handler_table_builder()->SetPrediction(handler_id, catch_prediction);
   return *this;
 }
 
@@ -630,18 +675,27 @@ size_t BytecodeArrayBuilder::GetConstantPoolEntry(Handle<Object> object) {
   return constant_array_builder()->Insert(object);
 }
 
+size_t BytecodeArrayBuilder::AllocateConstantPoolEntry() {
+  return constant_array_builder()->AllocateEntry();
+}
+
+void BytecodeArrayBuilder::InsertConstantPoolEntryAt(size_t entry,
+                                                     Handle<Object> object) {
+  constant_array_builder()->InsertAllocatedEntry(entry, object);
+}
+
 void BytecodeArrayBuilder::SetReturnPosition() {
-  if (return_position_ == RelocInfo::kNoPosition) return;
+  if (return_position_ == kNoSourcePosition) return;
   latest_source_info_.MakeStatementPosition(return_position_);
 }
 
 void BytecodeArrayBuilder::SetStatementPosition(Statement* stmt) {
-  if (stmt->position() == RelocInfo::kNoPosition) return;
+  if (stmt->position() == kNoSourcePosition) return;
   latest_source_info_.MakeStatementPosition(stmt->position());
 }
 
 void BytecodeArrayBuilder::SetExpressionPosition(Expression* expr) {
-  if (expr->position() == RelocInfo::kNoPosition) return;
+  if (expr->position() == kNoSourcePosition) return;
   if (!latest_source_info_.is_statement()) {
     // Ensure the current expression position is overwritten with the
     // latest value.
@@ -650,7 +704,7 @@ void BytecodeArrayBuilder::SetExpressionPosition(Expression* expr) {
 }
 
 void BytecodeArrayBuilder::SetExpressionAsStatementPosition(Expression* expr) {
-  if (expr->position() == RelocInfo::kNoPosition) return;
+  if (expr->position() == kNoSourcePosition) return;
   latest_source_info_.MakeStatementPosition(expr->position());
 }
 
