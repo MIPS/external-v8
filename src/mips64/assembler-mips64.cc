@@ -204,7 +204,6 @@ Operand::Operand(Handle<Object> handle) {
   // Verify all Objects referred by code are NOT in new space.
   Object* obj = *handle;
   if (obj->IsHeapObject()) {
-    DCHECK(!HeapObject::cast(obj)->GetHeap()->InNewSpace(obj));
     imm64_ = reinterpret_cast<intptr_t>(handle.location());
     rmode_ = RelocInfo::EMBEDDED_OBJECT;
   } else {
@@ -264,11 +263,9 @@ const Instr kLwSwInstrTypeMask = 0xffe00000;
 const Instr kLwSwInstrArgumentMask  = ~kLwSwInstrTypeMask;
 const Instr kLwSwOffsetMask = kImm16Mask;
 
-
 Assembler::Assembler(Isolate* isolate, void* buffer, int buffer_size)
     : AssemblerBase(isolate, buffer, buffer_size),
-      recorded_ast_id_(TypeFeedbackId::None()),
-      positions_recorder_(this) {
+      recorded_ast_id_(TypeFeedbackId::None()) {
   reloc_info_writer.Reposition(buffer_ + buffer_size_, pc_);
 
   last_trampoline_pool_end_ = 0;
@@ -2228,7 +2225,11 @@ void Assembler::stop(const char* msg, uint32_t code) {
   // The Simulator will handle the stop instruction and get the message address.
   // On MIPS stop() is just a special kind of break_().
   break_(code, true);
-  emit(reinterpret_cast<uint64_t>(msg));
+  // Do not embed the message string address! We used to do this, but that
+  // made snapshots created from position-independent executable builds
+  // non-deterministic.
+  // TODO(yangguo): remove this field entirely.
+  nop();
 #endif
 }
 
@@ -2817,11 +2818,13 @@ void Assembler::mov_s(FPURegister fd, FPURegister fs) {
 
 
 void Assembler::neg_s(FPURegister fd, FPURegister fs) {
+  DCHECK(kArchVariant == kMips64r2);
   GenInstrRegister(COP1, S, f0, fs, fd, NEG_D);
 }
 
 
 void Assembler::neg_d(FPURegister fd, FPURegister fs) {
+  DCHECK(kArchVariant == kMips64r2);
   GenInstrRegister(COP1, D, f0, fs, fd, NEG_D);
 }
 
@@ -3276,9 +3279,7 @@ void Assembler::RecordRelocInfo(RelocInfo::Mode rmode, intptr_t data) {
   if (rmode >= RelocInfo::COMMENT &&
       rmode <= RelocInfo::DEBUG_BREAK_SLOT_AT_TAIL_CALL) {
     // Adjust code for new modes.
-    DCHECK(RelocInfo::IsDebugBreakSlot(rmode)
-           || RelocInfo::IsComment(rmode)
-           || RelocInfo::IsPosition(rmode));
+    DCHECK(RelocInfo::IsDebugBreakSlot(rmode) || RelocInfo::IsComment(rmode));
     // These modes do not need an entry in the constant pool.
   }
   if (!RelocInfo::IsNone(rinfo.rmode())) {

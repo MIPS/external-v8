@@ -64,6 +64,7 @@ class SlotSet : public Malloced {
   // The slot offsets specify a range of slots at addresses:
   // [page_start_ + start_offset ... page_start_ + end_offset).
   void RemoveRange(int start_offset, int end_offset) {
+    CHECK_LE(end_offset, 1 << kPageSizeBits);
     DCHECK_LE(start_offset, end_offset);
     int start_bucket, start_cell, start_bit;
     SlotToIndices(start_offset, &start_bucket, &start_cell, &start_bit);
@@ -193,9 +194,15 @@ class SlotSet : public Malloced {
   }
 
   void MaskCell(int bucket_index, int cell_index, uint32_t mask) {
-    uint32_t* cells = bucket[bucket_index];
-    if (cells != nullptr && cells[cell_index] != 0) {
-      cells[cell_index] &= mask;
+    if (bucket_index < kBuckets) {
+      uint32_t* cells = bucket[bucket_index];
+      if (cells != nullptr && cells[cell_index] != 0) {
+        cells[cell_index] &= mask;
+      }
+    } else {
+      // GCC bug 59124: Emits wrong warnings
+      // "array subscript is above array bounds"
+      UNREACHABLE();
     }
   }
 
