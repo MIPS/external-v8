@@ -12,12 +12,20 @@
 namespace v8 {
 namespace internal {
 
+enum FunctionMode {
+  // With prototype.
+  FUNCTION_WITH_WRITEABLE_PROTOTYPE,
+  FUNCTION_WITH_READONLY_PROTOTYPE,
+  // Without prototype.
+  FUNCTION_WITHOUT_PROTOTYPE
+};
+
 // Interface for handle based allocation.
 class Factory final {
  public:
   Handle<Oddball> NewOddball(Handle<Map> map, const char* to_string,
-                             Handle<Object> to_number, bool to_boolean,
-                             const char* type_of, byte kind);
+                             Handle<Object> to_number, const char* type_of,
+                             byte kind);
 
   // Allocates a fixed array initialized with undefined values.
   Handle<FixedArray> NewFixedArray(
@@ -372,6 +380,16 @@ class Factory final {
     }
     return NewNumber(static_cast<double>(value), pretenure);
   }
+  Handle<Object> NewNumberFromInt64(int64_t value,
+                                    PretenureFlag pretenure = NOT_TENURED) {
+    if (value <= std::numeric_limits<int32_t>::max() &&
+        value >= std::numeric_limits<int32_t>::min() &&
+        Smi::IsValid(static_cast<int32_t>(value))) {
+      return Handle<Object>(Smi::FromInt(static_cast<int32_t>(value)),
+                            isolate());
+    }
+    return NewNumber(static_cast<double>(value), pretenure);
+  }
   Handle<HeapNumber> NewHeapNumber(double value,
                                    MutableMode mode = IMMUTABLE,
                                    PretenureFlag pretenure = NOT_TENURED);
@@ -411,10 +429,6 @@ class Factory final {
       Handle<Map> map,
       PretenureFlag pretenure = NOT_TENURED,
       Handle<AllocationSite> allocation_site = Handle<AllocationSite>::null());
-
-  // JS modules are pretenured.
-  Handle<JSModule> NewJSModule(Handle<Context> context,
-                               Handle<ScopeInfo> scope_info);
 
   // JS arrays are pretenured when allocated by the parser.
 
@@ -506,6 +520,10 @@ class Factory final {
 
   Handle<JSGlobalProxy> NewUninitializedJSGlobalProxy();
 
+  Handle<JSFunction> NewFunction(Handle<Map> map,
+                                 Handle<SharedFunctionInfo> info,
+                                 Handle<Object> context_or_undefined,
+                                 PretenureFlag pretenure = TENURED);
   Handle<JSFunction> NewFunction(Handle<String> name, Handle<Code> code,
                                  Handle<Object> prototype,
                                  bool is_strict = false);
@@ -516,7 +534,7 @@ class Factory final {
 
   Handle<JSFunction> NewFunctionFromSharedFunctionInfo(
       Handle<Map> initial_map, Handle<SharedFunctionInfo> function_info,
-      Handle<Context> context, PretenureFlag pretenure = TENURED);
+      Handle<Object> context_or_undefined, PretenureFlag pretenure = TENURED);
 
   Handle<JSFunction> NewFunctionFromSharedFunctionInfo(
       Handle<SharedFunctionInfo> function_info, Handle<Context> context,
@@ -551,8 +569,6 @@ class Factory final {
                        bool is_debug = false);
 
   Handle<Code> CopyCode(Handle<Code> code);
-
-  Handle<Code> CopyCode(Handle<Code> code, Vector<byte> reloc_info);
 
   Handle<BytecodeArray> CopyBytecodeArray(Handle<BytecodeArray>);
 
@@ -646,6 +662,16 @@ class Factory final {
                                                    MaybeHandle<Code> code,
                                                    bool is_constructor);
 
+  static bool IsFunctionModeWithPrototype(FunctionMode function_mode) {
+    return (function_mode == FUNCTION_WITH_WRITEABLE_PROTOTYPE ||
+            function_mode == FUNCTION_WITH_READONLY_PROTOTYPE);
+  }
+
+  Handle<Map> CreateSloppyFunctionMap(FunctionMode function_mode);
+
+  Handle<Map> CreateStrictFunctionMap(FunctionMode function_mode,
+                                      Handle<JSFunction> empty_function);
+
   // Allocates a new JSMessageObject object.
   Handle<JSMessageObject> NewJSMessageObject(MessageTemplate::Template message,
                                              Handle<Object> argument,
@@ -686,6 +712,9 @@ class Factory final {
   // Converts the given boolean condition to JavaScript boolean value.
   Handle<Object> ToBoolean(bool value);
 
+  // Converts the given ToPrimitive hint to it's string representation.
+  Handle<String> ToPrimitiveHintString(ToPrimitiveHint hint);
+
  private:
   Isolate* isolate() { return reinterpret_cast<Isolate*>(this); }
 
@@ -713,15 +742,15 @@ class Factory final {
   // Update the cache with a new number-string pair.
   void SetNumberStringCache(Handle<Object> number, Handle<String> string);
 
-  // Creates a function initialized with a shared part.
-  Handle<JSFunction> NewFunction(Handle<Map> map,
-                                 Handle<SharedFunctionInfo> info,
-                                 Handle<Context> context,
-                                 PretenureFlag pretenure = TENURED);
-
   // Create a JSArray with no elements and no length.
   Handle<JSArray> NewJSArray(ElementsKind elements_kind,
                              PretenureFlag pretenure = NOT_TENURED);
+
+  void SetFunctionInstanceDescriptor(Handle<Map> map,
+                                     FunctionMode function_mode);
+
+  void SetStrictFunctionInstanceDescriptor(Handle<Map> map,
+                                           FunctionMode function_mode);
 };
 
 }  // namespace internal

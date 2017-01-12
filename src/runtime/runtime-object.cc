@@ -268,7 +268,7 @@ RUNTIME_FUNCTION(Runtime_OptimizeObjectForAddingMultipleProperties) {
   CONVERT_ARG_HANDLE_CHECKED(JSObject, object, 0);
   CONVERT_SMI_ARG_CHECKED(properties, 1);
   // Conservative upper limit to prevent fuzz tests from going OOM.
-  RUNTIME_ASSERT(properties <= 100000);
+  if (properties > 100000) return isolate->ThrowIllegalOperation();
   if (object->HasFastProperties() && !object->IsJSGlobalProxy()) {
     JSObject::NormalizeProperties(object, KEEP_INOBJECT_PROPERTIES, properties,
                                   "OptimizeForAdding");
@@ -358,7 +358,6 @@ RUNTIME_FUNCTION(Runtime_KeyedGetProperty) {
       isolate, KeyedGetObjectProperty(isolate, receiver_obj, key_obj));
 }
 
-
 RUNTIME_FUNCTION(Runtime_AddNamedProperty) {
   HandleScope scope(isolate);
   DCHECK_EQ(4, args.length());
@@ -419,6 +418,7 @@ RUNTIME_FUNCTION(Runtime_AppendElement) {
 
   CONVERT_ARG_HANDLE_CHECKED(JSArray, array, 0);
   CONVERT_ARG_HANDLE_CHECKED(Object, value, 1);
+  CHECK(!value->IsTheHole(isolate));
 
   uint32_t index;
   CHECK(array->length()->ToArrayIndex(&index));
@@ -437,8 +437,7 @@ RUNTIME_FUNCTION(Runtime_SetProperty) {
   CONVERT_ARG_HANDLE_CHECKED(Object, object, 0);
   CONVERT_ARG_HANDLE_CHECKED(Object, key, 1);
   CONVERT_ARG_HANDLE_CHECKED(Object, value, 2);
-  CONVERT_LANGUAGE_MODE_ARG_CHECKED(language_mode_arg, 3);
-  LanguageMode language_mode = language_mode_arg;
+  CONVERT_LANGUAGE_MODE_ARG_CHECKED(language_mode, 3);
 
   RETURN_RESULT_OR_FAILURE(
       isolate,
@@ -485,8 +484,8 @@ RUNTIME_FUNCTION(Runtime_DeleteProperty_Strict) {
 RUNTIME_FUNCTION(Runtime_HasProperty) {
   HandleScope scope(isolate);
   DCHECK_EQ(2, args.length());
-  CONVERT_ARG_HANDLE_CHECKED(Object, key, 0);
-  CONVERT_ARG_HANDLE_CHECKED(Object, object, 1);
+  CONVERT_ARG_HANDLE_CHECKED(Object, object, 0);
+  CONVERT_ARG_HANDLE_CHECKED(Object, key, 1);
 
   // Check that {object} is actually a receiver.
   if (!object->IsJSReceiver()) {
@@ -505,21 +504,6 @@ RUNTIME_FUNCTION(Runtime_HasProperty) {
   Maybe<bool> maybe = JSReceiver::HasProperty(receiver, name);
   if (!maybe.IsJust()) return isolate->heap()->exception();
   return isolate->heap()->ToBoolean(maybe.FromJust());
-}
-
-
-RUNTIME_FUNCTION(Runtime_PropertyIsEnumerable) {
-  HandleScope scope(isolate);
-  DCHECK(args.length() == 2);
-
-  CONVERT_ARG_HANDLE_CHECKED(JSReceiver, object, 0);
-  CONVERT_ARG_HANDLE_CHECKED(Name, key, 1);
-
-  Maybe<PropertyAttributes> maybe =
-      JSReceiver::GetOwnPropertyAttributes(object, key);
-  if (!maybe.IsJust()) return isolate->heap()->exception();
-  if (maybe.FromJust() == ABSENT) return isolate->heap()->false_value();
-  return isolate->heap()->ToBoolean((maybe.FromJust() & DONT_ENUM) == 0);
 }
 
 
@@ -702,6 +686,15 @@ RUNTIME_FUNCTION(Runtime_GetDataProperty) {
   return *JSReceiver::GetDataProperty(object, name);
 }
 
+RUNTIME_FUNCTION(Runtime_GetConstructorName) {
+  HandleScope scope(isolate);
+  DCHECK(args.length() == 1);
+  CONVERT_ARG_HANDLE_CHECKED(Object, object, 0);
+
+  CHECK(!object->IsUndefined(isolate) && !object->IsNull(isolate));
+  Handle<JSReceiver> recv = Object::ToObject(isolate, object).ToHandleChecked();
+  return *JSReceiver::GetConstructorName(recv);
+}
 
 RUNTIME_FUNCTION(Runtime_HasFastPackedElements) {
   SealHandleScope shs(isolate);
@@ -801,16 +794,6 @@ RUNTIME_FUNCTION(Runtime_ToPrimitive_Number) {
   RETURN_RESULT_OR_FAILURE(
       isolate, Object::ToPrimitive(input, ToPrimitiveHint::kNumber));
 }
-
-
-RUNTIME_FUNCTION(Runtime_ToPrimitive_String) {
-  HandleScope scope(isolate);
-  DCHECK_EQ(1, args.length());
-  CONVERT_ARG_HANDLE_CHECKED(Object, input, 0);
-  RETURN_RESULT_OR_FAILURE(
-      isolate, Object::ToPrimitive(input, ToPrimitiveHint::kString));
-}
-
 
 RUNTIME_FUNCTION(Runtime_ToNumber) {
   HandleScope scope(isolate);

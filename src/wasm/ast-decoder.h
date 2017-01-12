@@ -79,13 +79,11 @@ struct ImmF64Operand {
 struct GlobalIndexOperand {
   uint32_t index;
   LocalType type;
-  MachineType machine_type;
   unsigned length;
 
   inline GlobalIndexOperand(Decoder* decoder, const byte* pc) {
     index = decoder->checked_read_u32v(pc, 1, &length, "global index");
     type = kAstStmt;
-    machine_type = MachineType::None();
   }
 };
 
@@ -222,15 +220,18 @@ static inline FunctionBody FunctionBodyForTesting(const byte* start,
   return {nullptr, nullptr, start, start, end};
 }
 
-struct Tree;
-typedef Result<Tree*> TreeResult;
+struct DecodeStruct {
+  int unused;
+};
+typedef Result<DecodeStruct*> DecodeResult;
+inline std::ostream& operator<<(std::ostream& os, const DecodeStruct& tree) {
+  return os;
+}
 
-std::ostream& operator<<(std::ostream& os, const Tree& tree);
-
-TreeResult VerifyWasmCode(base::AccountingAllocator* allocator,
-                          FunctionBody& body);
-TreeResult BuildTFGraph(base::AccountingAllocator* allocator,
-                        TFBuilder* builder, FunctionBody& body);
+DecodeResult VerifyWasmCode(base::AccountingAllocator* allocator,
+                            FunctionBody& body);
+DecodeResult BuildTFGraph(base::AccountingAllocator* allocator,
+                          TFBuilder* builder, FunctionBody& body);
 bool PrintAst(base::AccountingAllocator* allocator, const FunctionBody& body,
               std::ostream& os,
               std::vector<std::tuple<uint32_t, int, int>>* offset_table);
@@ -238,17 +239,17 @@ bool PrintAst(base::AccountingAllocator* allocator, const FunctionBody& body,
 // A simplified form of AST printing, e.g. from a debugger.
 void PrintAstForDebugging(const byte* start, const byte* end);
 
-inline TreeResult VerifyWasmCode(base::AccountingAllocator* allocator,
-                                 ModuleEnv* module, FunctionSig* sig,
-                                 const byte* start, const byte* end) {
+inline DecodeResult VerifyWasmCode(base::AccountingAllocator* allocator,
+                                   ModuleEnv* module, FunctionSig* sig,
+                                   const byte* start, const byte* end) {
   FunctionBody body = {module, sig, nullptr, start, end};
   return VerifyWasmCode(allocator, body);
 }
 
-inline TreeResult BuildTFGraph(base::AccountingAllocator* allocator,
-                               TFBuilder* builder, ModuleEnv* module,
-                               FunctionSig* sig, const byte* start,
-                               const byte* end) {
+inline DecodeResult BuildTFGraph(base::AccountingAllocator* allocator,
+                                 TFBuilder* builder, ModuleEnv* module,
+                                 FunctionSig* sig, const byte* start,
+                                 const byte* end) {
   FunctionBody body = {module, sig, nullptr, start, end};
   return BuildTFGraph(allocator, builder, body);
 }
@@ -277,6 +278,59 @@ unsigned OpcodeLength(const byte* pc, const byte* end);
 
 // Computes the arity (number of sub-nodes) of the opcode at the given address.
 unsigned OpcodeArity(const byte* pc, const byte* end);
+
+// A simple forward iterator for bytecodes.
+class BytecodeIterator : public Decoder {
+ public:
+  // If one wants to iterate over the bytecode without looking at {pc_offset()}.
+  class iterator {
+   public:
+    inline iterator& operator++() {
+      DCHECK_LT(ptr_, end_);
+      ptr_ += OpcodeLength(ptr_, end_);
+      return *this;
+    }
+    inline WasmOpcode operator*() {
+      DCHECK_LT(ptr_, end_);
+      return static_cast<WasmOpcode>(*ptr_);
+    }
+    inline bool operator==(const iterator& that) {
+      return this->ptr_ == that.ptr_;
+    }
+    inline bool operator!=(const iterator& that) {
+      return this->ptr_ != that.ptr_;
+    }
+
+   private:
+    friend class BytecodeIterator;
+    const byte* ptr_;
+    const byte* end_;
+    iterator(const byte* ptr, const byte* end) : ptr_(ptr), end_(end) {}
+  };
+
+  // Create a new {BytecodeIterator}. If the {decls} pointer is non-null,
+  // assume the bytecode starts with local declarations and decode them.
+  // Otherwise, do not decode local decls.
+  BytecodeIterator(const byte* start, const byte* end,
+                   AstLocalDecls* decls = nullptr);
+
+  inline iterator begin() const { return iterator(pc_, end_); }
+  inline iterator end() const { return iterator(end_, end_); }
+
+  WasmOpcode current() {
+    return static_cast<WasmOpcode>(
+        checked_read_u8(pc_, 0, "expected bytecode"));
+  }
+
+  void next() {
+    if (pc_ < end_) {
+      pc_ += OpcodeLength(pc_, end_);
+      if (pc_ >= end_) pc_ = end_;
+    }
+  }
+
+  bool has_next() { return pc_ < end_; }
+};
 
 }  // namespace wasm
 }  // namespace internal

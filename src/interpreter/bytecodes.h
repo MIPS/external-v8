@@ -5,12 +5,13 @@
 #ifndef V8_INTERPRETER_BYTECODES_H_
 #define V8_INTERPRETER_BYTECODES_H_
 
+#include <cstdint>
 #include <iosfwd>
+#include <string>
 
-// Clients of this interface shouldn't depend on lots of interpreter internals.
-// Do not include anything from src/interpreter here!
-#include "src/frames.h"
-#include "src/utils.h"
+// This interface and it's implementation are independent of the
+// libv8_base library as they are used by the interpreter and the
+// standalone mkpeephole table generator program.
 
 namespace v8 {
 namespace internal {
@@ -145,21 +146,41 @@ namespace interpreter {
     OperandType::kReg, OperandType::kIdx)                                      \
                                                                                \
   /* Binary Operators */                                                       \
-  V(Add, AccumulatorUse::kReadWrite, OperandType::kReg)                        \
-  V(Sub, AccumulatorUse::kReadWrite, OperandType::kReg)                        \
-  V(Mul, AccumulatorUse::kReadWrite, OperandType::kReg)                        \
-  V(Div, AccumulatorUse::kReadWrite, OperandType::kReg)                        \
-  V(Mod, AccumulatorUse::kReadWrite, OperandType::kReg)                        \
-  V(BitwiseOr, AccumulatorUse::kReadWrite, OperandType::kReg)                  \
-  V(BitwiseXor, AccumulatorUse::kReadWrite, OperandType::kReg)                 \
-  V(BitwiseAnd, AccumulatorUse::kReadWrite, OperandType::kReg)                 \
-  V(ShiftLeft, AccumulatorUse::kReadWrite, OperandType::kReg)                  \
-  V(ShiftRight, AccumulatorUse::kReadWrite, OperandType::kReg)                 \
-  V(ShiftRightLogical, AccumulatorUse::kReadWrite, OperandType::kReg)          \
+  V(Add, AccumulatorUse::kReadWrite, OperandType::kReg, OperandType::kIdx)     \
+  V(Sub, AccumulatorUse::kReadWrite, OperandType::kReg, OperandType::kIdx)     \
+  V(Mul, AccumulatorUse::kReadWrite, OperandType::kReg, OperandType::kIdx)     \
+  V(Div, AccumulatorUse::kReadWrite, OperandType::kReg, OperandType::kIdx)     \
+  V(Mod, AccumulatorUse::kReadWrite, OperandType::kReg, OperandType::kIdx)     \
+  V(BitwiseOr, AccumulatorUse::kReadWrite, OperandType::kReg,                  \
+    OperandType::kIdx)                                                         \
+  V(BitwiseXor, AccumulatorUse::kReadWrite, OperandType::kReg,                 \
+    OperandType::kIdx)                                                         \
+  V(BitwiseAnd, AccumulatorUse::kReadWrite, OperandType::kReg,                 \
+    OperandType::kIdx)                                                         \
+  V(ShiftLeft, AccumulatorUse::kReadWrite, OperandType::kReg,                  \
+    OperandType::kIdx)                                                         \
+  V(ShiftRight, AccumulatorUse::kReadWrite, OperandType::kReg,                 \
+    OperandType::kIdx)                                                         \
+  V(ShiftRightLogical, AccumulatorUse::kReadWrite, OperandType::kReg,          \
+    OperandType::kIdx)                                                         \
+                                                                               \
+  /* Binary operators with immediate operands */                               \
+  V(AddSmi, AccumulatorUse::kWrite, OperandType::kImm, OperandType::kReg,      \
+    OperandType::kIdx)                                                         \
+  V(SubSmi, AccumulatorUse::kWrite, OperandType::kImm, OperandType::kReg,      \
+    OperandType::kIdx)                                                         \
+  V(BitwiseOrSmi, AccumulatorUse::kWrite, OperandType::kImm,                   \
+    OperandType::kReg, OperandType::kIdx)                                      \
+  V(BitwiseAndSmi, AccumulatorUse::kWrite, OperandType::kImm,                  \
+    OperandType::kReg, OperandType::kIdx)                                      \
+  V(ShiftLeftSmi, AccumulatorUse::kWrite, OperandType::kImm,                   \
+    OperandType::kReg, OperandType::kIdx)                                      \
+  V(ShiftRightSmi, AccumulatorUse::kWrite, OperandType::kImm,                  \
+    OperandType::kReg, OperandType::kIdx)                                      \
                                                                                \
   /* Unary Operators */                                                        \
-  V(Inc, AccumulatorUse::kReadWrite)                                           \
-  V(Dec, AccumulatorUse::kReadWrite)                                           \
+  V(Inc, AccumulatorUse::kReadWrite, OperandType::kIdx)                        \
+  V(Dec, AccumulatorUse::kReadWrite, OperandType::kIdx)                        \
   V(ToBooleanLogicalNot, AccumulatorUse::kReadWrite)                           \
   V(LogicalNot, AccumulatorUse::kReadWrite)                                    \
   V(TypeOf, AccumulatorUse::kReadWrite)                                        \
@@ -198,21 +219,29 @@ namespace interpreter {
   V(TestIn, AccumulatorUse::kReadWrite, OperandType::kReg)                     \
                                                                                \
   /* Cast operators */                                                         \
-  V(ToName, AccumulatorUse::kReadWrite)                                        \
-  V(ToNumber, AccumulatorUse::kReadWrite)                                      \
-  V(ToObject, AccumulatorUse::kReadWrite)                                      \
+  V(ToName, AccumulatorUse::kRead, OperandType::kRegOut)                       \
+  V(ToNumber, AccumulatorUse::kRead, OperandType::kRegOut)                     \
+  V(ToObject, AccumulatorUse::kRead, OperandType::kRegOut)                     \
                                                                                \
   /* Literals */                                                               \
   V(CreateRegExpLiteral, AccumulatorUse::kWrite, OperandType::kIdx,            \
     OperandType::kIdx, OperandType::kFlag8)                                    \
   V(CreateArrayLiteral, AccumulatorUse::kWrite, OperandType::kIdx,             \
     OperandType::kIdx, OperandType::kFlag8)                                    \
-  V(CreateObjectLiteral, AccumulatorUse::kWrite, OperandType::kIdx,            \
-    OperandType::kIdx, OperandType::kFlag8)                                    \
+  V(CreateObjectLiteral, AccumulatorUse::kNone, OperandType::kIdx,             \
+    OperandType::kIdx, OperandType::kFlag8, OperandType::kRegOut)              \
                                                                                \
   /* Closure allocation */                                                     \
   V(CreateClosure, AccumulatorUse::kWrite, OperandType::kIdx,                  \
     OperandType::kFlag8)                                                       \
+                                                                               \
+  /* Context allocation */                                                     \
+  V(CreateBlockContext, AccumulatorUse::kReadWrite, OperandType::kIdx)         \
+  V(CreateCatchContext, AccumulatorUse::kReadWrite, OperandType::kReg,         \
+    OperandType::kIdx)                                                         \
+  /* TODO(klaasb) rename Idx or add unsigned Imm OperandType? */               \
+  V(CreateFunctionContext, AccumulatorUse::kWrite, OperandType::kIdx)          \
+  V(CreateWithContext, AccumulatorUse::kReadWrite, OperandType::kReg)          \
                                                                                \
   /* Arguments allocation */                                                   \
   V(CreateMappedArguments, AccumulatorUse::kWrite)                             \
@@ -238,7 +267,8 @@ namespace interpreter {
   V(JumpIfNotHoleConstant, AccumulatorUse::kRead, OperandType::kIdx)           \
                                                                                \
   /* Complex flow control For..in */                                           \
-  V(ForInPrepare, AccumulatorUse::kRead, OperandType::kRegOutTriple)           \
+  V(ForInPrepare, AccumulatorUse::kNone, OperandType::kReg,                    \
+    OperandType::kRegOutTriple)                                                \
   V(ForInDone, AccumulatorUse::kWrite, OperandType::kReg, OperandType::kReg)   \
   V(ForInNext, AccumulatorUse::kWrite, OperandType::kReg, OperandType::kReg,   \
     OperandType::kRegPair, OperandType::kIdx)                                  \
@@ -246,6 +276,9 @@ namespace interpreter {
                                                                                \
   /* Perform a stack guard check */                                            \
   V(StackCheck, AccumulatorUse::kNone)                                         \
+                                                                               \
+  /* Perform a check to trigger on-stack replacement */                        \
+  V(OsrPoll, AccumulatorUse::kNone, OperandType::kImm)                         \
                                                                                \
   /* Non-local flow control */                                                 \
   V(Throw, AccumulatorUse::kRead)                                              \
@@ -274,12 +307,12 @@ enum class AccumulatorUse : uint8_t {
   kReadWrite = kRead | kWrite
 };
 
-V8_INLINE AccumulatorUse operator&(AccumulatorUse lhs, AccumulatorUse rhs) {
+inline AccumulatorUse operator&(AccumulatorUse lhs, AccumulatorUse rhs) {
   int result = static_cast<int>(lhs) & static_cast<int>(rhs);
   return static_cast<AccumulatorUse>(result);
 }
 
-V8_INLINE AccumulatorUse operator|(AccumulatorUse lhs, AccumulatorUse rhs) {
+inline AccumulatorUse operator|(AccumulatorUse lhs, AccumulatorUse rhs) {
   int result = static_cast<int>(lhs) | static_cast<int>(rhs);
   return static_cast<AccumulatorUse>(result);
 }
@@ -336,7 +369,6 @@ enum class OperandType : uint8_t {
 #undef COUNT_OPERAND_TYPES
 };
 
-
 // Enumeration of interpreter bytecodes.
 enum class Bytecode : uint8_t {
 #define DECLARE_BYTECODE(Name, ...) k##Name,
@@ -349,95 +381,11 @@ enum class Bytecode : uint8_t {
 #undef COUNT_BYTECODE
 };
 
-
-// An interpreter Register which is located in the function's Register file
-// in its stack-frame. Register hold parameters, this, and expression values.
-class Register final {
+class Bytecodes final {
  public:
-  explicit Register(int index = kInvalidIndex) : index_(index) {}
+  //  The maximum number of operands a bytecode may have.
+  static const int kMaxOperands = 4;
 
-  int index() const { return index_; }
-  bool is_parameter() const { return index() < 0; }
-  bool is_valid() const { return index_ != kInvalidIndex; }
-
-  static Register FromParameterIndex(int index, int parameter_count);
-  int ToParameterIndex(int parameter_count) const;
-
-  // Returns an invalid register.
-  static Register invalid_value() { return Register(); }
-
-  // Returns the register for the function's closure object.
-  static Register function_closure();
-  bool is_function_closure() const;
-
-  // Returns the register which holds the current context object.
-  static Register current_context();
-  bool is_current_context() const;
-
-  // Returns the register for the incoming new target value.
-  static Register new_target();
-  bool is_new_target() const;
-
-  // Returns the register for the bytecode array.
-  static Register bytecode_array();
-  bool is_bytecode_array() const;
-
-  // Returns the register for the saved bytecode offset.
-  static Register bytecode_offset();
-  bool is_bytecode_offset() const;
-
-  // Returns a register that can be used to represent the accumulator
-  // within code in the interpreter, but should never be emitted in
-  // bytecode.
-  static Register virtual_accumulator();
-
-  OperandSize SizeOfOperand() const;
-
-  int32_t ToOperand() const { return kRegisterFileStartOffset - index_; }
-  static Register FromOperand(int32_t operand) {
-    return Register(kRegisterFileStartOffset - operand);
-  }
-
-  static bool AreContiguous(Register reg1, Register reg2,
-                            Register reg3 = Register(),
-                            Register reg4 = Register(),
-                            Register reg5 = Register());
-
-  std::string ToString(int parameter_count);
-
-  bool operator==(const Register& other) const {
-    return index() == other.index();
-  }
-  bool operator!=(const Register& other) const {
-    return index() != other.index();
-  }
-  bool operator<(const Register& other) const {
-    return index() < other.index();
-  }
-  bool operator<=(const Register& other) const {
-    return index() <= other.index();
-  }
-  bool operator>(const Register& other) const {
-    return index() > other.index();
-  }
-  bool operator>=(const Register& other) const {
-    return index() >= other.index();
-  }
-
- private:
-  static const int kInvalidIndex = kMaxInt;
-  static const int kRegisterFileStartOffset =
-      InterpreterFrameConstants::kRegisterFileFromFp / kPointerSize;
-
-  void* operator new(size_t size);
-  void operator delete(void* p);
-
-  int index_;
-};
-
-
-class Bytecodes {
- public:
   // Returns string representation of |bytecode|.
   static const char* ToString(Bytecode bytecode);
 
@@ -457,10 +405,7 @@ class Bytecodes {
   static const char* OperandSizeToString(OperandSize operand_size);
 
   // Returns byte value of bytecode.
-  static uint8_t ToByte(Bytecode bytecode) {
-    DCHECK_LE(bytecode, Bytecode::kLast);
-    return static_cast<uint8_t>(bytecode);
-  }
+  static uint8_t ToByte(Bytecode bytecode);
 
   // Returns bytecode for |value|.
   static Bytecode FromByte(uint8_t value);
@@ -525,18 +470,10 @@ class Bytecodes {
   static OperandSize GetOperandSize(Bytecode bytecode, int i,
                                     OperandScale operand_scale);
 
-  // Returns a pointer to an array of the operand sizes for |bytecode|.
-  static const OperandSize* GetOperandSizes(Bytecode bytecode,
-                                            OperandScale operand_scale);
-
   // Returns the offset of the i-th operand of |bytecode| relative to the start
   // of the bytecode.
   static int GetOperandOffset(Bytecode bytecode, int i,
                               OperandScale operand_scale);
-
-  // Returns a zero-based bitmap of the register operand positions of
-  // |bytecode|.
-  static int GetRegisterOperandBitmap(Bytecode bytecode);
 
   // Returns a debug break bytecode to replace |bytecode|.
   static Bytecode GetDebugBreak(Bytecode bytecode);
@@ -603,6 +540,9 @@ class Bytecodes {
   // Returns true if the bytecode is a scaling prefix bytecode.
   static bool IsPrefixScalingBytecode(Bytecode bytecode);
 
+  // Returns true if |bytecode| puts a name in the accumulator.
+  static bool PutsNameInAccumulator(Bytecode bytecode);
+
   // Returns true if |operand_type| is any type of register operand.
   static bool IsRegisterOperandType(OperandType operand_type);
 
@@ -611,6 +551,10 @@ class Bytecodes {
 
   // Returns true if |operand_type| represents a register used as an output.
   static bool IsRegisterOutputOperandType(OperandType operand_type);
+
+  // Returns true if the handler for |bytecode| should look ahead and inline a
+  // dispatch to a Star bytecode.
+  static bool IsStarLookahead(Bytecode bytecode, OperandScale operand_scale);
 
   // Returns the number of registers represented by a register operand. For
   // instance, a RegPair represents two registers.
@@ -626,25 +570,6 @@ class Bytecodes {
   // Returns true if |operand_type| is unsigned, false if signed.
   static bool IsUnsignedOperandType(OperandType operand_type);
 
-  // Decodes a register operand in a byte array.
-  static Register DecodeRegisterOperand(const uint8_t* operand_start,
-                                        OperandType operand_type,
-                                        OperandScale operand_scale);
-
-  // Decodes a signed operand in a byte array.
-  static int32_t DecodeSignedOperand(const uint8_t* operand_start,
-                                     OperandType operand_type,
-                                     OperandScale operand_scale);
-
-  // Decodes an unsigned operand in a byte array.
-  static uint32_t DecodeUnsignedOperand(const uint8_t* operand_start,
-                                        OperandType operand_type,
-                                        OperandScale operand_scale);
-
-  // Decode a single bytecode and operands to |os|.
-  static std::ostream& Decode(std::ostream& os, const uint8_t* bytecode_start,
-                              int number_of_parameters);
-
   // Returns true if a handler is generated for a bytecode at a given
   // operand scale. All bytecodes have handlers at OperandScale::kSingle,
   // but only bytecodes with scalable operands have handlers with larger
@@ -656,17 +581,6 @@ class Bytecodes {
 
   // Return the operand size required to hold an unsigned operand.
   static OperandSize SizeForUnsignedOperand(uint32_t value);
-
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(Bytecodes);
-};
-
-class CreateObjectLiteralFlags {
- public:
-  class FlagsBits : public BitField8<int, 0, 3> {};
-  class FastClonePropertiesCountBits
-      : public BitField8<int, FlagsBits::kNext, 3> {};
-  STATIC_ASSERT((FlagsBits::kMask & FastClonePropertiesCountBits::kMask) == 0);
 };
 
 std::ostream& operator<<(std::ostream& os, const Bytecode& bytecode);
