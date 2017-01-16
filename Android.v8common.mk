@@ -1,7 +1,4 @@
 LOCAL_CXX_STL := libc++
-ifeq ($(TARGET_ARCH),mips)
-       LOCAL_MIPS_MODE=mips
-endif
 
 LOCAL_CPP_EXTENSION := cc
 
