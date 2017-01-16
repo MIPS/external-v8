@@ -2,7 +2,6 @@ LOCAL_PATH := $(call my-dir)
 
 v8_base_common_src := \
 	src/base/accounting-allocator.cc \
-	src/base/atomicops_internals_x86_gcc.cc \
 	src/base/bits.cc \
 	src/base/cpu.cc \
 	src/base/debug/stack_trace.cc \
