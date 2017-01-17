@@ -143,7 +143,7 @@ void BlinkGCPluginConsumer::ParseFunctionTemplates(TranslationUnitDecl* decl) {
 
     // Force parsing and AST building of the yet-uninstantiated function
     // template trace method bodies.
-    clang::LateParsedTemplate* lpt = sema.LateParsedTemplateMap[fd].get();
+    clang::LateParsedTemplate* lpt = sema.LateParsedTemplateMap[fd];
     sema.LateTemplateParser(sema.OpaqueParser, *lpt);
   }
 }

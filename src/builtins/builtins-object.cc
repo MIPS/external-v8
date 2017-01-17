@@ -35,7 +35,7 @@ void Builtins::Generate_ObjectHasOwnProperty(CodeStubAssembler* assembler) {
   Node* map = assembler->LoadMap(object);
   Node* instance_type = assembler->LoadMapInstanceType(map);
 
-  Variable var_index(assembler, MachineRepresentation::kWord32);
+  Variable var_index(assembler, MachineType::PointerRepresentation());
 
   Label keyisindex(assembler), if_iskeyunique(assembler);
   assembler->TryToName(key, &keyisindex, &var_index, &if_iskeyunique,
@@ -230,10 +230,8 @@ void IsString(CodeStubAssembler* assembler, compiler::Node* object,
   {
     Node* instance_type = assembler->LoadInstanceType(object);
 
-    assembler->Branch(
-        assembler->Int32LessThan(
-            instance_type, assembler->Int32Constant(FIRST_NONSTRING_TYPE)),
-        if_string, if_notstring);
+    assembler->Branch(assembler->IsStringInstanceType(instance_type), if_string,
+                      if_notstring);
   }
 }
 
@@ -259,10 +257,8 @@ void ReturnIfPrimitive(CodeStubAssembler* assembler,
                        CodeStubAssembler::Label* return_string,
                        CodeStubAssembler::Label* return_boolean,
                        CodeStubAssembler::Label* return_number) {
-  assembler->GotoIf(
-      assembler->Int32LessThan(instance_type,
-                               assembler->Int32Constant(FIRST_NONSTRING_TYPE)),
-      return_string);
+  assembler->GotoIf(assembler->IsStringInstanceType(instance_type),
+                    return_string);
 
   assembler->GotoIf(assembler->Word32Equal(
                         instance_type, assembler->Int32Constant(ODDBALL_TYPE)),
@@ -908,6 +904,19 @@ BUILTIN(ObjectSeal) {
                  isolate->heap()->exception());
   }
   return *object;
+}
+
+// ES6 section 7.3.19 OrdinaryHasInstance ( C, O )
+void Builtins::Generate_OrdinaryHasInstance(CodeStubAssembler* assembler) {
+  typedef compiler::Node Node;
+  typedef CompareDescriptor Descriptor;
+
+  Node* constructor = assembler->Parameter(Descriptor::kLeft);
+  Node* object = assembler->Parameter(Descriptor::kRight);
+  Node* context = assembler->Parameter(Descriptor::kContext);
+
+  assembler->Return(
+      assembler->OrdinaryHasInstance(context, constructor, object));
 }
 
 }  // namespace internal

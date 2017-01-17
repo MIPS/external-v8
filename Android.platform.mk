@@ -17,7 +17,9 @@ LOCAL_SRC_FILES := \
 	src/libplatform/tracing/tracing-controller.cc \
 	src/libplatform/worker-thread.cc
 
-LOCAL_C_INCLUDES := $(LOCAL_PATH)/src
+LOCAL_C_INCLUDES := \
+	$(LOCAL_PATH)/src \
+	$(LOCAL_PATH)/include
 
 include $(BUILD_STATIC_LIBRARY)
 
