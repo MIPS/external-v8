@@ -1,17 +1,16 @@
 LOCAL_PATH := $(call my-dir)
 
 v8_base_common_src := \
-	src/base/accounting-allocator.cc \
 	src/base/bits.cc \
 	src/base/cpu.cc \
 	src/base/debug/stack_trace.cc \
+	src/base/debug/stack_trace_android.cc \
 	src/base/division-by-constant.cc \
 	src/base/file-utils.cc \
 	src/base/functional.cc \
 	src/base/ieee754.cc \
 	src/base/logging.cc \
 	src/base/once.cc \
-	src/base/debug/stack_trace_android.cc \
 	src/base/platform/condition-variable.cc \
 	src/base/platform/mutex.cc \
 	src/base/platform/platform-posix.cc \
@@ -53,10 +52,12 @@ LOCAL_SRC_FILES := $(v8_base_common_src)
 
 # Host may be linux or darwin.
 ifeq ($(HOST_OS),linux)
-LOCAL_SRC_FILES += src/base/platform/platform-linux.cc
+LOCAL_SRC_FILES += \
+	src/base/platform/platform-linux.cc
 endif
 ifeq ($(HOST_OS),darwin)
-LOCAL_SRC_FILES += src/base/platform/platform-macos.cc
+LOCAL_SRC_FILES += \
+	src/base/platform/platform-macos.cc
 endif
 
 ifeq ($(HOST_ARCH),x86)
