@@ -23,29 +23,25 @@ V8_LOCAL_JS_LIBRARY_FILES := \
 	src/js/regexp.js \
 	src/js/arraybuffer.js \
 	src/js/typedarray.js \
-	src/js/iterator-prototype.js \
 	src/js/collection.js \
 	src/js/weak-collection.js \
 	src/js/collection-iterator.js \
 	src/js/promise.js \
 	src/js/messages.js \
 	src/js/array-iterator.js \
-	src/js/string-iterator.js \
 	src/js/templates.js \
 	src/js/spread.js \
 	src/js/proxy.js \
 	src/debug/mirrors.js \
 	src/debug/debug.js \
-	src/debug/liveedit.js \
-	src/js/i18n.js
+	src/debug/liveedit.js
 
 V8_LOCAL_JS_EXPERIMENTAL_LIBRARY_FILES := \
 	src/js/macros.py \
 	src/messages.h \
 	src/js/harmony-atomics.js \
 	src/js/harmony-simd.js \
-	src/js/harmony-string-padding.js \
-	src/js/harmony-async-await.js
+	src/js/harmony-string-padding.js
 
 LOCAL_JS_LIBRARY_FILES := $(addprefix $(LOCAL_PATH)/, $(V8_LOCAL_JS_LIBRARY_FILES))
 LOCAL_JS_EXPERIMENTAL_LIBRARY_FILES := $(addprefix $(LOCAL_PATH)/, $(V8_LOCAL_JS_EXPERIMENTAL_LIBRARY_FILES))
