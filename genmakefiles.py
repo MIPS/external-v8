@@ -262,11 +262,12 @@ def _writeLibBaseMakefile(target):
     # Host may be linux or darwin.
     out.write('ifeq ($(HOST_OS),linux)\n')
     out.write('LOCAL_SRC_FILES += \\\n')
-    out.write('\tsrc/base/platform/platform-linux.cc \\\n')
-    out.write('\tsrc/base/debug/stack_trace_posix.cc\n')
+    out.write('\tsrc/base/debug/stack_trace_posix.cc \\\n')
+    out.write('\tsrc/base/platform/platform-linux.cc\n')
     out.write('endif\n')
     out.write('ifeq ($(HOST_OS),darwin)\n')
     out.write('LOCAL_SRC_FILES += \\\n')
+    out.write('\tsrc/base/debug/stack_trace_posix.cc \\\n')
     out.write('\tsrc/base/platform/platform-macos.cc\n')
     out.write('endif\n')
 
