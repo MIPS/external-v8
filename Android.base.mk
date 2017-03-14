@@ -51,11 +51,12 @@ LOCAL_SRC_FILES := \
 	src/base/utils/random-number-generator.cc
 ifeq ($(HOST_OS),linux)
 LOCAL_SRC_FILES += \
-	src/base/platform/platform-linux.cc \
-	src/base/debug/stack_trace_posix.cc
+	src/base/debug/stack_trace_posix.cc \
+	src/base/platform/platform-linux.cc
 endif
 ifeq ($(HOST_OS),darwin)
 LOCAL_SRC_FILES += \
+	src/base/debug/stack_trace_posix.cc \
 	src/base/platform/platform-macos.cc
 endif
 LOCAL_C_INCLUDES := $(LOCAL_PATH)/src
