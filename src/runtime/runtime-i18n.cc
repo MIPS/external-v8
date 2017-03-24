@@ -41,6 +41,7 @@
 #include "unicode/uloc.h"
 #include "unicode/unistr.h"
 #include "unicode/unum.h"
+#include "unicode/ustring.h"
 #include "unicode/uversion.h"
 
 
